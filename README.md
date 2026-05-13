@@ -1,16 +1,37 @@
-# React + Vite
+# 在途物流智能体原型
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+Vue3 + TypeScript + Vite + Ant Design Vue + TailwindCSS。
 
-Currently, two official plugins are available:
+## 本地运行
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+```bash
+npm ci
+npm run dev
+```
 
-## React Compiler
+## 构建
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+```bash
+npm run build
+```
 
-## Expanding the ESLint configuration
+构建产物输出到 `dist/`。
 
-If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and [`typescript-eslint`](https://typescript-eslint.io) in your project.
+## Vercel 部署
+
+如果整个仓库提交到 GitHub，Vercel 导入项目时需要将 Root Directory 设置为：
+
+```text
+logistics-agent-prototype
+```
+
+推荐配置：
+
+```text
+Framework Preset: Vite
+Install Command: npm ci
+Build Command: npm run build
+Output Directory: dist
+```
+
+当前原型为纯前端静态应用，无服务端 API 依赖，可直接在 Vercel 环境部署。
