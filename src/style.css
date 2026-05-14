@@ -37,6 +37,47 @@ body {
   flex-direction: column;
 }
 
+.right-panel-card .ant-card-body {
+  display: flex;
+  height: 100%;
+  flex-direction: column;
+}
+
+.right-panel-tabs {
+  display: flex;
+  gap: 4px;
+  border-radius: 10px;
+  background: #f1f5f9;
+  padding: 4px;
+  font-size: 14px;
+}
+
+.right-panel-tab-button {
+  flex: 1;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: #64748b;
+  cursor: pointer;
+  line-height: 1;
+  padding: 10px 12px;
+  transition:
+    background-color 0.16s ease,
+    box-shadow 0.16s ease,
+    color 0.16s ease;
+}
+
+.right-panel-tab-button:hover {
+  color: #172033;
+}
+
+.right-panel-tab-button.is-active {
+  background: #ffffff;
+  color: #172033;
+  font-weight: 600;
+  box-shadow: 0 1px 6px rgba(15, 23, 42, 0.08);
+}
+
 .agent-composer {
   border: 1px solid #dbe3ee;
   border-radius: 14px;

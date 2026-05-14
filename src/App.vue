@@ -20,6 +20,12 @@ const navs: Array<{ id: PageKey; label: string; icon: string }> = [
   { id: 'downloads', label: '下载任务', icon: 'download' }
 ];
 
+const rightPanelTabs: Array<{ key: RightPanelKey; label: string }> = [
+  { key: 'overview', label: '今日概览' },
+  { key: 'risk', label: '异常运单' },
+  { key: 'report', label: '日报摘要' }
+];
+
 const projects = ref<Project[]>(projectsSeed);
 const currentPage = ref<PageKey>('agent');
 const currentProjectId = ref(projectsSeed[0].id);
@@ -567,7 +573,7 @@ function eventBadgeColor(type: string) {
             </div>
           </a-card>
 
-          <a-card :body-style="{ padding: 0 }" class="h-[calc(100vh-104px)] overflow-hidden">
+          <a-card :body-style="{ padding: 0 }" class="right-panel-card h-[calc(100vh-104px)] overflow-hidden">
             <div class="border-b border-slate-200 p-5">
               <div class="mb-4 flex items-start justify-between gap-4">
                 <div>
@@ -596,9 +602,22 @@ function eventBadgeColor(type: string) {
               </div>
             </div>
 
-            <a-tabs v-model:active-key="rightPanelKey" class="px-5" :tab-bar-style="{ marginBottom: '12px' }">
-              <a-tab-pane key="overview" tab="今日概览">
-                <div class="h-[calc(100vh-330px)] overflow-auto pb-5">
+            <div class="border-b border-slate-200 bg-white px-5 py-3">
+              <div class="right-panel-tabs">
+                <button
+                  v-for="tab in rightPanelTabs"
+                  :key="tab.key"
+                  class="right-panel-tab-button"
+                  :class="rightPanelKey === tab.key ? 'is-active' : ''"
+                  @click="rightPanelKey = tab.key"
+                >
+                  {{ tab.label }}
+                </button>
+              </div>
+            </div>
+
+            <div class="flex-1 overflow-hidden bg-slate-50 p-5">
+              <div v-if="rightPanelKey === 'overview'" class="h-full overflow-auto pb-1">
                   <div class="grid grid-cols-2 gap-4">
                     <div class="rounded-md border border-slate-200 bg-white p-4">
                       <div class="mb-3 flex items-center justify-between">
@@ -652,10 +671,8 @@ function eventBadgeColor(type: string) {
                     <a-button size="large" @click="currentPage = 'orders'">查看全部运单</a-button>
                   </div>
                 </div>
-              </a-tab-pane>
 
-              <a-tab-pane key="risk" tab="异常运单">
-                <div class="h-[calc(100vh-330px)] overflow-auto pb-5">
+              <div v-else-if="rightPanelKey === 'risk'" class="h-full overflow-auto pb-1">
                   <div class="space-y-3">
                     <button
                       v-for="order in riskOrders"
@@ -677,10 +694,8 @@ function eventBadgeColor(type: string) {
                     下载今日异常运单
                   </a-button>
                 </div>
-              </a-tab-pane>
 
-              <a-tab-pane key="report" tab="日报摘要">
-                <div class="h-[calc(100vh-330px)] overflow-auto pb-5">
+              <div v-else class="h-full overflow-auto pb-1">
                   <div class="rounded-md border border-slate-200 bg-white p-5">
                     <div class="mb-4 flex items-center justify-between">
                       <div>
@@ -700,8 +715,7 @@ function eventBadgeColor(type: string) {
                     <a-button type="primary" size="large" @click="createDownload('今日报告明细')">下载报告明细</a-button>
                   </div>
                 </div>
-              </a-tab-pane>
-            </a-tabs>
+            </div>
           </a-card>
         </section>
 
