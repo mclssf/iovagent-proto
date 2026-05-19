@@ -51,7 +51,7 @@ onMounted(() => {
             </div>
             <div>
               <h1 class="text-xl font-semibold text-slate-900">智能体工作台</h1>
-              <p class="mt-1 text-sm text-slate-500">查询、筛选、分析、下载和报告生成</p>
+              <p class="mt-1 text-sm text-slate-500">查询、筛选、分析和下载</p>
             </div>
           </div>
         </div>
@@ -98,7 +98,7 @@ onMounted(() => {
       <div class="border-b border-slate-200 p-5">
         <div class="mb-4 flex items-start justify-between gap-4">
           <div>
-            <h2 class="text-xl font-semibold text-slate-900">输出结果</h2>
+            <h2 class="text-xl font-semibold text-slate-900">今日在途情况</h2>
             <p class="mt-1 text-sm text-slate-500">预警汇总、运单结果、分析结论</p>
           </div>
           <span class="inline-flex items-center rounded-md border px-2 py-0.5 text-xs font-medium" :class="badgeToneClass('green')">实时同步</span>
@@ -233,30 +233,6 @@ onMounted(() => {
           </button>
         </div>
 
-        <div v-else-if="store.visibleRightPanel === 'report'" class="space-y-4">
-          <div class="rounded-md border border-slate-200 bg-white p-5">
-            <div class="mb-4 flex items-center justify-between">
-              <div>
-                <div class="text-sm font-semibold">每日异常报告</div>
-                <div class="mt-1 text-xs text-slate-500">2026-05-09 · 华东干线在途监控</div>
-              </div>
-              <span class="inline-flex items-center rounded-md border px-2 py-0.5 text-xs font-medium" :class="badgeToneClass('blue')">已生成</span>
-            </div>
-            <div class="space-y-3 text-sm text-slate-700">
-              <div class="rounded-md bg-slate-50 p-3"><b>核心结论：</b>异常率上升，主要来自安捷物流和华东干线。</div>
-              <div class="rounded-md bg-slate-50 p-3"><b>风险建议：</b>优先处理 2 单非目的地物流园长停。</div>
-              <div class="rounded-md bg-slate-50 p-3"><b>阈值建议：</b>服务区停车误报较多，可评估长途线路阈值。</div>
-            </div>
-          </div>
-          <div class="grid grid-cols-2 gap-3">
-            <button type="button" class="rounded-md border border-slate-200 bg-white px-4 py-3 text-sm font-medium text-slate-700" @click="goPage('report')">
-              查看完整报告
-            </button>
-            <button type="button" class="rounded-md bg-slate-900 px-4 py-3 text-sm font-medium text-white" @click="createDownload('今日报告明细')">
-              下载报告明细
-            </button>
-          </div>
-        </div>
       </div>
     </div>
   </div>

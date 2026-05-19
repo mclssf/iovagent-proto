@@ -51,11 +51,6 @@ export function handleRouter(_routerList: any) {
             component: () => import('@/views/AgentWork/views/analytics.view.vue'),
           },
           {
-            path: 'report',
-            name: 'agent-work-report',
-            component: () => import('@/views/AgentWork/views/report.view.vue'),
-          },
-          {
             path: 'projects',
             name: 'agent-work-projects',
             component: () => import('@/views/AgentWork/views/projects.view.vue'),

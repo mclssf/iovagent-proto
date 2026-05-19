@@ -23,7 +23,6 @@ const navs: { icon: string; id: PageId; label: string }[] = [
   { id: 'risk', label: '异常运单列表', icon: strokeIconPaths.shield },
   { id: 'detail', label: '运单详情与地图', icon: strokeIconPaths.map },
   { id: 'analytics', label: '统计归因', icon: strokeIconPaths.gauge },
-  { id: 'report', label: '每日报告', icon: strokeIconPaths.file },
   { id: 'projects', label: '项目管理', icon: strokeIconPaths.settings },
   { id: 'downloads', label: '下载任务', icon: strokeIconPaths.download },
 ];

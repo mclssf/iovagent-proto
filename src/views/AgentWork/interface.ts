@@ -10,7 +10,7 @@ export interface Project {
   keyword: string;
   statusFilter: string;
 }
-export type PageId = 'agent' | 'analytics' | 'detail' | 'downloads' | 'orders' | 'projects' | 'report' | 'risk';
+export type PageId = 'agent' | 'analytics' | 'detail' | 'downloads' | 'orders' | 'projects' | 'risk';
 export type Tone = 'blue' | 'gray' | 'green' | 'orange' | 'purple' | 'red';
 
 export interface Order {

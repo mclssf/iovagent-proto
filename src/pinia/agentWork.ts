@@ -215,12 +215,11 @@ const timelineSeed: TimelineEvent[] = [
   { id: 6, type: 'normal', title: '到达卸货地', time: '次日 01:52', place: '广州仓', desc: '车辆进入卸货地围栏，等待卸货确认。' },
 ];
 
-export const quickPrompts = ['查看今日高风险运单', '查看所有运单', '只看沪A12345异常停车事件', '下载今天异常运单', '生成今日异常报告'];
+export const quickPrompts = ['查看今日高风险运单', '查看所有运单', '只看沪A12345异常停车事件', '下载今天异常运单'];
 
 export const rightPanelTabs: [string, string][] = [
   ['overview', '概览'],
   ['risk', '异常运单'],
-  ['report', '日报摘要'],
 ];
 
 /** 与 `linglongData` 一致：选项式 state / getters / actions */
@@ -284,7 +283,7 @@ export const agentWorkData = defineStore('agentWork', {
       return summarizeOrders(this.riskOrdersFiltered);
     },
     visibleRightPanel(state): string {
-      return ['overview', 'report', 'risk'].includes(state.rightPanel) ? state.rightPanel : 'overview';
+      return ['overview', 'risk'].includes(state.rightPanel) ? state.rightPanel : 'overview';
     },
     timelineEvents(state): TimelineEvent[] {
       if (state.detailOnlyAbnormal) return timelineSeed.filter((e) => e.type !== 'normal');
@@ -403,11 +402,6 @@ export const agentWorkData = defineStore('agentWork', {
         this.startDownloadTask('今日异常运单');
         navigate('downloads');
         ElMessage.success('已创建下载任务');
-      }
-      if (raw.includes('报告')) {
-        reply = '已生成今日异常报告摘要。';
-        this.rightPanel = 'report';
-        navigate('report');
       }
       this.agentMessages = [...next, { role: 'agent', text: reply }];
       this.agentInput = '';

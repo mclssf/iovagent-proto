@@ -13,7 +13,6 @@ export const agentWorkRouteName: Record<PageId, string> = {
   risk: 'agent-work-risk',
   detail: 'agent-work-detail',
   analytics: 'agent-work-analytics',
-  report: 'agent-work-report',
   projects: 'agent-work-projects',
   downloads: 'agent-work-downloads',
 };
