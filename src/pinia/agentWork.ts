@@ -358,7 +358,7 @@ export const agentWorkData = defineStore('agentWork', {
     closeAddProjectModal() {
       this.showProjectModal = false;
     },
-    addDemoProject() {
+    addDemoProject(address = '金隅水泥') {
       this.projects = [
         {
           id: `P00${this.projects.length + 1}`,
@@ -367,7 +367,7 @@ export const agentWorkData = defineStore('agentWork', {
           sync: '刚刚',
           total: 0,
           risk: 0,
-          tmsUrl: 'https://tms.example.com',
+          tmsUrl: address,
           tmsUser: 'demo_user',
           keyword: '演示',
           statusFilter: '在途',

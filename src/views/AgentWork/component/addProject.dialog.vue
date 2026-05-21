@@ -1,5 +1,6 @@
 <script lang="ts" setup>
 import { storeToRefs } from 'pinia';
+import { ref } from 'vue';
 
 import { Icon } from '@packages/icon';
 
@@ -9,6 +10,8 @@ import { strokeIconPaths } from '../strokeIconPaths';
 
 const store = agentWorkData();
 const { showProjectModal } = storeToRefs(store);
+const addressOptions = ['金隅水泥', '青岛啤酒', '今麦郎'];
+const selectedAddress = ref('');
 </script>
 
 <template>
@@ -23,7 +26,10 @@ const { showProjectModal } = storeToRefs(store);
       <div class="space-y-4">
         <div class="grid grid-cols-2 gap-3">
           <input class="rounded-md border border-slate-200 px-3 py-2 text-sm" placeholder="项目名称" />
-          <input class="rounded-md border border-slate-200 px-3 py-2 text-sm" placeholder="目标 TMS 地址" />
+          <select v-model="selectedAddress" class="rounded-md border border-slate-200 px-3 py-2 text-sm" aria-label="地址">
+            <option value="" disabled>地址</option>
+            <option v-for="address in addressOptions" :key="address" :value="address">{{ address }}</option>
+          </select>
           <input class="rounded-md border border-slate-200 px-3 py-2 text-sm" placeholder="TMS 登录用户" />
           <input class="rounded-md border border-slate-200 px-3 py-2 text-sm" placeholder="运单关键词" />
           <select class="rounded-md border border-slate-200 px-3 py-2 text-sm">
@@ -38,7 +44,9 @@ const { showProjectModal } = storeToRefs(store);
         </div>
         <div class="flex justify-end gap-2">
           <button type="button" class="rounded-md border border-slate-200 px-4 py-2 text-sm" @click="store.closeAddProjectModal()">取消</button>
-          <button type="button" class="rounded-md bg-slate-900 px-4 py-2 text-sm font-medium text-white" @click="store.addDemoProject()">创建并连接</button>
+          <button type="button" class="rounded-md bg-slate-900 px-4 py-2 text-sm font-medium text-white" @click="store.addDemoProject(selectedAddress || addressOptions[0])">
+            创建并连接
+          </button>
         </div>
       </div>
     </div>

@@ -28,8 +28,9 @@ const { createDownload } = useAgentWorkNav();
         </div>
         <button type="button" class="rounded-md bg-slate-900 px-4 py-2 text-sm text-white" @click="createDownload('今日异常运单')">新建下载</button>
       </div>
-      <div v-if="!downloadTask" class="rounded-md bg-slate-50 p-10 text-center text-slate-500">
-        <Icon :svg="strokeIconPaths.download" :size="28" svg-class="mx-auto mb-3" />暂无下载任务
+      <div v-if="!downloadTask" class="flex flex-col items-center justify-center rounded-md bg-slate-50 p-10 text-center text-slate-500">
+        <Icon :svg="strokeIconPaths.download" :size="28" svg-class="mb-3" />
+        <div>暂无下载任务</div>
       </div>
       <div v-else class="rounded-md border border-slate-200 p-5">
         <div class="flex items-center justify-between">

@@ -534,11 +534,17 @@ onBeforeUnmount(() => {
                 <div class="text-sm font-semibold">近 7 天异常趋势</div>
                 <span class="text-xs text-slate-400">单位：单</span>
               </div>
-              <div class="flex h-40 items-end gap-2 rounded-md bg-slate-50 px-3 pb-3 pt-5">
-                <div v-for="item in trendData" :key="item.date" class="flex flex-1 flex-col items-center gap-1">
-                  <span class="text-[11px] font-medium text-slate-600">{{ item.count }}</span>
-                  <div class="w-full rounded-t bg-slate-700 transition" :style="{ height: `${Math.max(18, (item.count / maxTrendCount) * 88)}px` }"></div>
-                  <span class="text-[10px] text-slate-400">{{ item.date }}</span>
+              <div class="h-40 rounded-md bg-slate-50 px-3 pb-3 pt-5">
+                <div class="grid h-full grid-rows-[1fr_12px] gap-1">
+                  <div class="flex items-end gap-2">
+                    <div v-for="item in trendData" :key="`bar-${item.date}`" class="flex h-full flex-1 flex-col items-center justify-end gap-1">
+                      <span class="text-[11px] font-medium leading-4 text-slate-600">{{ item.count }}</span>
+                      <div class="w-full rounded-t bg-slate-700 transition" :style="{ height: `${Math.max(18, (item.count / maxTrendCount) * 88)}px` }"></div>
+                    </div>
+                  </div>
+                  <div class="flex gap-2">
+                    <span v-for="item in trendData" :key="`date-${item.date}`" class="flex-1 text-center text-[10px] text-slate-400">{{ item.date }}</span>
+                  </div>
                 </div>
               </div>
             </div>
