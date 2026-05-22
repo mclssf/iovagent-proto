@@ -38,6 +38,7 @@ function setRightPanel(key: string) {
 }
 
 const isOrderEventPanel = computed(() => store.visibleRightPanel === 'orderEvent');
+const isDefaultOverview = computed(() => store.visibleRightPanel === 'overview');
 
 const trendData = [
   { date: '05-09', count: 8 },
@@ -381,17 +382,37 @@ onBeforeUnmount(() => {
     </div>
 
     <div class="flex h-[calc(100vh-112px)] flex-col overflow-hidden rounded-md border border-slate-200 bg-white shadow-sm">
-      <div class="border-b border-slate-200 px-5 py-3">
-        <div class="mb-3 flex items-start justify-between gap-4">
+      <div class="border-b border-slate-200" :class="isDefaultOverview ? 'p-5' : 'px-5 py-3'">
+        <div class="flex items-start justify-between gap-4" :class="isDefaultOverview ? 'mb-4' : 'mb-3'">
           <div>
-            <h2 class="text-lg font-semibold text-slate-900">{{ isOrderEventPanel ? '只看皖K55821异常停车事件' : '今日在途预警处理结果' }}</h2>
+            <h2 class="text-lg font-semibold text-slate-900">
+              {{ isOrderEventPanel ? '只看皖K55821异常停车事件' : isDefaultOverview ? '今日在途情况' : '今日在途预警处理结果' }}
+            </h2>
             <p class="mt-0.5 text-xs text-slate-500">
-              {{ isOrderEventPanel ? 'WB20260509018 · 合肥仓 → 南京仓' : '高风险异常运单、判定理由、低风险过滤说明' }}
+              {{ isOrderEventPanel ? 'WB20260509018 · 合肥仓 → 南京仓' : isDefaultOverview ? '预警汇总、运单结果、分析结论' : '高风险异常运单、判定理由、低风险过滤说明' }}
             </p>
           </div>
           <span class="inline-flex items-center rounded-md border px-2 py-0.5 text-xs font-medium" :class="badgeToneClass('green')">实时同步</span>
         </div>
-        <div v-if="!isOrderEventPanel" class="grid grid-cols-4 gap-2">
+        <div v-if="isDefaultOverview" class="grid grid-cols-4 gap-3">
+          <div class="rounded-md bg-slate-50 p-4">
+            <div class="text-xs text-slate-500">监控运单</div>
+            <div class="mt-1 text-2xl font-semibold text-slate-900">128</div>
+          </div>
+          <div class="rounded-md bg-slate-50 p-4">
+            <div class="text-xs text-slate-500">异常运单</div>
+            <div class="mt-1 text-2xl font-semibold text-red-600">17</div>
+          </div>
+          <div class="rounded-md bg-slate-50 p-4">
+            <div class="text-xs text-slate-500">高风险</div>
+            <div class="mt-1 text-2xl font-semibold text-red-600">6</div>
+          </div>
+          <div class="rounded-md bg-slate-50 p-4">
+            <div class="text-xs text-slate-500">低风险</div>
+            <div class="mt-1 text-2xl font-semibold text-orange-600">11</div>
+          </div>
+        </div>
+        <div v-else-if="!isOrderEventPanel" class="grid grid-cols-4 gap-2">
           <div class="rounded-md bg-slate-50 px-3 py-2">
             <div class="text-[11px] text-slate-500">处理预警</div>
             <div class="mt-0.5 text-xl font-semibold text-slate-900">17</div>
@@ -410,14 +431,14 @@ onBeforeUnmount(() => {
           </div>
         </div>
       </div>
-      <div v-if="!isOrderEventPanel" class="border-b border-slate-200 bg-white px-5 py-2">
+      <div v-if="!isOrderEventPanel" class="border-b border-slate-200 bg-white px-5" :class="isDefaultOverview ? 'py-3' : 'py-2'">
         <div class="flex rounded-md bg-slate-100 p-1 text-sm">
           <button
             v-for="[key, label] in rightPanelTabs"
             :key="key"
             type="button"
-            class="flex-1 rounded-lg px-3 py-1.5"
-            :class="store.visibleRightPanel === key ? 'bg-white font-medium shadow-sm' : 'text-slate-500'"
+            class="flex-1 rounded-lg px-3"
+            :class="[isDefaultOverview ? 'py-2' : 'py-1.5', store.visibleRightPanel === key ? 'bg-white font-medium shadow-sm' : 'text-slate-500']"
             @click="setRightPanel(key)"
           >
             {{ label }}
@@ -510,17 +531,9 @@ onBeforeUnmount(() => {
           <div class="grid grid-cols-2 gap-4">
             <div class="rounded-md border border-slate-200 bg-white p-4">
               <div class="mb-3 flex items-center justify-between">
-                <div class="text-sm font-semibold">处理过程</div>
-                <span class="text-xs text-slate-400">并行执行</span>
+                <div class="text-sm font-semibold">近 7 天异常趋势</div>
+                <span class="text-xs text-slate-400">单位：单</span>
               </div>
-              <div class="space-y-2 text-sm text-slate-700">
-                <div class="rounded-md bg-slate-50 p-3">理解：只保留真正需要人工介入的高风险运单。</div>
-                <div class="rounded-md bg-slate-50 p-3">拆解：停靠点、轨迹可信度、历史合理停车三类证据。</div>
-                <div class="rounded-md bg-slate-50 p-3">分布执行：规则预警、GPS 分析和 POI 识别并行核验。</div>
-              </div>
-            </div>
-            <div class="rounded-md border border-slate-200 bg-white p-4">
-              <div class="mb-3 text-sm font-semibold">近 7 天异常趋势</div>
               <div class="flex h-40 items-end gap-2 rounded-md bg-slate-50 px-3 pb-3 pt-5">
                 <div v-for="item in trendData" :key="item.date" class="flex flex-1 flex-col items-center gap-1">
                   <span class="text-[11px] font-medium text-slate-600">{{ item.count }}</span>
@@ -529,16 +542,39 @@ onBeforeUnmount(() => {
                 </div>
               </div>
             </div>
+            <div class="rounded-md border border-slate-200 bg-white p-4">
+              <div class="mb-3 text-sm font-semibold">今日风险TOP3</div>
+              <div class="space-y-3 text-sm">
+                <div>
+                  <div class="mb-1 flex items-center justify-between text-xs text-slate-500"><span>规则预警</span><span>9 单</span></div>
+                  <div class="h-2 rounded-full bg-slate-100">
+                    <div class="h-2 rounded-full bg-slate-900" style="width: 72%"></div>
+                  </div>
+                </div>
+                <div>
+                  <div class="mb-1 flex items-center justify-between text-xs text-slate-500"><span>智能轨迹分析</span><span>5 单</span></div>
+                  <div class="h-2 rounded-full bg-slate-100">
+                    <div class="h-2 rounded-full bg-slate-900" style="width: 48%"></div>
+                  </div>
+                </div>
+                <div>
+                  <div class="mb-1 flex items-center justify-between text-xs text-slate-500"><span>GPS 造假分析</span><span>3 单</span></div>
+                  <div class="h-2 rounded-full bg-slate-100">
+                    <div class="h-2 rounded-full bg-slate-900" style="width: 32%"></div>
+                  </div>
+                </div>
+              </div>
+            </div>
           </div>
           <div class="rounded-md border border-slate-200 bg-white p-4">
             <div class="mb-3 flex items-center justify-between">
-              <div class="text-sm font-semibold">智能体判定口径</div>
+              <div class="text-sm font-semibold">智能体结论</div>
               <button type="button" class="text-xs font-medium text-slate-900" @click="goPage('analytics')">查看统计归因</button>
             </div>
             <div class="space-y-3 text-sm text-slate-700">
-              <div class="rounded-md bg-red-50 p-3 text-red-700">非计划物流园、货场、第三方仓长停，且距离目的地异常，判为高风险。</div>
-              <div class="rounded-md bg-red-50 p-3 text-red-700">轨迹断点、速度跳变、点火状态冲突，命中轨迹造假高风险。</div>
-              <div class="rounded-md bg-emerald-50 p-3 text-emerald-700">服务区休息、到仓排队、收费站拥堵等有合理证据的预警已降级。</div>
+              <div class="rounded-md bg-red-50 p-3 text-red-700">今日异常率 13.3%，较昨日上升 2.1 个百分点。</div>
+              <div class="rounded-md bg-orange-50 p-3 text-orange-700">异常主要集中在安捷物流和上海工厂 → 广州仓线路。</div>
+              <div class="rounded-md bg-slate-50 p-3">建议优先复核非目的地物流园长停，以及 GPS 高风险轨迹段。</div>
             </div>
           </div>
           <div class="grid grid-cols-2 gap-3">
