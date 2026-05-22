@@ -5,22 +5,10 @@ import { defineStore } from 'pinia';
 
 import { getRiskOrders, summarizeOrders } from '@/views/AgentWork/utils';
 
-function formatDateInputValue(date: Date) {
-  const year = date.getFullYear();
-  const month = String(date.getMonth() + 1).padStart(2, '0');
-  const day = String(date.getDate()).padStart(2, '0');
-  return `${year}-${month}-${day}`;
-}
-
-function getRecentDateRange(days: number) {
-  const end = new Date();
-  const start = new Date(end);
-  start.setDate(end.getDate() - days + 1);
-  return {
-    start: formatDateInputValue(start),
-    end: formatDateInputValue(end),
-  };
-}
+const defaultOrdersDateRange = {
+  start: '2026-05-09',
+  end: '2026-05-16',
+};
 
 function getOrderStartDate(order: Order) {
   return order.startTime.slice(0, 10);
@@ -259,10 +247,9 @@ function createOrderEventProcessMessage(result: string): ChatMessage {
 /** 与 `linglongData` 一致：选项式 state / getters / actions */
 export const agentWorkData = defineStore('agentWork', {
   state: () => {
-    const defaultOrdersRange = getRecentDateRange(7);
     return {
-      ordersStartDate: defaultOrdersRange.start,
-      ordersEndDate: defaultOrdersRange.end,
+      ordersStartDate: defaultOrdersDateRange.start,
+      ordersEndDate: defaultOrdersDateRange.end,
       projects: [...projectsSeed] as Project[],
       currentProjectId: projectsSeed[0]!.id,
       showProjectModal: false,
@@ -404,9 +391,8 @@ export const agentWorkData = defineStore('agentWork', {
     },
     ensureOrdersDateRange() {
       if (this.ordersStartDate && this.ordersEndDate) return;
-      const defaultOrdersRange = getRecentDateRange(7);
-      this.ordersStartDate = defaultOrdersRange.start;
-      this.ordersEndDate = defaultOrdersRange.end;
+      this.ordersStartDate = defaultOrdersDateRange.start;
+      this.ordersEndDate = defaultOrdersDateRange.end;
     },
     /** 智能体对话：由调用方传入 `navigate`，避免 store 依赖 router */
     appendAgentExchange(text: string | undefined, navigate: (page: PageId) => void) {
