@@ -218,8 +218,8 @@ const timelineSeed: TimelineEvent[] = [
 export const quickPrompts = ['帮我处理一下今天的在途预警 挑出真有风险的运单', '只看皖K55821异常停车事件', '查看所有运单', '下载今天异常运单'];
 
 export const rightPanelTabs: [string, string][] = [
-  ['risk', '高风险清单'],
-  ['overview', '处理依据'],
+  ['overview', '概览'],
+  ['risk', '异常运单'],
 ];
 
 function createWarningProcessMessage(result: string): ChatMessage {
@@ -270,7 +270,8 @@ export const agentWorkData = defineStore('agentWork', {
       selectedOrder: { ...ordersSeedData[0]! } as Order,
       agentInput: '',
       agentMessages: [
-        { role: 'agent', text: '可选择推荐指令开始处理今日在途预警，或定位单票异常停车事件。' },
+        { role: 'agent', text: '今日已同步 128 单，已加入在途监控 128 单。当前高风险 6 单、低风险 11 单。' },
+        { role: 'agent', text: '发现 2 单非目的地物流园长停、1 单 GPS 轨迹疑似造假，建议优先复核。' },
       ] as ChatMessage[],
       rightPanel: 'overview',
       ordersRiskFilter: '全部',
