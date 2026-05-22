@@ -215,12 +215,46 @@ const timelineSeed: TimelineEvent[] = [
   { id: 6, type: 'normal', title: '到达卸货地', time: '次日 01:52', place: '广州仓', desc: '车辆进入卸货地围栏，等待卸货确认。' },
 ];
 
-export const quickPrompts = ['查看今日高风险运单', '查看所有运单', '只看沪A12345异常停车事件', '下载今天异常运单'];
+export const quickPrompts = ['帮我处理一下今天的在途预警 挑出真有风险的运单', '只看皖K55821异常停车事件', '查看所有运单', '下载今天异常运单'];
 
 export const rightPanelTabs: [string, string][] = [
-  ['overview', '概览'],
-  ['risk', '异常运单'],
+  ['risk', '高风险清单'],
+  ['overview', '处理依据'],
 ];
+
+function createWarningProcessMessage(result: string): ChatMessage {
+  return {
+    role: 'agent',
+    title: '在途预警深度处理',
+    status: '已完成',
+    text: '',
+    steps: [
+      { title: '理解需求', text: '筛出真实高风险，不展示全量预警。' },
+      { title: '拆解任务', text: '预警处理、轨迹核验、停车点评估、低风险过滤。' },
+      { title: '处理执行预警', text: '核验 17 单，合并规则 / GPS / POI 证据。' },
+      { title: '识别轨迹造假', text: '1 单命中断点、速度跳变、点火状态冲突。' },
+      { title: '判断风险停车地点', text: '5 单命中物流园 / 中转仓 / 货场长停。' },
+      { title: '汇总成表', text: '输出高风险清单、停靠点、判定理由；低风险折叠。' },
+    ],
+    result,
+  };
+}
+
+function createOrderEventProcessMessage(result: string): ChatMessage {
+  return {
+    role: 'agent',
+    title: '单票异常停车分析',
+    status: '已完成',
+    text: '',
+    steps: [
+      { title: '理解需求', text: '只查看皖K55821对应运单的异常停车事件。' },
+      { title: '展示运单详情', text: '定位运单 WB20260509018，线路为合肥仓 → 南京仓。' },
+      { title: '渲染地图轨迹', text: '已加载运输路线、当前位置、装卸货节点和停靠点。' },
+      { title: '标注异常事件', text: '已标注高速服务区低风险停车和第三方中转仓高风险停车。' },
+    ],
+    result,
+  };
+}
 
 /** 与 `linglongData` 一致：选项式 state / getters / actions */
 export const agentWorkData = defineStore('agentWork', {
@@ -236,8 +270,7 @@ export const agentWorkData = defineStore('agentWork', {
       selectedOrder: { ...ordersSeedData[0]! } as Order,
       agentInput: '',
       agentMessages: [
-        { role: 'agent', text: '今日已同步 128 单，已加入在途监控 128 单。当前高风险 6 单、低风险 11 单。' },
-        { role: 'agent', text: '发现 2 单非目的地物流园长停、1 单 GPS 轨迹疑似造假，建议优先复核。' },
+        { role: 'agent', text: '可选择推荐指令开始处理今日在途预警，或定位单票异常停车事件。' },
       ] as ChatMessage[],
       rightPanel: 'overview',
       ordersRiskFilter: '全部',
@@ -283,7 +316,7 @@ export const agentWorkData = defineStore('agentWork', {
       return summarizeOrders(this.riskOrdersFiltered);
     },
     visibleRightPanel(state): string {
-      return ['overview', 'risk'].includes(state.rightPanel) ? state.rightPanel : 'overview';
+      return ['overview', 'risk', 'orderEvent'].includes(state.rightPanel) ? state.rightPanel : 'overview';
     },
     timelineEvents(state): TimelineEvent[] {
       if (state.detailOnlyAbnormal) return timelineSeed.filter((e) => e.type !== 'normal');
@@ -379,31 +412,40 @@ export const agentWorkData = defineStore('agentWork', {
       const raw = text ?? this.agentInput;
       if (!raw.trim()) return;
       const next: ChatMessage[] = [...this.agentMessages, { role: 'user', text: raw }];
-      let reply = '已处理你的请求。';
+      let replyMessage: ChatMessage = { role: 'agent', text: '已处理你的请求。结果已显示在右侧面板。' };
+      if (raw.includes('在途预警') || raw.includes('真有风险')) {
+        replyMessage = createWarningProcessMessage('右侧面板已更新为今日在途预警处理结果。');
+        this.rightPanel = 'risk';
+      }
+      if (raw.includes('皖K55821')) {
+        replyMessage = createOrderEventProcessMessage('右侧面板已切换为皖K55821异常停车事件。');
+        this.rightPanel = 'orderEvent';
+        this.detailView = 'agent';
+        this.detailOnlyAbnormal = false;
+      }
       if (raw.includes('所有运单')) {
-        reply = '已查询当前项目全部运单。';
+        replyMessage = { role: 'agent', text: '已查询当前项目全部运单。' };
         this.rightPanel = 'orders';
         navigate('orders');
       }
-      if (raw.includes('异常') || raw.includes('高风险')) {
-        reply = '已筛选今日高风险和低风险运单，高风险已置顶。';
+      if ((raw.includes('异常') || raw.includes('高风险')) && !raw.includes('在途预警') && !raw.includes('真有风险') && !raw.includes('皖K55821')) {
+        replyMessage = { role: 'agent', text: '已筛选今日真实高风险运单，低风险合理停车已在右侧简略说明。' };
         this.rightPanel = 'risk';
-        navigate('risk');
       }
-      if (raw.includes('停车') || raw.includes('沪A12345')) {
-        reply = '已定位到沪A12345的异常停车事件。';
+      if ((raw.includes('停车') || raw.includes('沪A12345')) && !raw.includes('皖K55821')) {
+        replyMessage = { role: 'agent', text: '已定位到沪A12345的异常停车事件。' };
         this.rightPanel = 'detail';
         this.setSelectedOrder(this.ordersSeed[0]!);
         navigate('detail');
       }
       if (raw.includes('下载')) {
-        reply = '已按“今日异常运单”创建 Excel 下载任务。';
+        replyMessage = { role: 'agent', text: '已按“今日异常运单”创建 Excel 下载任务。' };
         this.rightPanel = 'download';
         this.startDownloadTask('今日异常运单');
         navigate('downloads');
         ElMessage.success('已创建下载任务');
       }
-      this.agentMessages = [...next, { role: 'agent', text: reply }];
+      this.agentMessages = [...next, replyMessage];
       this.agentInput = '';
     },
   },

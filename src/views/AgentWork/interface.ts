@@ -46,6 +46,13 @@ export interface TimelineEvent {
 export interface ChatMessage {
   role: 'agent' | 'user';
   text: string;
+  title?: string;
+  status?: string;
+  result?: string;
+  steps?: {
+    title: string;
+    text: string;
+  }[];
 }
 
 export interface DownloadTask {
