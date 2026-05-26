@@ -321,10 +321,10 @@ onBeforeUnmount(() => {
             class="rounded-md px-4 py-3 text-sm leading-6"
             :class="[
               m.role === 'user' ? 'max-w-[72%] bg-slate-900 text-white' : 'border border-slate-200 bg-white text-slate-700',
-              m.steps?.length ? 'max-w-[86%]' : 'max-w-[72%]',
+              m.title ? 'max-w-[86%]' : 'max-w-[72%]',
             ]"
           >
-            <template v-if="m.role === 'agent' && m.steps?.length">
+            <template v-if="m.role === 'agent' && m.title">
               <div class="mb-3 flex items-center justify-between gap-3 border-b border-slate-100 pb-2">
                 <div>
                   <div class="text-sm font-semibold text-slate-900">{{ m.title }}</div>
@@ -335,7 +335,7 @@ onBeforeUnmount(() => {
               <div v-if="m.text" class="mb-3 rounded-md bg-slate-50 px-3 py-2 text-xs leading-5 text-slate-500">
                 {{ m.text }}
               </div>
-              <div class="divide-y divide-slate-100 rounded-md border border-slate-100 bg-white">
+              <div v-if="m.steps?.length" class="divide-y divide-slate-100 rounded-md border border-slate-100 bg-white">
                 <div v-for="(step, stepIndex) in m.steps" :key="step.title" class="grid grid-cols-[82px_1fr] gap-2 px-3 py-1.5">
                   <div class="text-[11px] font-semibold leading-5 text-slate-900">0{{ stepIndex + 1 }} · {{ step.title }}</div>
                   <div class="min-w-0 text-xs leading-5 text-slate-500">

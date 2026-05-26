@@ -210,36 +210,49 @@ export const rightPanelTabs: [string, string][] = [
   ['risk', '异常运单'],
 ];
 
-function createWarningProcessMessage(result: string): ChatMessage {
+const processStepInitialDelay = 360;
+const processStepInterval = 680;
+let agentProcessTimers: ReturnType<typeof setTimeout>[] = [];
+
+const warningProcessSteps = [
+  { title: '理解需求', text: '筛出真实高风险，不展示全量预警。' },
+  { title: '拆解任务', text: '预警处理、轨迹核验、停车点评估、低风险过滤。' },
+  { title: '处理执行预警', text: '核验 17 单，合并规则 / GPS / POI 证据。' },
+  { title: '识别轨迹造假', text: '1 单命中断点、速度跳变、点火状态冲突。' },
+  { title: '判断风险停车地点', text: '5 单命中物流园 / 中转仓 / 货场长停。' },
+  { title: '汇总成表', text: '输出高风险清单、停靠点、判定理由；低风险折叠。' },
+];
+
+const orderEventProcessSteps = [
+  { title: '理解需求', text: '只查看皖K55821对应运单的异常停车事件。' },
+  { title: '展示运单详情', text: '定位运单 WB20260509018，线路为合肥仓 → 南京仓。' },
+  { title: '渲染地图轨迹', text: '已加载运输路线、当前位置、装卸货节点和停靠点。' },
+  { title: '标注异常事件', text: '已标注高速服务区低风险停车和第三方中转仓高风险停车。' },
+];
+
+function clearAgentProcessTimers() {
+  agentProcessTimers.forEach((timer) => clearTimeout(timer));
+  agentProcessTimers = [];
+}
+
+function createWarningProcessMessage(result: string, status = '已完成', steps = warningProcessSteps): ChatMessage {
   return {
     role: 'agent',
     title: '在途预警深度处理',
-    status: '已完成',
+    status,
     text: '',
-    steps: [
-      { title: '理解需求', text: '筛出真实高风险，不展示全量预警。' },
-      { title: '拆解任务', text: '预警处理、轨迹核验、停车点评估、低风险过滤。' },
-      { title: '处理执行预警', text: '核验 17 单，合并规则 / GPS / POI 证据。' },
-      { title: '识别轨迹造假', text: '1 单命中断点、速度跳变、点火状态冲突。' },
-      { title: '判断风险停车地点', text: '5 单命中物流园 / 中转仓 / 货场长停。' },
-      { title: '汇总成表', text: '输出高风险清单、停靠点、判定理由；低风险折叠。' },
-    ],
+    steps,
     result,
   };
 }
 
-function createOrderEventProcessMessage(result: string): ChatMessage {
+function createOrderEventProcessMessage(result: string, status = '已完成', steps = orderEventProcessSteps): ChatMessage {
   return {
     role: 'agent',
     title: '单票异常停车分析',
-    status: '已完成',
+    status,
     text: '',
-    steps: [
-      { title: '理解需求', text: '只查看皖K55821对应运单的异常停车事件。' },
-      { title: '展示运单详情', text: '定位运单 WB20260509018，线路为合肥仓 → 南京仓。' },
-      { title: '渲染地图轨迹', text: '已加载运输路线、当前位置、装卸货节点和停靠点。' },
-      { title: '标注异常事件', text: '已标注高速服务区低风险停车和第三方中转仓高风险停车。' },
-    ],
+    steps,
     result,
   };
 }
@@ -396,19 +409,26 @@ export const agentWorkData = defineStore('agentWork', {
     },
     /** 智能体对话：由调用方传入 `navigate`，避免 store 依赖 router */
     appendAgentExchange(text: string | undefined, navigate: (page: PageId) => void) {
+      clearAgentProcessTimers();
       const raw = text ?? this.agentInput;
       if (!raw.trim()) return;
       const next: ChatMessage[] = [...this.agentMessages, { role: 'user', text: raw }];
       let replyMessage: ChatMessage = { role: 'agent', text: '已处理你的请求。结果已显示在右侧面板。' };
       if (raw.includes('在途预警') || raw.includes('真有风险')) {
-        replyMessage = createWarningProcessMessage('右侧面板已更新为今日在途预警处理结果。');
-        this.rightPanel = 'risk';
+        this.startDelayedAgentProcess(next, createWarningProcessMessage('右侧面板已更新为今日在途预警处理结果。'), () => {
+          this.rightPanel = 'risk';
+        });
+        this.agentInput = '';
+        return;
       }
       if (raw.includes('皖K55821')) {
-        replyMessage = createOrderEventProcessMessage('右侧面板已切换为皖K55821异常停车事件。');
-        this.rightPanel = 'orderEvent';
-        this.detailView = 'agent';
-        this.detailOnlyAbnormal = false;
+        this.startDelayedAgentProcess(next, createOrderEventProcessMessage('右侧面板已切换为皖K55821异常停车事件。'), () => {
+          this.rightPanel = 'orderEvent';
+          this.detailView = 'agent';
+          this.detailOnlyAbnormal = false;
+        });
+        this.agentInput = '';
+        return;
       }
       if (raw.includes('所有运单')) {
         replyMessage = { role: 'agent', text: '已查询当前项目全部运单。' };
@@ -434,6 +454,41 @@ export const agentWorkData = defineStore('agentWork', {
       }
       this.agentMessages = [...next, replyMessage];
       this.agentInput = '';
+    },
+    startDelayedAgentProcess(next: ChatMessage[], finalMessage: ChatMessage, onComplete: () => void) {
+      const steps = finalMessage.steps ?? [];
+      const messageIndex = next.length;
+
+      this.agentMessages = [
+        ...next,
+        {
+          ...finalMessage,
+          status: '处理中',
+          steps: [],
+          result: '',
+        },
+      ];
+
+      steps.forEach((_, stepIndex) => {
+        const timer = setTimeout(() => {
+          const isComplete = stepIndex === steps.length - 1;
+          this.agentMessages = this.agentMessages.map((message, index) => {
+            if (index !== messageIndex) return message;
+            return {
+              ...message,
+              status: isComplete ? '已完成' : '处理中',
+              steps: steps.slice(0, stepIndex + 1),
+              result: isComplete ? finalMessage.result : '',
+            };
+          });
+
+          if (isComplete) {
+            onComplete();
+            clearAgentProcessTimers();
+          }
+        }, processStepInitialDelay + stepIndex * processStepInterval);
+        agentProcessTimers.push(timer);
+      });
     },
   },
 });
