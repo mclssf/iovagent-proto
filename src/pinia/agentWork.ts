@@ -15,6 +15,7 @@ import { ElMessage } from 'element-plus';
 import { defineStore } from 'pinia';
 
 import { extractMcpPrompt, runMcpPrompt } from '@/views/AgentWork/mcpClient';
+import { createTransportDemo, createTransportDemoPageUrl, saveTransportDemo } from '@/views/transportDemo';
 import { getRiskOrders, summarizeOrders } from '@/views/AgentWork/utils';
 
 const defaultOrdersDateRange = {
@@ -415,6 +416,63 @@ function extractSpreadsheetRequest(raw: string) {
 interface VehicleLocationRequest {
   plate: string;
   waybill: string;
+}
+
+interface TransportStatusRequest {
+  query: string;
+}
+
+const transportStatusActions = ['查', '查询', '查找', '查看', '看看', '看下', '看一下', '帮我看', '帮我查', '获取', '了解', '追踪', '跟踪'];
+const transportStatusTargets = ['订单', '运单', '货单', '货运单', '托运单', '运输单', '单号', '车牌号', '车牌', '车辆', '货车', '货物', '物流'];
+const transportStatusIntents = ['运输位置', '实时位置', '当前位置', '定位', '位置', '运输进度', '当前进度', '进度', '运输情况', '在途情况', '当前情况', '运输状态', '当前状态'];
+const transportStatusQuestionPattern = /(?:在哪(?:里|儿)?|到哪(?:里|儿)?了?|走到哪(?:里|儿)?了?|开到哪(?:里|儿)?了?|现在什么情况|目前什么情况)/;
+
+function extractTransportStatusRequest(raw: string): TransportStatusRequest | null {
+  const compact = raw.replace(/\s+/g, '');
+  const normalized = compact.toUpperCase();
+  const hasAction = transportStatusActions.some((term) => compact.includes(term));
+  const hasTarget =
+    transportStatusTargets.some((term) => compact.includes(term)) ||
+    /[京津沪渝冀豫云辽黑湘皖鲁新苏浙赣鄂桂甘晋蒙陕吉闽贵粤青藏川宁琼][A-Z][A-Z0-9]{5,6}/.test(normalized) ||
+    /(?:WB|YT|NO)[A-Z0-9-]{5,}/.test(normalized);
+  const hasIntent = transportStatusIntents.some((term) => compact.includes(term)) || transportStatusQuestionPattern.test(compact);
+
+  return hasAction && hasTarget && hasIntent ? { query: raw.trim() } : null;
+}
+
+function formatTransportDateTime(value: string) {
+  const date = new Date(value);
+  const pad = (part: number) => String(part).padStart(2, '0');
+  return `${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
+}
+
+function createTransportStatusProcessMessage(request: TransportStatusRequest): ChatMessage {
+  const demo = createTransportDemo(request.query);
+  saveTransportDemo(demo);
+  const pageUrl = createTransportDemoPageUrl(demo, request.query);
+
+  return {
+    role: 'agent',
+    title: '订单运输情况查询',
+    status: '已完成',
+    text: `正在查询 ${demo.orderNo}（${demo.plate}）的实时运输情况。`,
+    progressMode: true,
+    steps: [
+      { title: '识别查询对象', text: `已关联运单 ${demo.orderNo}、车辆 ${demo.plate} 和当前运输任务。` },
+      { title: '查询车辆定位', text: '获取车辆最新经纬度、道路 POI、速度和定位时间。', skill: '车辆定位查询' },
+      { title: '计算运输进度', text: `结合计划线路与已行驶里程，计算当前进度和剩余 ${demo.remainingKm} km。`, skill: '轨迹查询' },
+      { title: '预测到达时间', text: '结合剩余路程、实时速度和线路时效，计算预计到达时间。', skill: '到货时效专家' },
+      { title: '生成运输详情', text: '生成包含真实底图、道路路线与运输节点的外部 H5 页面。' },
+    ],
+    result: `已查询到 ${demo.orderNo}：车辆 ${demo.plate} 当前位于${demo.currentLocation}，已行驶 ${demo.totalKm - demo.remainingKm}/${demo.totalKm} km（${demo.progressPercent}%），预计 ${formatTransportDateTime(demo.estimatedArrival)} 到达。`,
+    link: {
+      kind: 'externalH5',
+      label: `查看 ${demo.orderNo} 运输详情`,
+      title: `${demo.orderNo} 运输情况`,
+      description: '模拟外部 H5 · 地图路线与运输节点',
+      url: pageUrl,
+    },
+  };
 }
 
 interface VehicleLocationDemo {
@@ -927,6 +985,7 @@ export const agentWorkData = defineStore('agentWork', {
       const spreadsheetRequest = extractSpreadsheetRequest(raw);
       const mcpPrompt = extractMcpPrompt(raw);
       const analysisReportRequest = extractAnalysisReportRequest(raw);
+      const transportStatusRequest = extractTransportStatusRequest(raw);
       const vehicleLocationRequest = extractVehicleLocationRequest(raw);
       let replyMessage: ChatMessage = { role: 'agent', text: '已处理你的请求。你可以继续补充需要关注的范围。' };
       if (spreadsheetRequest) {
@@ -943,6 +1002,14 @@ export const agentWorkData = defineStore('agentWork', {
         const processMessage = createAnalysisReportProcessMessage(analysisReportRequest);
         this.startDelayedAgentProcess(next, processMessage, () => {
           this.openAnalysisReport(analysisReportRequest.title, analysisReportRequest.topic, analysisReportRequest.prompt);
+        });
+        this.agentInput = '';
+        return;
+      }
+      if (transportStatusRequest) {
+        const processMessage = createTransportStatusProcessMessage(transportStatusRequest);
+        this.startDelayedAgentProcess(next, processMessage, () => {
+          this.openExternalH5(processMessage.link!.url, processMessage.link!.title);
         });
         this.agentInput = '';
         return;

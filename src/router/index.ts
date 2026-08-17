@@ -24,6 +24,11 @@ export function handleRouter(_routerList: any) {
         component: () => import('@/views/AgentOpsConfig.vue'),
       },
       {
+        path: '/transport-demo',
+        name: 'transport-demo',
+        component: () => import('@/views/TransportDemo.vue'),
+      },
+      {
         path: '/index',
         component: () => import('@/views/AgentWork/index.view.vue'),
         redirect: { name: 'agent-work-agent' },

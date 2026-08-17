@@ -1,0 +1,126 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="light" />
+    <title>运输详情</title>
+    <style>
+      :root {
+        font-family: Inter, "PingFang SC", "Microsoft YaHei", sans-serif;
+        color: #18212f;
+        background: #f4f6f8;
+        font-synthesis: none;
+      }
+
+      * { box-sizing: border-box; }
+      body { margin: 0; min-width: 320px; }
+      .topbar {
+        height: 56px;
+        display: flex;
+        align-items: center;
+        padding: 0 20px;
+        border-bottom: 1px solid #e3e7eb;
+        background: rgba(255, 255, 255, 0.96);
+        position: sticky;
+        top: 0;
+        z-index: 2;
+      }
+      .topbar strong { font-size: 16px; font-weight: 650; }
+      .page { max-width: 960px; margin: 0 auto; padding: 24px 20px 48px; }
+      .heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
+      h1 { margin: 0; font-size: 24px; line-height: 1.35; letter-spacing: 0; }
+      .order { margin: 6px 0 0; color: #6b7480; font-size: 13px; }
+      .status { color: #087a45; background: #e7f6ee; padding: 5px 10px; border-radius: 6px; font-size: 12px; white-space: nowrap; }
+      .route {
+        margin-top: 24px;
+        padding: 24px 0;
+        border-top: 1px solid #e1e5e9;
+        border-bottom: 1px solid #e1e5e9;
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+        align-items: center;
+        gap: 18px;
+      }
+      .place:last-child { text-align: right; }
+      .city { font-size: 18px; font-weight: 650; }
+      .address { margin-top: 5px; color: #6b7480; font-size: 13px; line-height: 1.5; }
+      .route-line { width: 180px; display: flex; align-items: center; gap: 8px; color: #1677ff; }
+      .line { height: 2px; background: #9cc5ff; flex: 1; position: relative; }
+      .line::after { content: ""; width: 8px; height: 8px; border-radius: 50%; background: #1677ff; position: absolute; right: 22%; top: 50%; transform: translateY(-50%); }
+      .metric-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 1px; margin-top: 24px; background: #dfe4e8; border: 1px solid #dfe4e8; border-radius: 6px; overflow: hidden; }
+      .metric { background: #fff; padding: 18px; min-width: 0; }
+      .metric span { display: block; color: #737d89; font-size: 12px; }
+      .metric strong { display: block; margin-top: 8px; font-size: 20px; letter-spacing: 0; }
+      .section { margin-top: 30px; }
+      h2 { font-size: 15px; margin: 0 0 14px; letter-spacing: 0; }
+      .detail-list { background: #fff; border: 1px solid #e1e5e9; border-radius: 6px; }
+      .row { display: grid; grid-template-columns: 150px 1fr; gap: 18px; padding: 14px 16px; border-bottom: 1px solid #edf0f2; font-size: 13px; line-height: 1.55; }
+      .row:last-child { border-bottom: 0; }
+      .label { color: #737d89; }
+      .timeline { border-left: 2px solid #dce5ee; margin-left: 5px; padding-left: 22px; }
+      .timeline-item { position: relative; padding: 0 0 22px; }
+      .timeline-item:last-child { padding-bottom: 0; }
+      .timeline-item::before { content: ""; position: absolute; left: -28px; top: 4px; width: 10px; height: 10px; border-radius: 50%; background: #1677ff; box-shadow: 0 0 0 4px #e7f1ff; }
+      .timeline-item strong { font-size: 13px; }
+      .timeline-item p { margin: 5px 0 0; color: #737d89; font-size: 12px; line-height: 1.6; }
+      .notice { margin-top: 28px; color: #8a939e; font-size: 12px; }
+
+      @media (max-width: 680px) {
+        .page { padding: 20px 16px 36px; }
+        .route { grid-template-columns: 1fr; gap: 14px; }
+        .place:last-child { text-align: left; }
+        .route-line { width: 100%; }
+        .metric-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+        .row { grid-template-columns: 100px 1fr; }
+      }
+    </style>
+  </head>
+  <body>
+    <header class="topbar"><strong>大卡数字人 · 运输详情</strong></header>
+    <main class="page">
+      <div class="heading">
+        <div>
+          <h1>在途运输详情</h1>
+          <p class="order">运单号 YT202608170826</p>
+        </div>
+        <span class="status">运输中 · 时效正常</span>
+      </div>
+
+      <section class="route">
+        <div class="place"><div class="city">上海</div><div class="address">嘉定区金隅水泥厂</div></div>
+        <div class="route-line"><span>发</span><div class="line"></div><span>收</span></div>
+        <div class="place"><div class="city">杭州</div><div class="address">临安区青山湖仓</div></div>
+      </section>
+
+      <section class="metric-grid">
+        <div class="metric"><span>运输进度</span><strong>68%</strong></div>
+        <div class="metric"><span>剩余里程</span><strong>92 km</strong></div>
+        <div class="metric"><span>当前车速</span><strong>67 km/h</strong></div>
+        <div class="metric"><span>预计到达</span><strong>15:46</strong></div>
+      </section>
+
+      <section class="section">
+        <h2>运输信息</h2>
+        <div class="detail-list">
+          <div class="row"><span class="label">车辆</span><span>沪M8X26Q · 牵引车</span></div>
+          <div class="row"><span class="label">承运商</span><span>安捷物流</span></div>
+          <div class="row"><span class="label">货物</span><span>P.O 42.5散装水泥 · 32吨</span></div>
+          <div class="row"><span class="label">当前位置</span><span>G60沪昆高速桐乡段，东南方向行驶</span></div>
+          <div class="row"><span class="label">最近定位</span><span>08-17 12:42，定位信号正常</span></div>
+        </div>
+      </section>
+
+      <section class="section">
+        <h2>运输节点</h2>
+        <div class="timeline">
+          <div class="timeline-item"><strong>车辆已发车</strong><p>08-17 08:12 · 上海市嘉定区</p></div>
+          <div class="timeline-item"><strong>通过嘉兴服务区</strong><p>08-17 10:36 · 停留 18 分钟，司机正常休息</p></div>
+          <div class="timeline-item"><strong>车辆运输中</strong><p>08-17 12:42 · G60沪昆高速桐乡段</p></div>
+        </div>
+      </section>
+
+      <p class="notice">本页面为物流智能体演示页面，展示数据为仿真数据。</p>
+    </main>
+  </body>
+</html>

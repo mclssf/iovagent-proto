@@ -6,7 +6,11 @@
   "scripts": {
     "dev": "vite --host 0.0.0.0",
     "build": "vite build",
-    "preview": "vite preview --host 0.0.0.0"
+    "preview": "vite preview --host 0.0.0.0",
+    "server:dev": "node --watch --experimental-strip-types --env-file=.env --env-file=.env.local server/src/index.ts",
+    "server:start": "node --experimental-strip-types --env-file=.env --env-file=.env.local server/src/index.ts",
+    "server:check": "tsc -p server/tsconfig.json",
+    "server:test": "node --experimental-strip-types --test server/test/*.test.ts"
   },
   "dependencies": {
     "animate.css": "^4.1.1",
