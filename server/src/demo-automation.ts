@@ -4,10 +4,44 @@ import type { EyunWebhookEvent } from './event-store.ts'
 
 export type DemoIntent = 'location' | 'eta'
 
+export type QueryReferenceKind =
+  | '订单号'
+  | '运单号'
+  | '货单号'
+  | '货运单号'
+  | '托运单号'
+  | '运输单号'
+  | '车牌号'
+  | '查询编号'
+
+export interface QueryReference {
+  kind: QueryReferenceKind
+  value: string
+}
+
+export interface QueryIdentity {
+  primary: QueryReference
+  businessReference?: QueryReference
+  plateNo?: string
+}
+
+export type DemoRequestDetection =
+  | { kind: 'query'; intent: DemoIntent; identity: QueryIdentity }
+  | { kind: 'followUp'; intent: DemoIntent }
+  | { kind: 'none' }
+
 interface DemoAutomationOptions {
   targetWcid: string
   detailPageUrl: string
   eyunClient: EyunClientLike
+  delay?: (milliseconds: number) => Promise<void>
+  randomDelayMs?: () => number
+  pendingQueryTtlMs?: number
+}
+
+interface PendingQuery {
+  intent: DemoIntent
+  expiresAt: number
 }
 
 interface RouteTemplate {
@@ -51,6 +85,7 @@ export interface DemoHandleResult {
   handled: boolean
   intent?: DemoIntent
   recipientId?: string
+  followUp?: boolean
 }
 
 const ROUTES: RouteTemplate[] = [
@@ -111,33 +146,66 @@ const ROUTES: RouteTemplate[] = [
   },
 ]
 
-const QUERY_PATTERN = /(查询|查一下|查查|帮我查|帮忙查|看一下|看看|追踪|跟踪|了解)/i
-const SUBJECT_PATTERN = /(订单|运单|货单|货运单|托运单|运输单|车牌号|车牌|车辆|物流|货物|[京津沪渝冀豫云辽黑湘皖鲁新苏浙赣鄂桂甘晋蒙陕吉闽贵粤青藏川宁琼][A-Z][A-Z0-9]{5,6}|(?=[A-Z0-9-]{6,})(?=[A-Z0-9-]*\d)[A-Z0-9-]+)/i
+const QUERY_PATTERN = /(查询|请查|想查|查一下|查查|帮我查|帮忙查|麻烦查|帮我看|看一下|看看|追踪|跟踪|了解)/i
 const ETA_PATTERN = /(剩余里程|剩余距离|还剩多少公里|剩多少公里|还有多少公里|还有多少距离|还有多远|还要多久|还多长时间|预计到达时间|预计到达|预计多久到达|预计多久能到|多久到达|多久能到|几点到达|什么时候到达)/i
 const LOCATION_PATTERN = /(当前位置|运输位置|实时位置|车辆位置|定位|位置|运输进度|当前进度|进度|运输情况|在途情况|当前情况|运输状态|当前状态|到哪了|走到哪了|现在在哪|在哪里)/i
 const PLATE_PATTERN = /[京津沪渝冀豫云辽黑湘皖鲁新苏浙赣鄂桂甘晋蒙陕吉闽贵粤青藏川宁琼][A-Z][A-Z0-9]{5,6}/i
-const ORDER_NUMBER_PATTERN = /(?:订单|运单|货单|货运单|托运单|运输单)(?:号|编号)?[：:#\s-]*([A-Z0-9][A-Z0-9-]{4,})/i
+const BUSINESS_REFERENCE_PATTERN = /(订单|运单|货单|货运单|托运单|运输单)(?:号|编号)?[：:#\s-]*([A-Z0-9][A-Z0-9-]{4,})/i
+const GENERIC_REFERENCE_PATTERN = /(?=[A-Z0-9-]{6,})(?=[A-Z0-9-]*\d)[A-Z0-9-]+/i
+const DEFAULT_PENDING_QUERY_TTL_MS = 10 * 60 * 1000
 
-export const detectDemoIntent = (content: string): DemoIntent | undefined => {
+export const detectDemoRequest = (content: string): DemoRequestDetection => {
   const normalized = content.replace(/\s+/g, '').toUpperCase()
 
-  if (!QUERY_PATTERN.test(normalized) || !SUBJECT_PATTERN.test(normalized)) {
-    return undefined
+  if (!QUERY_PATTERN.test(normalized)) {
+    return { kind: 'none' }
   }
+
+  let intent: DemoIntent | undefined
 
   if (ETA_PATTERN.test(normalized)) {
-    return 'eta'
+    intent = 'eta'
+  } else if (LOCATION_PATTERN.test(normalized)) {
+    intent = 'location'
   }
 
-  if (LOCATION_PATTERN.test(normalized)) {
-    return 'location'
+  if (!intent) {
+    return { kind: 'none' }
   }
 
-  return undefined
+  const identity = extractQueryIdentity(content)
+  return identity
+    ? { kind: 'query', intent, identity }
+    : { kind: 'followUp', intent }
+}
+
+export const detectDemoIntent = (content: string): DemoIntent | undefined => {
+  const detection = detectDemoRequest(content)
+  return detection.kind === 'none' ? undefined : detection.intent
+}
+
+export const extractQueryIdentity = (query: string): QueryIdentity | undefined => {
+  const businessMatch = BUSINESS_REFERENCE_PATTERN.exec(query)
+  const plateNo = PLATE_PATTERN.exec(query)?.[0].toUpperCase()
+  const businessReference = businessMatch
+    ? {
+        kind: `${businessMatch[1]}号` as QueryReferenceKind,
+        value: businessMatch[2].toUpperCase(),
+      }
+    : undefined
+  const genericReference = !businessReference && !plateNo
+    ? GENERIC_REFERENCE_PATTERN.exec(query)?.[0].toUpperCase()
+    : undefined
+  const primary = businessReference
+    ?? (plateNo ? { kind: '车牌号' as const, value: plateNo } : undefined)
+    ?? (genericReference ? { kind: '查询编号' as const, value: genericReference } : undefined)
+
+  return primary ? { primary, businessReference, plateNo } : undefined
 }
 
 export const generateTransportRecord = (query: string, now = new Date()): TransportRecord => {
   const route = pick(ROUTES)
+  const identity = extractQueryIdentity(query)
   const progress = randomDecimal(0.24, 0.84)
   const traveledKm = Math.round(route.totalKm * progress)
   const remainingKm = route.totalKm - traveledKm
@@ -157,8 +225,9 @@ export const generateTransportRecord = (query: string, now = new Date()): Transp
   const poiIndex = Math.min(route.pois.length - 1, Math.floor(progress * route.pois.length))
 
   return {
-    orderNo: extractReference(query) || generateOrderNo(now),
-    plateNo: PLATE_PATTERN.exec(query)?.[0].toUpperCase() || generatePlateNo(route.plateProvince),
+    orderNo: identity?.businessReference?.value
+      || (identity?.primary.kind === '查询编号' ? identity.primary.value : generateOrderNo(now)),
+    plateNo: identity?.plateNo || generatePlateNo(route.plateProvince),
     carrier: route.carrier,
     goods: route.goods,
     quantity: `${randomInteger(route.quantityRange[0], route.quantityRange[1])}${route.quantityUnit}`,
@@ -182,10 +251,13 @@ export const generateTransportRecord = (query: string, now = new Date()): Transp
   }
 }
 
-export const formatLocationReply = (record: TransportRecord, detailPageUrl: string): string => [
+export const formatLocationReply = (
+  record: TransportRecord,
+  detailPageUrl: string,
+  identity?: QueryIdentity,
+): string => [
   '已查询到在途运输记录',
-  `运单号：${record.orderNo}`,
-  `车牌号：${record.plateNo}`,
+  ...formatIdentityLines(record, identity),
   `承运商：${record.carrier}`,
   `货物：${record.goods}（${record.quantity}）`,
   `装货地：${record.origin}`,
@@ -204,10 +276,13 @@ export const formatLocationReply = (record: TransportRecord, detailPageUrl: stri
   `查看运输详情：${detailPageUrl}`,
 ].join('\n')
 
-export const formatEtaReply = (record: TransportRecord, detailPageUrl: string): string => [
+export const formatEtaReply = (
+  record: TransportRecord,
+  detailPageUrl: string,
+  identity?: QueryIdentity,
+): string => [
   '已查询到预计到达信息',
-  `运单号：${record.orderNo}`,
-  `车牌号：${record.plateNo}`,
+  ...formatIdentityLines(record, identity),
   `运输线路：${record.origin} → ${record.destination}`,
   `货物：${record.goods}（${record.quantity}）`,
   `当前位置：${record.currentLocation}`,
@@ -224,11 +299,18 @@ export class DemoWechatAutomation {
   private readonly targetWcid: string
   private readonly detailPageUrl: string
   private readonly eyunClient: EyunClientLike
+  private readonly delay: (milliseconds: number) => Promise<void>
+  private readonly randomDelayMs: () => number
+  private readonly pendingQueryTtlMs: number
+  private readonly pendingQueries = new Map<string, PendingQuery>()
 
   constructor(options: DemoAutomationOptions) {
     this.targetWcid = options.targetWcid
     this.detailPageUrl = options.detailPageUrl
     this.eyunClient = options.eyunClient
+    this.delay = options.delay ?? wait
+    this.randomDelayMs = options.randomDelayMs ?? (() => randomInt(3000, 5001))
+    this.pendingQueryTtlMs = options.pendingQueryTtlMs ?? DEFAULT_PENDING_QUERY_TTL_MS
   }
 
   async handle(event: EyunWebhookEvent): Promise<DemoHandleResult> {
@@ -242,32 +324,93 @@ export class DemoWechatAutomation {
       return { handled: false }
     }
 
-    const intent = detectDemoIntent(content)
+    let detection = detectDemoRequest(content)
 
-    if (!intent) {
+    if (detection.kind === 'none') {
+      const pendingQuery = this.pendingQueries.get(fromUser)
+
+      if (pendingQuery?.expiresAt && pendingQuery.expiresAt <= Date.now()) {
+        this.pendingQueries.delete(fromUser)
+      } else if (pendingQuery) {
+        const identity = extractQueryIdentity(content)
+
+        if (identity) {
+          detection = { kind: 'query', intent: pendingQuery.intent, identity }
+        }
+      }
+    }
+
+    if (detection.kind === 'none') {
       return { handled: false }
     }
 
+    if (detection.kind === 'followUp') {
+      this.pendingQueries.set(fromUser, {
+        intent: detection.intent,
+        expiresAt: Date.now() + this.pendingQueryTtlMs,
+      })
+      await this.eyunClient.sendText(fromUser, formatFollowUp(detection.intent))
+      return {
+        handled: true,
+        intent: detection.intent,
+        recipientId: fromUser,
+        followUp: true,
+      }
+    }
+
+    this.pendingQueries.delete(fromUser)
     const record = generateTransportRecord(content)
-    const reply = intent === 'eta'
-      ? formatEtaReply(record, this.detailPageUrl)
-      : formatLocationReply(record, this.detailPageUrl)
+    const reply = detection.intent === 'eta'
+      ? formatEtaReply(record, this.detailPageUrl, detection.identity)
+      : formatLocationReply(record, this.detailPageUrl, detection.identity)
 
-    await this.eyunClient.sendText(fromUser, reply)
+    await this.sendSequence(fromUser, [
+      formatProcessingUpdate(detection.intent, detection.identity.primary),
+      reply,
+    ])
 
-    return { handled: true, intent, recipientId: fromUser }
+    return { handled: true, intent: detection.intent, recipientId: fromUser }
+  }
+
+  private async sendSequence(recipientId: string, messages: readonly string[]): Promise<void> {
+    for (let index = 0; index < messages.length; index += 1) {
+      if (index > 0) {
+        const milliseconds = Math.min(5000, Math.max(3000, Math.round(this.randomDelayMs())))
+        await this.delay(milliseconds)
+      }
+
+      await this.eyunClient.sendText(recipientId, messages[index])
+    }
   }
 }
 
-const extractReference = (query: string): string | undefined => {
-  const plate = PLATE_PATTERN.exec(query)?.[0]
+const formatFollowUp = (intent: DemoIntent): string => intent === 'eta'
+  ? '可以，我需要先确认要查询的运输对象。请补充订单号、运单号或货单号，例如：“查询运单 YT202608180001 还剩多少公里”。'
+  : '可以，我需要先确认要查询的运输对象。请补充订单号、货单号或车牌号，例如：“查询订单 YT202608180001 当前位置”。'
 
-  if (plate) {
-    return `YT${new Date().getFullYear()}${randomInteger(100000, 999999)}`
+const formatProcessingUpdate = (intent: DemoIntent, reference: QueryReference): string => intent === 'eta'
+  ? `正在结合${reference.kind}【${reference.value}】的最新定位、剩余线路和运输进度估算到达时间，请稍候。`
+  : `正在核对${reference.kind}【${reference.value}】对应的运单、车辆定位和运输节点，请稍候。`
+
+const formatIdentityLines = (record: TransportRecord, identity?: QueryIdentity): string[] => {
+  if (!identity) {
+    return [`运单号：${record.orderNo}`, `车牌号：${record.plateNo}`]
   }
 
-  return ORDER_NUMBER_PATTERN.exec(query)?.[1]?.toUpperCase()
+  const lines: string[] = []
+
+  if (identity.businessReference) {
+    lines.push(`${identity.businessReference.kind}：${identity.businessReference.value}`)
+  } else if (identity.primary.kind === '查询编号') {
+    lines.push(`${identity.primary.kind}：${identity.primary.value}`)
+  }
+
+  lines.push(`车牌号：${identity.plateNo ?? record.plateNo}`)
+  return lines
 }
+
+const wait = (milliseconds: number): Promise<void> =>
+  new Promise((resolve) => setTimeout(resolve, milliseconds))
 
 const generateOrderNo = (now: Date): string => {
   const date = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}${String(now.getDate()).padStart(2, '0')}`
