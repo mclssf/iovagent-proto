@@ -55,7 +55,6 @@ export type CargoSourceType = '客户系统' | 'Excel导入';
 export type CargoStatus = '待完善' | '待发布' | '发布中' | '同步异常' | '已下架' | '已派车';
 export type CargoPublishPlatform = '大卡' | '满帮';
 export type CargoPublishStatus = '未发布' | '发布中' | '已下架' | '发布失败';
-export type CooperationWindowDays = 30 | 60 | 90 | 180;
 
 export interface CargoAddress {
   city: string;
@@ -136,7 +135,7 @@ export interface CargoQuote {
   id: string;
   location: string;
   rating?: number;
-  recentOrderCounts: Record<CooperationWindowDays, number>;
+  recentOrderCount30: number;
   sourcePlatform: CargoPublishPlatform;
   status: '待处理' | '已联系' | '已合作' | '已忽略';
   truckLength: string;

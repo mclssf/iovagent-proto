@@ -1,7 +1,7 @@
 <script lang="ts" setup>
-import type { CargoQuote, CooperationWindowDays } from '../interface';
+import type { CargoQuote } from '../interface';
 
-import { computed } from 'vue';
+import { computed, watch } from 'vue';
 
 import { Icon } from '@packages/icon';
 import { storeToRefs } from 'pinia';
@@ -12,11 +12,10 @@ import { strokeIconPaths } from '../strokeIconPaths';
 
 const store = agentWorkData();
 const {
-  quoteCargoId,
-  quoteCargoStatusFilter,
-  quoteCooperationWindowDays,
   quoteEndDate,
   quoteKeyword,
+  quotePage,
+  quotePageSize,
   quotePlatformFilter,
   quoteStartDate,
   quoteStatusFilter,
@@ -27,7 +26,8 @@ const pendingCount = computed(() => store.cargoQuotesFiltered.filter((quote) => 
 const quoteCount = computed(() => store.cargoQuotesFiltered.filter((quote) => quote.type === '报价').length);
 const orderCount = computed(() => store.cargoQuotesFiltered.filter((quote) => quote.type === '抢单').length);
 const phoneCount = computed(() => store.cargoQuotesFiltered.filter((quote) => quote.type === '电话联系').length);
-const currentProjectCargos = computed(() => store.cargoSources.filter((cargo) => cargo.projectId === store.currentProjectId));
+const quotePageStart = computed(() => (store.cargoQuotesFiltered.length ? (quotePage.value - 1) * quotePageSize.value + 1 : 0));
+const quotePageEnd = computed(() => Math.min(quotePage.value * quotePageSize.value, store.cargoQuotesFiltered.length));
 
 function cargoById(cargoId: string) {
   return store.cargoSources.find((cargo) => cargo.id === cargoId);
@@ -44,9 +44,16 @@ function quoteStatusClass(status: CargoQuote['status']) {
   return 'border-[#deded9] bg-[#f7f7f5] text-slate-500';
 }
 
-function recentOrderCount(quote: CargoQuote) {
-  return quote.recentOrderCounts[quoteCooperationWindowDays.value as CooperationWindowDays];
-}
+watch([quoteStartDate, quoteEndDate, quoteTypeFilter, quotePlatformFilter, quoteStatusFilter, quoteKeyword, quotePageSize], () => {
+  quotePage.value = 1;
+});
+
+watch(
+  () => store.quoteTotalPages,
+  (totalPages) => {
+    if (quotePage.value > totalPages) quotePage.value = totalPages;
+  },
+);
 </script>
 
 <template>
@@ -59,7 +66,7 @@ function recentOrderCount(quote: CargoQuote) {
           </span>
           <div>
             <h1 class="text-sm font-semibold leading-5 text-slate-950">报价抢单</h1>
-            <p class="text-xs leading-4 text-slate-400">查询大卡与满帮的全量历史抢单、报价及电话联系反馈</p>
+            <p class="text-xs leading-4 text-slate-400">查询大卡与满帮的抢单、报价及电话联系反馈</p>
           </div>
         </div>
         <span class="rounded-md border border-[#deded9] bg-[#f7f7f5] px-3 py-1.5 text-xs text-slate-500">每 2 分钟自动同步平台反馈</span>
@@ -73,42 +80,26 @@ function recentOrderCount(quote: CargoQuote) {
     </section>
 
     <section class="flex min-h-0 flex-1 flex-col overflow-hidden rounded-md border border-[#deded9] bg-white">
-      <div class="shrink-0 space-y-3 border-b border-[#e2e2dc] p-3">
-        <div class="flex flex-wrap items-end gap-3">
-          <label class="text-xs text-slate-500">
-            <span class="mb-1 block">反馈时间</span>
-            <div class="flex h-9 items-center gap-2 rounded-md border border-[#deded9] bg-[#fbfbfa] px-3">
-              <input v-model="quoteStartDate" type="date" :max="quoteEndDate || undefined" class="w-[126px] bg-transparent text-sm text-slate-700 outline-none" />
-              <span class="text-slate-300">至</span>
-              <input v-model="quoteEndDate" type="date" :min="quoteStartDate || undefined" class="w-[126px] bg-transparent text-sm text-slate-700 outline-none" />
-            </div>
-          </label>
-          <label class="text-xs text-slate-500">
-            <span class="mb-1 block">货源状态</span>
-            <select v-model="quoteCargoStatusFilter" class="h-9 min-w-[130px] rounded-md border border-[#deded9] bg-[#fbfbfa] px-3 text-sm text-slate-700 outline-none">
-              <option>全部</option><option>待完善</option><option>待发布</option><option>发布中</option><option>同步异常</option><option>已下架</option><option>已派车</option>
-            </select>
-          </label>
-          <label class="min-w-[300px] flex-1 text-xs text-slate-500">
-            <span class="mb-1 block">关联货源</span>
-            <select v-model="quoteCargoId" class="h-9 w-full rounded-md border border-[#deded9] bg-[#fbfbfa] px-3 text-sm text-slate-700 outline-none">
-              <option value="">全部货源（含历史）</option>
-              <option v-for="cargo in currentProjectCargos" :key="cargo.id" :value="cargo.id">{{ cargo.id }} · {{ cargo.cargoName }} · {{ cargo.status }}</option>
-            </select>
-          </label>
-        </div>
-        <div class="flex flex-wrap items-end gap-3">
-          <label class="text-xs text-slate-500"><span class="mb-1 block">反馈类型</span><select v-model="quoteTypeFilter" class="h-9 rounded-md border border-[#deded9] bg-[#fbfbfa] px-3 text-sm text-slate-700 outline-none"><option>全部</option><option>报价</option><option>抢单</option><option>电话联系</option></select></label>
-          <label class="text-xs text-slate-500"><span class="mb-1 block">来源平台</span><select v-model="quotePlatformFilter" class="h-9 rounded-md border border-[#deded9] bg-[#fbfbfa] px-3 text-sm text-slate-700 outline-none"><option>全部</option><option>大卡</option><option>满帮</option></select></label>
-          <label class="text-xs text-slate-500"><span class="mb-1 block">处理状态</span><select v-model="quoteStatusFilter" class="h-9 rounded-md border border-[#deded9] bg-[#fbfbfa] px-3 text-sm text-slate-700 outline-none"><option>全部</option><option>待处理</option><option>已联系</option><option>已合作</option><option>已忽略</option></select></label>
-          <label class="text-xs text-slate-500"><span class="mb-1 block">近期合作周期</span><select v-model="quoteCooperationWindowDays" class="h-9 rounded-md border border-[#deded9] bg-[#fbfbfa] px-3 text-sm text-slate-700 outline-none"><option :value="30">30 天</option><option :value="60">60 天</option><option :value="90">90 天</option><option :value="180">180 天</option></select></label>
-          <label class="flex min-w-[260px] flex-1 items-center rounded-md border border-[#deded9] bg-[#fbfbfa] px-3">
+      <div class="flex shrink-0 flex-wrap items-end gap-3 border-b border-[#e2e2dc] p-3">
+        <label class="text-xs text-slate-500">
+          <span class="mb-1 block">反馈时间</span>
+          <div class="flex h-9 items-center gap-2 rounded-md border border-[#deded9] bg-[#fbfbfa] px-3">
+            <input v-model="quoteStartDate" type="date" :max="quoteEndDate || undefined" class="w-[126px] bg-transparent text-sm text-slate-700 outline-none" />
+            <span class="text-slate-300">至</span>
+            <input v-model="quoteEndDate" type="date" :min="quoteStartDate || undefined" class="w-[126px] bg-transparent text-sm text-slate-700 outline-none" />
+          </div>
+        </label>
+        <label class="text-xs text-slate-500"><span class="mb-1 block">反馈类型</span><select v-model="quoteTypeFilter" class="h-9 rounded-md border border-[#deded9] bg-[#fbfbfa] px-3 text-sm text-slate-700 outline-none"><option>全部</option><option>报价</option><option>抢单</option><option>电话联系</option></select></label>
+        <label class="text-xs text-slate-500"><span class="mb-1 block">来源平台</span><select v-model="quotePlatformFilter" class="h-9 rounded-md border border-[#deded9] bg-[#fbfbfa] px-3 text-sm text-slate-700 outline-none"><option>全部</option><option>大卡</option><option>满帮</option></select></label>
+        <label class="text-xs text-slate-500"><span class="mb-1 block">处理状态</span><select v-model="quoteStatusFilter" class="h-9 rounded-md border border-[#deded9] bg-[#fbfbfa] px-3 text-sm text-slate-700 outline-none"><option>全部</option><option>待处理</option><option>已联系</option><option>已合作</option><option>已忽略</option></select></label>
+        <label class="min-w-[280px] flex-1 text-xs text-slate-500">
+          <span class="mb-1 block">搜索</span>
+          <span class="flex items-center rounded-md border border-[#deded9] bg-[#fbfbfa] px-3">
             <Icon :svg="strokeIconPaths.search" :size="15" svg-class="text-slate-400" />
-            <input v-model="quoteKeyword" class="h-9 w-full bg-transparent px-2 text-sm outline-none" placeholder="货源 / 司机 / 车牌 / 所在地" />
-          </label>
-          <button type="button" class="h-9 rounded-md border border-[#deded9] px-3 text-xs text-slate-600 hover:bg-[#f7f7f5]" @click="store.resetQuoteFilters">重置</button>
-          <span class="pb-2 text-xs text-slate-400">共 {{ store.cargoQuotesFiltered.length }} 条</span>
-        </div>
+            <input v-model="quoteKeyword" class="h-9 w-full bg-transparent px-2 text-sm outline-none" placeholder="货源 ID / 货物 / 司机 / 车牌 / 所在地" />
+          </span>
+        </label>
+        <button type="button" class="h-9 rounded-md border border-[#deded9] px-3 text-xs text-slate-600 hover:bg-[#f7f7f5]" @click="store.resetQuoteFilters">重置</button>
       </div>
 
       <div class="min-h-0 flex-1 overflow-auto">
@@ -125,7 +116,7 @@ function recentOrderCount(quote: CargoQuote) {
             </tr>
           </thead>
           <tbody class="divide-y divide-[#ededea]">
-            <tr v-for="quote in store.cargoQuotesFiltered" :key="quote.id" class="align-top hover:bg-[#fafaf8]">
+            <tr v-for="quote in store.cargoQuotesPaginated" :key="quote.id" class="align-top hover:bg-[#fafaf8]">
               <td class="px-4 py-4">
                 <div class="font-semibold text-slate-900">{{ cargoById(quote.cargoId)?.cargoName || quote.cargoId }}</div>
                 <div class="mt-1 text-xs text-slate-400">{{ quote.cargoId }} · {{ cargoById(quote.cargoId)?.status || '货源已归档' }}</div>
@@ -158,7 +149,7 @@ function recentOrderCount(quote: CargoQuote) {
                 <div v-else class="text-xs leading-5 text-slate-400">大卡暂未提供司机评分</div>
               </td>
               <td class="px-4 py-4">
-                <div class="font-semibold text-slate-900">近 {{ quoteCooperationWindowDays }} 天 {{ recentOrderCount(quote) }} 单</div>
+                <div class="font-semibold text-slate-900">近 30 天 {{ quote.recentOrderCount30 }} 单</div>
                 <div class="mt-1 text-xs leading-5 text-slate-400">根据数字人已同步运单统计，不依赖平台画像</div>
               </td>
               <td class="px-4 py-4">
@@ -181,10 +172,26 @@ function recentOrderCount(quote: CargoQuote) {
                 </div>
               </td>
             </tr>
-            <tr v-if="store.cargoQuotesFiltered.length === 0"><td colspan="7" class="p-10 text-center text-sm text-slate-400">暂无符合条件的报价或抢单反馈</td></tr>
+            <tr v-if="store.cargoQuotesPaginated.length === 0"><td colspan="7" class="p-10 text-center text-sm text-slate-400">暂无符合条件的报价或抢单反馈</td></tr>
           </tbody>
         </table>
       </div>
+      <footer class="flex h-12 shrink-0 items-center justify-between border-t border-[#e2e2dc] px-4 text-xs text-slate-500">
+        <span>显示 {{ quotePageStart }}—{{ quotePageEnd }} 条，共 {{ store.cargoQuotesFiltered.length }} 条</span>
+        <div class="flex items-center gap-2">
+          <label class="flex items-center gap-2">
+            每页
+            <select v-model="quotePageSize" class="h-8 rounded-md border border-[#deded9] bg-white px-2 text-xs text-slate-700">
+              <option :value="10">10</option>
+              <option :value="20">20</option>
+              <option :value="50">50</option>
+            </select>
+          </label>
+          <button type="button" class="h-8 rounded-md border border-[#deded9] px-3 disabled:cursor-not-allowed disabled:text-slate-300" :disabled="quotePage <= 1" @click="quotePage -= 1">上一页</button>
+          <span>第 {{ quotePage }} / {{ store.quoteTotalPages }} 页</span>
+          <button type="button" class="h-8 rounded-md border border-[#deded9] px-3 disabled:cursor-not-allowed disabled:text-slate-300" :disabled="quotePage >= store.quoteTotalPages" @click="quotePage += 1">下一页</button>
+        </div>
+      </footer>
     </section>
   </div>
 </template>

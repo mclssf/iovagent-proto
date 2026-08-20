@@ -4,7 +4,6 @@ import type {
   AgentWorkspaceMode,
   CargoQuote,
   ChatMessage,
-  CooperationWindowDays,
   DownloadTask,
   Order,
   PageId,
@@ -31,7 +30,7 @@ function formatLocalDate(date: Date) {
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
 }
 
-function createDefaultCargoDateRange() {
+function createDefaultRecentWeekDateRange() {
   const endDate = new Date();
   const startDate = new Date(endDate);
   startDate.setDate(endDate.getDate() - 6);
@@ -1001,7 +1000,7 @@ function createOrderEventProcessMessage(result: string, status = '已完成', st
 /** 与 `linglongData` 一致：选项式 state / getters / actions */
 export const agentWorkData = defineStore('agentWork', {
   state: () => {
-    const defaultCargoDateRange = createDefaultCargoDateRange();
+    const defaultCargoDateRange = createDefaultRecentWeekDateRange();
     return {
       ordersStartDate: defaultOrdersDateRange.start,
       ordersEndDate: defaultOrdersDateRange.end,
@@ -1060,13 +1059,12 @@ export const agentWorkData = defineStore('agentWork', {
       cargoPageSize: 20,
       quoteKeyword: '',
       quoteTypeFilter: '全部',
-      quoteCargoId: '',
-      quoteCargoStatusFilter: '全部',
       quotePlatformFilter: '全部',
       quoteStatusFilter: '全部',
-      quoteStartDate: '',
-      quoteEndDate: '',
-      quoteCooperationWindowDays: 30 as CooperationWindowDays,
+      quoteStartDate: defaultCargoDateRange.start,
+      quoteEndDate: defaultCargoDateRange.end,
+      quotePage: 1,
+      quotePageSize: 20,
       privateCapacityKeyword: '',
       privateCapacityLoadStateFilter: '全部',
       /** 演示数据，只读引用 */
@@ -1136,7 +1134,7 @@ export const agentWorkData = defineStore('agentWork', {
                 .toLowerCase()
                 .includes(keyword)),
         )
-        .sort((left, right) => right.createdAt.localeCompare(left.createdAt));
+        .sort((left, right) => right.createdAt.localeCompare(left.createdAt) || right.id.localeCompare(left.id));
     },
     cargoSourcesPaginated(): StandardCargo[] {
       const startIndex = (this.cargoPage - 1) * this.cargoPageSize;
@@ -1152,17 +1150,25 @@ export const agentWorkData = defineStore('agentWork', {
           const cargo = state.cargoSources.find((item) => item.id === quote.cargoId);
           return (
             cargo?.projectId === state.currentProjectId &&
-            (!state.quoteCargoId || quote.cargoId === state.quoteCargoId) &&
-            (state.quoteCargoStatusFilter === '全部' || cargo?.status === state.quoteCargoStatusFilter) &&
             (state.quoteTypeFilter === '全部' || quote.type === state.quoteTypeFilter) &&
             (state.quotePlatformFilter === '全部' || quote.sourcePlatform === state.quotePlatformFilter) &&
             (state.quoteStatusFilter === '全部' || quote.status === state.quoteStatusFilter) &&
             (!state.quoteStartDate || quote.createdAt.slice(0, 10) >= state.quoteStartDate) &&
             (!state.quoteEndDate || quote.createdAt.slice(0, 10) <= state.quoteEndDate) &&
-            (!keyword || `${quote.driverName}${quote.truckNo}${quote.location}${quote.sourcePlatform}${cargo?.cargoName ?? ''}`.toLowerCase().includes(keyword))
+            (!keyword ||
+              `${quote.id}${quote.cargoId}${quote.driverName}${quote.truckNo}${quote.location}${quote.sourcePlatform}${cargo?.cargoName ?? ''}${cargo?.externalCargoNo ?? ''}`
+                .toLowerCase()
+                .includes(keyword))
           );
         })
-        .sort((left, right) => right.createdAt.localeCompare(left.createdAt));
+        .sort((left, right) => right.createdAt.localeCompare(left.createdAt) || right.id.localeCompare(left.id));
+    },
+    cargoQuotesPaginated(): CargoQuote[] {
+      const startIndex = (this.quotePage - 1) * this.quotePageSize;
+      return this.cargoQuotesFiltered.slice(startIndex, startIndex + this.quotePageSize);
+    },
+    quoteTotalPages(): number {
+      return Math.max(1, Math.ceil(this.cargoQuotesFiltered.length / this.quotePageSize));
     },
     privateCapacityFiltered(state): PrivateCapacity[] {
       const keyword = state.privateCapacityKeyword.trim().toLowerCase();
@@ -1189,28 +1195,27 @@ export const agentWorkData = defineStore('agentWork', {
   },
   actions: {
     focusCargoQuotes(cargoId: string) {
-      this.quoteCargoId = cargoId;
-      this.quoteKeyword = '';
+      const defaultQuoteDateRange = createDefaultRecentWeekDateRange();
+      this.quoteKeyword = cargoId;
       this.quoteTypeFilter = '全部';
-      this.quoteCargoStatusFilter = '全部';
       this.quotePlatformFilter = '全部';
       this.quoteStatusFilter = '全部';
-      this.quoteStartDate = '';
-      this.quoteEndDate = '';
+      this.quoteStartDate = defaultQuoteDateRange.start;
+      this.quoteEndDate = defaultQuoteDateRange.end;
+      this.quotePage = 1;
     },
     resetQuoteFilters() {
-      this.quoteCargoId = '';
+      const defaultQuoteDateRange = createDefaultRecentWeekDateRange();
       this.quoteKeyword = '';
       this.quoteTypeFilter = '全部';
-      this.quoteCargoStatusFilter = '全部';
       this.quotePlatformFilter = '全部';
       this.quoteStatusFilter = '全部';
-      this.quoteStartDate = '';
-      this.quoteEndDate = '';
-      this.quoteCooperationWindowDays = 30;
+      this.quoteStartDate = defaultQuoteDateRange.start;
+      this.quoteEndDate = defaultQuoteDateRange.end;
+      this.quotePage = 1;
     },
     ensureCargoDateRange() {
-      const defaultCargoDateRange = createDefaultCargoDateRange();
+      const defaultCargoDateRange = createDefaultRecentWeekDateRange();
       if (!this.cargoStartDate) this.cargoStartDate = defaultCargoDateRange.start;
       if (!this.cargoEndDate) this.cargoEndDate = defaultCargoDateRange.end;
     },
