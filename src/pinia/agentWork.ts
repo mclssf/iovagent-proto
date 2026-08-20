@@ -2,11 +2,14 @@ import type {
   AgentConversation,
   AgentResultFile,
   AgentWorkspaceMode,
+  CargoQuote,
   ChatMessage,
   DownloadTask,
   Order,
   PageId,
+  PrivateCapacity,
   Project,
+  StandardCargo,
   TimelineEvent,
   TmsSyncCustomer,
 } from '@/views/AgentWork/interface';
@@ -14,6 +17,7 @@ import type {
 import { ElMessage } from 'element-plus';
 import { defineStore } from 'pinia';
 
+import { cargoQuoteSeedData, cargoSeedData, privateCapacitySeedData } from '@/views/AgentWork/capacityData';
 import { extractMcpPrompt, runMcpPrompt } from '@/views/AgentWork/mcpClient';
 import { getRiskOrders, summarizeOrders } from '@/views/AgentWork/utils';
 
@@ -21,6 +25,17 @@ const defaultOrdersDateRange = {
   start: '2026-05-09',
   end: '2026-05-16',
 };
+
+function formatLocalDate(date: Date) {
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+}
+
+function createDefaultRecentWeekDateRange() {
+  const endDate = new Date();
+  const startDate = new Date(endDate);
+  startDate.setDate(endDate.getDate() - 6);
+  return { start: formatLocalDate(startDate), end: formatLocalDate(endDate) };
+}
 
 function getOrderStartDate(order: Order) {
   return order.startTime.slice(0, 10);
@@ -38,7 +53,18 @@ const projectsSeed: Project[] = [
     tmsUser: 'alfred',
     keyword: '华东干线',
     statusFilter: '在途',
-    skillIds: ['jinyu-cement-tms', 'route-risk-expert', 'gps-trace-expert', 'parking-event-expert'],
+    skillIds: [
+      'jinyu-cement-tms',
+      'huadong-cargo-connector',
+      'huadong-dispatch-writeback',
+      'route-risk-expert',
+      'gps-trace-expert',
+      'parking-event-expert',
+      'capacity-cargo-normalization',
+      'capacity-cargo-publish',
+      'capacity-quote-collection',
+      'capacity-private-fleet',
+    ],
   },
   {
     id: 'P002',
@@ -974,6 +1000,7 @@ function createOrderEventProcessMessage(result: string, status = '已完成', st
 /** 与 `linglongData` 一致：选项式 state / getters / actions */
 export const agentWorkData = defineStore('agentWork', {
   state: () => {
+    const defaultCargoDateRange = createDefaultRecentWeekDateRange();
     return {
       ordersStartDate: defaultOrdersDateRange.start,
       ordersEndDate: defaultOrdersDateRange.end,
@@ -1005,6 +1032,41 @@ export const agentWorkData = defineStore('agentWork', {
       riskOrdersKeyword: '',
       detailView: 'agent' as 'agent' | 'rule',
       detailOnlyAbnormal: false,
+      cargoSources: cargoSeedData.map((cargo) => ({
+        ...cargo,
+        loadAddresses: cargo.loadAddresses.map((address) => ({ ...address })),
+        unloadAddresses: cargo.unloadAddresses.map((address) => ({ ...address })),
+        platformPublications: cargo.platformPublications.map((publication) => ({ ...publication })),
+        price: { ...cargo.price },
+        tags: [...cargo.tags],
+        truckLengths: [...cargo.truckLengths],
+        truckTypes: [...cargo.truckTypes],
+      })) as StandardCargo[],
+      cargoQuotes: cargoQuoteSeedData.map((quote) => ({
+        ...quote,
+        comments: [...quote.comments],
+      })) as CargoQuote[],
+      privateCapacity: privateCapacitySeedData.map((capacity) => ({
+        ...capacity,
+        routes: [...capacity.routes],
+      })) as PrivateCapacity[],
+      cargoKeyword: '',
+      cargoStatusFilter: '全部',
+      cargoSourceFilter: '全部',
+      cargoStartDate: defaultCargoDateRange.start,
+      cargoEndDate: defaultCargoDateRange.end,
+      cargoPage: 1,
+      cargoPageSize: 20,
+      quoteKeyword: '',
+      quoteTypeFilter: '全部',
+      quotePlatformFilter: '全部',
+      quoteStatusFilter: '全部',
+      quoteStartDate: defaultCargoDateRange.start,
+      quoteEndDate: defaultCargoDateRange.end,
+      quotePage: 1,
+      quotePageSize: 20,
+      privateCapacityKeyword: '',
+      privateCapacityLoadStateFilter: '全部',
       /** 演示数据，只读引用 */
       ordersSeed: ordersSeedData,
     };
@@ -1055,6 +1117,70 @@ export const agentWorkData = defineStore('agentWork', {
     currentDetailOrder(state): Order {
       return state.selectedOrder ?? state.ordersSeed[0]!;
     },
+    cargoSourcesFiltered(state): StandardCargo[] {
+      const keyword = state.cargoKeyword.trim().toLowerCase();
+      return state.cargoSources
+        .filter(
+          (cargo) =>
+            cargo.projectId === state.currentProjectId &&
+            (state.cargoStatusFilter === '全部' || cargo.status === state.cargoStatusFilter) &&
+            (state.cargoSourceFilter === '全部' || cargo.sourceType === state.cargoSourceFilter) &&
+            (!state.cargoStartDate || cargo.createdAt.slice(0, 10) >= state.cargoStartDate) &&
+            (!state.cargoEndDate || cargo.createdAt.slice(0, 10) <= state.cargoEndDate) &&
+            (!keyword ||
+              `${cargo.id}${cargo.externalCargoNo}${cargo.cargoName}${cargo.sourceSystem}${cargo.loadAddresses.map((item) => item.detail).join('')}${cargo.unloadAddresses
+                .map((item) => item.detail)
+                .join('')}`
+                .toLowerCase()
+                .includes(keyword)),
+        )
+        .sort((left, right) => right.createdAt.localeCompare(left.createdAt) || right.id.localeCompare(left.id));
+    },
+    cargoSourcesPaginated(): StandardCargo[] {
+      const startIndex = (this.cargoPage - 1) * this.cargoPageSize;
+      return this.cargoSourcesFiltered.slice(startIndex, startIndex + this.cargoPageSize);
+    },
+    cargoTotalPages(): number {
+      return Math.max(1, Math.ceil(this.cargoSourcesFiltered.length / this.cargoPageSize));
+    },
+    cargoQuotesFiltered(state): CargoQuote[] {
+      const keyword = state.quoteKeyword.trim().toLowerCase();
+      return state.cargoQuotes
+        .filter((quote) => {
+          const cargo = state.cargoSources.find((item) => item.id === quote.cargoId);
+          return (
+            cargo?.projectId === state.currentProjectId &&
+            (state.quoteTypeFilter === '全部' || quote.type === state.quoteTypeFilter) &&
+            (state.quotePlatformFilter === '全部' || quote.sourcePlatform === state.quotePlatformFilter) &&
+            (state.quoteStatusFilter === '全部' || quote.status === state.quoteStatusFilter) &&
+            (!state.quoteStartDate || quote.createdAt.slice(0, 10) >= state.quoteStartDate) &&
+            (!state.quoteEndDate || quote.createdAt.slice(0, 10) <= state.quoteEndDate) &&
+            (!keyword ||
+              `${quote.id}${quote.cargoId}${quote.driverName}${quote.truckNo}${quote.location}${quote.sourcePlatform}${cargo?.cargoName ?? ''}${cargo?.externalCargoNo ?? ''}`
+                .toLowerCase()
+                .includes(keyword))
+          );
+        })
+        .sort((left, right) => right.createdAt.localeCompare(left.createdAt) || right.id.localeCompare(left.id));
+    },
+    cargoQuotesPaginated(): CargoQuote[] {
+      const startIndex = (this.quotePage - 1) * this.quotePageSize;
+      return this.cargoQuotesFiltered.slice(startIndex, startIndex + this.quotePageSize);
+    },
+    quoteTotalPages(): number {
+      return Math.max(1, Math.ceil(this.cargoQuotesFiltered.length / this.quotePageSize));
+    },
+    privateCapacityFiltered(state): PrivateCapacity[] {
+      const keyword = state.privateCapacityKeyword.trim().toLowerCase();
+      return state.privateCapacity.filter(
+        (capacity) =>
+          (state.privateCapacityLoadStateFilter === '全部' || capacity.loadState === state.privateCapacityLoadStateFilter) &&
+          (!keyword ||
+            `${capacity.driverName}${capacity.truckNo}${capacity.carrierName}${capacity.baseCity}${capacity.currentLocation}${capacity.predictedDestination ?? ''}${capacity.routes.join('')}`
+              .toLowerCase()
+              .includes(keyword)),
+      );
+    },
     detailInfoRows(): { danger: boolean; label: string; value: string }[] {
       const o = this.currentDetailOrder;
       return [
@@ -1068,6 +1194,209 @@ export const agentWorkData = defineStore('agentWork', {
     },
   },
   actions: {
+    focusCargoQuotes(cargoId: string) {
+      const defaultQuoteDateRange = createDefaultRecentWeekDateRange();
+      this.quoteKeyword = cargoId;
+      this.quoteTypeFilter = '全部';
+      this.quotePlatformFilter = '全部';
+      this.quoteStatusFilter = '全部';
+      this.quoteStartDate = defaultQuoteDateRange.start;
+      this.quoteEndDate = defaultQuoteDateRange.end;
+      this.quotePage = 1;
+    },
+    resetQuoteFilters() {
+      const defaultQuoteDateRange = createDefaultRecentWeekDateRange();
+      this.quoteKeyword = '';
+      this.quoteTypeFilter = '全部';
+      this.quotePlatformFilter = '全部';
+      this.quoteStatusFilter = '全部';
+      this.quoteStartDate = defaultQuoteDateRange.start;
+      this.quoteEndDate = defaultQuoteDateRange.end;
+      this.quotePage = 1;
+    },
+    ensureCargoDateRange() {
+      const defaultCargoDateRange = createDefaultRecentWeekDateRange();
+      if (!this.cargoStartDate) this.cargoStartDate = defaultCargoDateRange.start;
+      if (!this.cargoEndDate) this.cargoEndDate = defaultCargoDateRange.end;
+    },
+    publishCargo(cargoId: string) {
+      const cargo = this.cargoSources.find((item) => item.id === cargoId);
+      if (!cargo) return;
+      if (cargo.status === '待完善') {
+        ElMessage.warning('货源必填字段尚未完善，请先通过对话确认缺失信息');
+        return;
+      }
+      const updatedAt = '2026-08-19 11:48';
+      cargo.status = '发布中';
+      cargo.updatedAt = updatedAt;
+      cargo.platformPublications = cargo.platformPublications.map((publication) => ({
+        ...publication,
+        externalCargoId: publication.externalCargoId || `${publication.platform === '大卡' ? 'DK' : 'MB'}${Date.now()}`,
+        publishedAt: publication.publishedAt || updatedAt,
+        status: '发布中',
+        updatedAt,
+      }));
+      ElMessage.success('已发布到大卡，并同步到已配置的满帮运掌柜账号');
+    },
+    offlineCargo(cargoId: string) {
+      const cargo = this.cargoSources.find((item) => item.id === cargoId);
+      if (!cargo) return;
+      cargo.status = '已下架';
+      cargo.updatedAt = '2026-08-19 11:49';
+      cargo.platformPublications = cargo.platformPublications.map((publication) => ({
+        ...publication,
+        status: publication.status === '未发布' ? publication.status : '已下架',
+        updatedAt: '2026-08-19 11:49',
+      }));
+      ElMessage.success('大卡与满帮货源已同步下架');
+    },
+    refreshCargoSources() {
+      this.cargoSources = this.cargoSources.map((cargo) =>
+        cargo.sourceType === '客户系统'
+          ? {
+              ...cargo,
+              sourceUpdatedAt: '2026-08-19 11:50',
+              syncMessage: cargo.status === '已派车' ? '源系统已派车，平台货源保持下架' : '已监听源系统，未发现待同步变更',
+            }
+          : cargo,
+      );
+      ElMessage.success('客户系统货源状态同步完成');
+    },
+    importCargoFile(fileName: string) {
+      const template = cargoSeedData[2]!;
+      const id = `CG20260819${String(this.cargoSources.length + 1).padStart(4, '0')}`;
+      this.cargoSources = [
+        {
+          ...template,
+          id,
+          externalCargoNo: `IMPORT-${Date.now()}`,
+          sourceSystem: fileName,
+          sourceUpdatedAt: '2026-08-19 11:51',
+          createdAt: '2026-08-19 11:51',
+          updatedAt: '2026-08-19 11:51',
+          loadAddresses: template.loadAddresses.map((address) => ({ ...address })),
+          unloadAddresses: template.unloadAddresses.map((address) => ({ ...address })),
+          platformPublications: template.platformPublications.map((publication) => ({ ...publication, updatedAt: '2026-08-19 11:51' })),
+          price: { ...template.price },
+          tags: [...template.tags],
+          truckLengths: [...template.truckLengths],
+          truckTypes: [...template.truckTypes],
+        },
+        ...this.cargoSources,
+      ];
+      ElMessage.success(`已解析 ${fileName}，1 条货源需要补充卸货时间`);
+    },
+    updateImportedCargo(
+      cargoId: string,
+      updates: {
+        cargoName: string;
+        chargeUnit: StandardCargo['price']['chargeUnit'];
+        findMode: StandardCargo['price']['findMode'];
+        freightFen: number;
+        loadAddress: string;
+        loadTimeEnd: string;
+        loadTimeStart: string;
+        maxWeight?: number;
+        minWeight?: number;
+        packageType: string;
+        remark: string;
+        truckLength: string;
+        truckNumber: number;
+        truckType: string;
+        unloadAddress: string;
+        unloadTime: string;
+      },
+    ) {
+      const cargo = this.cargoSources.find((item) => item.id === cargoId && item.sourceType === 'Excel导入');
+      if (!cargo) {
+        ElMessage.warning('仅支持编辑 Excel 导入货源');
+        return;
+      }
+      const updatedAt = '2026-08-20 10:30';
+      cargo.cargoName = updates.cargoName;
+      cargo.packageType = updates.packageType;
+      cargo.loadAddresses = cargo.loadAddresses.map((address, index) => (index === 0 ? { ...address, detail: updates.loadAddress } : address));
+      cargo.unloadAddresses = cargo.unloadAddresses.map((address, index) => (index === 0 ? { ...address, detail: updates.unloadAddress } : address));
+      cargo.loadTimeStart = updates.loadTimeStart;
+      cargo.loadTimeEnd = updates.loadTimeEnd;
+      cargo.unloadTime = updates.unloadTime;
+      cargo.minWeight = updates.minWeight;
+      cargo.maxWeight = updates.maxWeight;
+      cargo.truckTypes = [updates.truckType];
+      cargo.truckLengths = [updates.truckLength];
+      cargo.truckNumber = updates.truckNumber;
+      cargo.price = {
+        ...cargo.price,
+        findMode: updates.findMode,
+        chargeUnit: updates.chargeUnit,
+        freightFen: updates.freightFen,
+        showPrice: updates.freightFen > 0,
+      };
+      cargo.remark = updates.remark;
+      cargo.status = '发布中';
+      cargo.syncStatus = '正常';
+      cargo.syncMessage = 'Excel 货源已编辑，最新版本已重新发布';
+      cargo.tags = cargo.tags.filter((tag) => !tag.startsWith('待补充'));
+      cargo.updatedAt = updatedAt;
+      cargo.sourceUpdatedAt = updatedAt;
+      cargo.platformPublications = cargo.platformPublications.map((publication) => ({
+        ...publication,
+        externalCargoId: publication.externalCargoId || `${publication.platform === '大卡' ? 'DK' : 'MB'}${Date.now()}`,
+        publishedAt: publication.publishedAt || updatedAt,
+        status: '发布中',
+        updatedAt,
+      }));
+      ElMessage.success('Excel 货源已保存，并重新发布到大卡及已配置的满帮账号');
+    },
+    updateQuoteStatus(quoteId: string, status: CargoQuote['status']) {
+      const quote = this.cargoQuotes.find((item) => item.id === quoteId);
+      if (!quote) return;
+      quote.status = status;
+      ElMessage.success(status === '已联系' ? '已记录联系状态' : '报价状态已更新');
+    },
+    dispatchQuote(quoteId: string) {
+      const quote = this.cargoQuotes.find((item) => item.id === quoteId);
+      if (!quote) return;
+      quote.status = '已合作';
+      const cargo = this.cargoSources.find((item) => item.id === quote.cargoId);
+      if (cargo) {
+        cargo.status = '已派车';
+        cargo.updatedAt = '2026-08-19 11:53';
+        cargo.platformPublications = cargo.platformPublications.map((publication) => ({
+          ...publication,
+          status: publication.status === '未发布' ? publication.status : '已下架',
+          updatedAt: '2026-08-19 11:53',
+        }));
+      }
+      ElMessage.success(`已确认 ${quote.driverName}，派车信息已回写客户业务系统并同步下架货源`);
+    },
+    importPrivateCapacityFile(fileName: string) {
+      const id = `PC202608${String(this.privateCapacity.length + 1).padStart(3, '0')}`;
+      this.privateCapacity = [
+        {
+          id,
+          driverName: '周明',
+          driverPhone: '150****6371',
+          truckNo: '豫Q5***7',
+          truckType: '高栏',
+          truckLength: '13米',
+          carrierName: '驻马店鸿运物流',
+          baseCity: '河南·驻马店',
+          routes: ['驻马店—北京', '驻马店—西安'],
+          currentLocation: '驻马店市驿城区中原大道附近',
+          positionTime: '2026-08-19 11:52',
+          predictedDestination: '河南省驻马店市遂平县',
+          destinationProbability: 58,
+          predictedArrivalTime: '2026-08-19 12:35',
+          loadState: '空载',
+          loadStateUpdatedAt: '2026-08-19 11:20',
+          source: 'Excel导入',
+          updatedAt: '2026-08-19 11:54',
+        },
+        ...this.privateCapacity,
+      ];
+      ElMessage.success(`已从 ${fileName} 导入 1 条熟车运力`);
+    },
     persistActiveConversationMessages() {
       if (this.workspaceMode !== 'conversation' || !this.currentConversationId) return;
       this.recentConversations = this.recentConversations.map((conversation) =>

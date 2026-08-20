@@ -115,6 +115,48 @@ const skillForm = reactive({
 });
 const dataEmployees = ref<DataEmployee[]>([
   {
+    id: 'huadong-cargo-connector',
+    visibility: '指定企业',
+    enterpriseIds: ['ent-east'],
+    name: '华东货源对接员工',
+    description: '从客户业务系统抓取待外调货源，映射标准字段，并持续监听修改、取消和派车状态。',
+    loginUrl: 'https://tms.huadong.example.com',
+    loginType: '短信验证码',
+    skillVersion: 'v1.0',
+    skillUpdated: '今天 11:30',
+    skillFileName: 'huadong-cargo-connector.skill.md',
+    skillContent: `# 华东货源对接员工
+
+目标：从客户发运系统识别需要外调运力的货源，映射到标准货源模型。
+
+同步规则：
+1. 首次抓取货物、装卸地、时效、车型车长、价格策略和调度员。
+2. 监听源货源修改、取消、派车完成等状态。
+3. 已发布货源发生变化时，触发统一发布能力执行修改或下架。
+4. 保留源系统货源号与原始数据引用，支持幂等同步和问题追溯。`,
+  },
+  {
+    id: 'huadong-dispatch-writeback',
+    visibility: '指定企业',
+    enterpriseIds: ['ent-east'],
+    name: '华东派车回写员工',
+    description: '将确认合作的司机、车辆和报价回写客户业务系统，完成指派并触发平台货源下架。',
+    loginUrl: 'https://tms.huadong.example.com',
+    loginType: '短信验证码',
+    skillVersion: 'v1.0',
+    skillUpdated: '今天 11:32',
+    skillFileName: 'huadong-dispatch-writeback.skill.md',
+    skillContent: `# 华东派车回写员工
+
+目标：将数字人确认的司机和车辆写回客户业务系统。
+
+执行规则：
+1. 校验货源仍可派车且司机、车辆字段完整。
+2. 回写司机、手机号、车牌、车型、车长、成交价和来源平台。
+3. 记录外部指派结果；成功后将标准货源置为已派车。
+4. 触发大卡与满帮货源同步下架；失败时保留重试状态，不得重复指派。`,
+  },
+  {
     id: 'jinyu-cement-tms',
     visibility: '指定企业',
     enterpriseIds: ['ent-jinyu'],
@@ -288,9 +330,9 @@ const skillSeed: Array<{
   { id: 'operations-wecom-suite', name: '企业微信套件', category: '运营助手' },
   { id: 'operations-feishu-suite', name: '飞书套件', category: '运营助手' },
   { id: 'operations-dingtalk-suite', name: '钉钉套件', category: '运营助手' },
-  { id: 'capacity-find-carrier', name: '找运力', category: '运力与货源' },
-  { id: 'capacity-quote-query', name: '报价查询', category: '运力与货源' },
-  { id: 'capacity-cargo-search', name: '搜索货源', category: '运力与货源' },
+  { id: 'capacity-cargo-normalization', name: '货源解析', category: '运力与货源' },
+  { id: 'capacity-cargo-publish', name: '货源发布', category: '运力与货源' },
+  { id: 'capacity-quote-collection', name: '报价抢单', category: '运力与货源' },
   { id: 'capacity-private-fleet', name: '私有运力池', category: '运力与货源', visibility: '指定企业', enterpriseIds: ['ent-anjie', 'ent-east'] },
 ];
 
@@ -311,10 +353,10 @@ const skillDescriptions: Record<string, string> = {
   'operations-wecom-suite': '连接企业微信，将在途风险、协同待办和处置结果同步到群聊、消息与工作台。',
   'operations-feishu-suite': '连接飞书，将运单异常、协同任务和处置进展同步到消息、群组与多维表格。',
   'operations-dingtalk-suite': '连接钉钉，将在途预警、审批待办和运营结果推送到群聊与工作通知。',
-  'capacity-find-carrier': '将货源信息发布至运力生态，供司机或承运方接单。',
-  'capacity-quote-query': '查询司机或承运方的抢单及报价信息。',
-  'capacity-cargo-search': '搜索平台已发布的货源信息。',
-  'capacity-private-fleet': '管理企业自有及长期合作的司机、车辆和承运商资源，支持定向询价与派单。',
+  'capacity-cargo-normalization': '解析 Excel 或连接器采集的货源，映射标准字段；必填项缺失时通过多轮对话补齐后入库。',
+  'capacity-cargo-publish': '基于标准货源统一执行大卡必发、满帮按账号配置选发，并支持跨平台修改与下架。',
+  'capacity-quote-collection': '采集大卡与满帮的司机抢单、报价和电话联系反馈，统一司机车辆画像与处理状态。',
+  'capacity-private-fleet': '通过 Excel 维护企业熟车资源，叠加中交车辆位置、目的地预测和当前装卸状态，支持筛选与定向询价。',
 };
 
 const managedSkills = ref<ManagedSkill[]>(
