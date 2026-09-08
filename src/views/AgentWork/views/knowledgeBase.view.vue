@@ -587,23 +587,29 @@ onBeforeUnmount(() => {
             </div>
 
             <!-- 地图（放大展示） -->
-            <div v-if="!props.emptyMode" class="platform-map-shell mb-5 relative">
-              <div ref="platformMapRef" class="platform-map h-[420px] w-full overflow-hidden rounded-xl border border-[#e4e4e0] bg-[#f3f3ef]"></div>
-              <div class="platform-map-frame pointer-events-none absolute inset-0 rounded-xl"></div>
-              <!-- 图例 -->
-              <div class="pointer-events-none absolute left-3 top-3 z-[500] flex flex-col gap-1.5 rounded-lg border border-white/60 bg-white/85 px-3 py-2 shadow-sm backdrop-blur-md">
-                <p class="text-[10px] font-semibold uppercase tracking-wider text-slate-400">线路量级</p>
-                <div class="flex items-center gap-1.5">
-                  <span class="h-[1.5px] w-5 rounded-full bg-[#3b82f6]"></span>
-                  <span class="text-[11px] text-slate-600">低频</span>
-                </div>
-                <div class="flex items-center gap-1.5">
-                  <span class="h-[2.5px] w-5 rounded-full bg-[#8b5cf6]"></span>
-                  <span class="text-[11px] text-slate-600">中频</span>
-                </div>
-                <div class="flex items-center gap-1.5">
-                  <span class="h-[3.5px] w-5 rounded-full bg-[#dc2626]"></span>
-                  <span class="text-[11px] text-slate-600">高频</span>
+            <div v-if="!props.emptyMode" class="mb-5">
+              <div class="mb-2 flex items-center justify-between">
+                <p class="text-xs text-slate-500">地市间运输路线分布</p>
+                <p class="text-[11px] text-slate-400">仅展示运单量 Top 20 的地市间路线，箭头方向为运输流向</p>
+              </div>
+              <div class="relative">
+                <div ref="platformMapRef" class="platform-map h-[420px] w-full overflow-hidden rounded-xl border border-[#e4e4e0] bg-[#f3f3ef]"></div>
+                <div class="platform-map-frame pointer-events-none absolute inset-0 rounded-xl"></div>
+                <!-- 图例 -->
+                <div class="pointer-events-none absolute left-3 top-3 z-[500] flex flex-col gap-1.5 rounded-lg border border-white/60 bg-white/85 px-3 py-2 shadow-sm backdrop-blur-md">
+                  <p class="text-[10px] font-semibold uppercase tracking-wider text-slate-400">线路量级</p>
+                  <div class="flex items-center gap-1.5">
+                    <span class="h-[3.5px] w-5 rounded-full bg-[#dc2626]"></span>
+                    <span class="text-[11px] text-slate-600">高频</span>
+                  </div>
+                  <div class="flex items-center gap-1.5">
+                    <span class="h-[2.5px] w-5 rounded-full bg-[#8b5cf6]"></span>
+                    <span class="text-[11px] text-slate-600">中频</span>
+                  </div>
+                  <div class="flex items-center gap-1.5">
+                    <span class="h-[1.5px] w-5 rounded-full bg-[#3b82f6]"></span>
+                    <span class="text-[11px] text-slate-600">低频</span>
+                  </div>
                 </div>
               </div>
             </div>
@@ -865,10 +871,6 @@ onBeforeUnmount(() => {
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
   overflow: hidden;
-}
-
-.platform-map-shell {
-  border-radius: 12px;
 }
 
 // 地图内发光描边：让边界更有质感，不再是单一线条
