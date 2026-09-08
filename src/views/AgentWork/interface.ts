@@ -97,6 +97,7 @@ export interface AgentResultLink {
 }
 
 export interface AgentResultFile {
+  description?: string;
   name: string;
   url: string;
 }

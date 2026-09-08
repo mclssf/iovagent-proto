@@ -346,6 +346,7 @@ export const rightPanelTabs: [string, string][] = [
 const processStepInitialDelay = 360;
 const processStepInterval = 680;
 const spreadsheetProcessStepInterval = 1200;
+const regionVisitStepDelayRange: [number, number] = [4400, 5600];
 let agentProcessTimers: ReturnType<typeof setTimeout>[] = [];
 
 const warningProcessSteps = [
@@ -500,6 +501,83 @@ function extractSpreadsheetRequest(raw: string) {
     .find(Boolean);
   if (!prompt || !sourceFileName) return null;
   return { prompt, sourceFileName };
+}
+
+interface RegionVisitRequest {
+  region: string;
+  sourceFileName: string;
+}
+
+const regionVisitQueryPattern =
+  /(?:是否|有没有|有无)(?:曾经)?(?:到过|到达过|去过|经过|途经|路过|驶入过|进入过)([\u4e00-\u9fa5]{2,12}(?:省|市|区|县|自治州|地区))/;
+
+function extractRegionVisitRegion(raw: string) {
+  return raw.match(regionVisitQueryPattern)?.[1] ?? '';
+}
+
+function extractRegionVisitRequest(raw: string): RegionVisitRequest | null {
+  const region = extractRegionVisitRegion(raw);
+  const spreadsheetRequest = extractSpreadsheetRequest(raw);
+  if (!region || !spreadsheetRequest || !/\.(?:csv|xls|xlsx)$/i.test(spreadsheetRequest.sourceFileName)) return null;
+  return { region, sourceFileName: spreadsheetRequest.sourceFileName };
+}
+
+function createRegionVisitSteps(request: RegionVisitRequest): NonNullable<ChatMessage['steps']> {
+  return [
+    {
+      title: '理解查询意图',
+      text: `识别任务为“批量核验车辆历史到访”，目标行政区域为“${request.region}”。`,
+    },
+    {
+      title: '解析待处理表格',
+      text: `读取“${request.sourceFileName}”，识别车牌号、司机手机号、运单开始时间，共 14 条有效记录。`,
+    },
+    {
+      title: '建立查询时间窗',
+      text: '按每条记录的运单开始时间至当前查询时刻，生成 14 个独立历史轨迹检索窗口。',
+    },
+    {
+      title: '解析地区边界',
+      text: `调用行政区划服务，将“${request.region}”转换为可用于轨迹匹配的地理围栏。`,
+      skill: '行政区划解析',
+    },
+    {
+      title: '批量查询历史轨迹',
+      text: '按车牌和时间窗调取车辆历史定位点、轨迹连续性及有效定位时间。',
+      skill: '轨迹查询',
+    },
+    {
+      title: '判定地区到访',
+      text: `将有效轨迹点与“${request.region}”围栏进行空间匹配，提取首次经过时间并复核边界附近定位。`,
+      skill: '电子围栏核验',
+    },
+    {
+      title: '生成查询结果',
+      text: '在原表追加到访结论和经过时间，完成 14 条记录的字段、时间与统计一致性检查。',
+    },
+  ];
+}
+
+function createRegionVisitResultFile(sourceFileName: string, region: string): AgentResultFile {
+  const sourceBaseName = sourceFileName.replace(/\.[^.]+$/, '').replace(/[\\/:*?"<>|]/g, '_') || '车辆历史到访清单';
+  return {
+    description: 'Excel 工作簿 · 14 条车辆地区到访核验结果',
+    name: `${sourceBaseName}_${region}到访查询_${formatFileTimestamp(new Date())}.xlsx`,
+    url: '/demo/vehicle-region-visit-result.xlsx',
+  };
+}
+
+function createRegionVisitResultText(region: string) {
+  return [
+    `查询完成：已核验 14 条车辆记录在各自运单周期内是否到过${region}。`,
+    '',
+    `到过${region}：8 条`,
+    `未到过${region}：6 条`,
+    '到访占比：57.1%',
+    '有效轨迹覆盖：14 条（100%）',
+    '',
+    '判定口径：以每条记录的运单开始时间为起点、当前查询时刻为终点；存在有效定位点落入目标行政区围栏即判定为“是”，并记录首次经过时间。',
+  ].join('\n');
 }
 
 interface TransportStatusRequest {
@@ -1329,13 +1407,31 @@ export const agentWorkData = defineStore('agentWork', {
       if (!raw.trim()) return;
       this.ensureConversationStarted();
       const next: ChatMessage[] = [...this.agentMessages, { role: 'user', text: raw }];
-      const spreadsheetRequest = extractSpreadsheetRequest(raw);
+      const regionVisitRegion = extractRegionVisitRegion(raw);
+      const regionVisitRequest = extractRegionVisitRequest(raw);
+      const spreadsheetRequest = regionVisitRequest ? null : extractSpreadsheetRequest(raw);
       const mcpPrompt = extractMcpPrompt(raw);
       const emailDeliveryRequest = extractEmailDeliveryRequest(raw, this.agentMessages);
       const analysisReportRequest = extractAnalysisReportRequest(raw);
       const transportStatusRequest = extractTransportStatusRequest(raw);
       const vehiclePositionRequest = transportStatusRequest ? null : extractVehiclePositionRequest(raw);
       let replyMessage: ChatMessage = { role: 'agent', text: '已处理你的请求。你可以继续补充需要关注的范围。' };
+      if (regionVisitRequest) {
+        this.startRegionVisitProcess(next, regionVisitRequest);
+        this.agentInput = '';
+        return;
+      }
+      if (regionVisitRegion) {
+        this.agentMessages = [
+          ...next,
+          {
+            role: 'agent',
+            text: `已识别查询地区“${regionVisitRegion}”。请上传包含车牌号、司机手机号、运单开始时间的 Excel 或 CSV 表格，我会按每条运单的时间范围批量核验车辆是否到过该地区。`,
+          },
+        ];
+        this.agentInput = '';
+        return;
+      }
       if (spreadsheetRequest) {
         this.startSpreadsheetFillProcess(next, spreadsheetRequest.sourceFileName);
         this.agentInput = '';
@@ -1439,6 +1535,50 @@ export const agentWorkData = defineStore('agentWork', {
       }
       this.agentMessages = [...next, replyMessage];
       this.agentInput = '';
+    },
+    startRegionVisitProcess(next: ChatMessage[], request: RegionVisitRequest) {
+      const steps = createRegionVisitSteps(request);
+      const resultFile = createRegionVisitResultFile(request.sourceFileName, request.region);
+      const messageIndex = next.length;
+      let cumulativeDelay = 0;
+
+      this.agentMessages = [
+        ...next,
+        {
+          role: 'agent',
+          title: '车辆历史到访核验',
+          status: '处理中',
+          text: `已接收“${request.sourceFileName}”，正在核验表内车辆是否到过${request.region}。`,
+          steps,
+          result: '',
+          progressMode: true,
+          activeStepIndex: 0,
+        },
+      ];
+
+      steps.forEach((_, stepIndex) => {
+        cumulativeDelay += Math.round(randomBetween(...regionVisitStepDelayRange));
+        const timer = setTimeout(() => {
+          const completedStepCount = stepIndex + 1;
+          const isComplete = completedStepCount === steps.length;
+          this.agentMessages = this.agentMessages.map((message, index) => {
+            if (index !== messageIndex) return message;
+            return {
+              ...message,
+              activeStepIndex: completedStepCount,
+              status: isComplete ? '已完成' : '处理中',
+              result: isComplete ? createRegionVisitResultText(request.region) : '',
+              file: isComplete ? resultFile : undefined,
+            };
+          });
+
+          if (isComplete) {
+            ElMessage.success('车辆历史到访核验完成');
+            clearAgentProcessTimers();
+          }
+        }, cumulativeDelay);
+        agentProcessTimers.push(timer);
+      });
     },
     startSpreadsheetFillProcess(next: ChatMessage[], sourceFileName: string) {
       const steps = createSpreadsheetFillSteps(sourceFileName);

@@ -200,8 +200,15 @@ function isWaybillListFile(file: File, purpose: 'regular' | 'waybill') {
   return /(?:运单|订单|货单|发运|运输|在途|车辆|物流|tms|waybill|order|shipment)/i.test(waybillSignal);
 }
 
+function isRegionVisitQuery(value: string) {
+  return /(?:是否|有没有|有无)(?:曾经)?(?:到过|到达过|去过|经过|途经|路过|驶入过|进入过)[\u4e00-\u9fa5]{2,12}(?:省|市|区|县|自治州|地区)/.test(value);
+}
+
 function openWaybillImportGuide(files: File[], purpose: 'regular' | 'waybill') {
-  const waybillFiles = files.filter((file) => isWaybillListFile(file, purpose));
+  const isRegionVisitFlow = isRegionVisitQuery(agentInput.value);
+  const waybillFiles = files.filter(
+    (file) => !isRegionVisitFlow && !/(?:历史到访|地区到访|区域到访)/.test(file.name) && isWaybillListFile(file, purpose),
+  );
   if (waybillFiles.length === 0) return;
   pendingWaybillImport.value = {
     files: waybillFiles,
@@ -765,7 +772,7 @@ onBeforeUnmount(() => {
                 </span>
                 <span class="min-w-0 flex-1">
                   <span class="block truncate text-sm font-medium text-slate-900">{{ m.file.name }}</span>
-                  <span class="mt-0.5 block text-xs text-slate-500">Excel 工作簿 · 已完成补全与复检</span>
+                  <span class="mt-0.5 block text-xs text-slate-500">{{ m.file.description ?? 'Excel 工作簿 · 已完成补全与复检' }}</span>
                 </span>
                 <Icon :svg="strokeIconPaths.download" :size="17" svg-class="shrink-0 text-emerald-700" />
               </a>
