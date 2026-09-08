@@ -75,6 +75,17 @@ export function handleRouter(_routerList: any) {
             name: 'agent-work-downloads',
             component: () => import('@/views/AgentWork/views/downloads.view.vue'),
           },
+          {
+            path: 'knowledge-base',
+            name: 'agent-work-knowledge-base',
+            component: () => import('@/views/AgentWork/views/knowledgeBase.view.vue'),
+          },
+          {
+            path: 'knowledge-base-empty',
+            name: 'agent-work-knowledge-base-empty',
+            component: () => import('@/views/AgentWork/views/knowledgeBase.view.vue'),
+            props: { emptyMode: true },
+          },
         ],
       },
     ],
