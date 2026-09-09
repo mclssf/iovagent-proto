@@ -16,6 +16,7 @@ import { defineStore } from 'pinia';
 
 import { extractMcpPrompt, runMcpPrompt } from '@/views/AgentWork/mcpClient';
 import { getRiskOrders, summarizeOrders } from '@/views/AgentWork/utils';
+import { ensureRequiredMonitorSkills } from '@/views/AgentWork/dailyTasks';
 
 const defaultOrdersDateRange = {
   start: '2026-05-09',
@@ -1055,7 +1056,7 @@ export const agentWorkData = defineStore('agentWork', {
     return {
       ordersStartDate: defaultOrdersDateRange.start,
       ordersEndDate: defaultOrdersDateRange.end,
-      projects: [...projectsSeed] as Project[],
+      projects: projectsSeed.map((project) => ({ ...project, skillIds: ensureRequiredMonitorSkills(project.skillIds) })) as Project[],
       recentConversations: conversationSeeds.map((conversation) => ({
         ...conversation,
         messages: conversation.messages.map((message) => ({ ...message })),
@@ -1279,7 +1280,7 @@ export const agentWorkData = defineStore('agentWork', {
           tmsUser: 'demo_user',
           keyword: '演示',
           statusFilter: '在途',
-          skillIds: ['spreadsheet-waybill', 'route-risk-expert', 'gps-trace-expert', 'parking-event-expert'],
+          skillIds: ensureRequiredMonitorSkills(['spreadsheet-waybill', 'route-risk-expert', 'gps-trace-expert', 'parking-event-expert']),
         },
         ...this.projects,
       ];
@@ -1301,7 +1302,7 @@ export const agentWorkData = defineStore('agentWork', {
           tmsUser: '文件导入',
           keyword: '导入运单',
           statusFilter: '在途',
-          skillIds: ['spreadsheet-waybill', 'route-risk-expert', 'gps-trace-expert', 'parking-event-expert'],
+          skillIds: ensureRequiredMonitorSkills(['spreadsheet-waybill', 'route-risk-expert', 'gps-trace-expert', 'parking-event-expert']),
         },
         ...this.projects,
       ];
@@ -1328,7 +1329,7 @@ export const agentWorkData = defineStore('agentWork', {
       ElMessage.success(`已将 ${importedCount} 条运单合并到“${targetProject.name}”`);
     },
     addSkillProject(name: string, skillNames: string[], skillIds: string[]) {
-      const projectId = `P${String(this.projects.length + 1).padStart(3, '0')}`;
+      const projectId = `P${crypto.randomUUID()}`;
       const skillSummary = skillNames.length > 0 ? skillNames.join(' / ') : '内置技能';
       this.workspaceMode = 'project';
       this.currentConversationId = '';
@@ -1344,7 +1345,7 @@ export const agentWorkData = defineStore('agentWork', {
           tmsUser: 'skill_agent',
           keyword: skillNames.slice(0, 2).join('、') || name,
           statusFilter: '在途',
-          skillIds,
+          skillIds: ensureRequiredMonitorSkills(skillIds),
         },
         ...this.projects,
       ];
@@ -1363,7 +1364,7 @@ export const agentWorkData = defineStore('agentWork', {
               tmsUrl: skillSummary,
               tmsUser: project.tmsUser || 'skill_agent',
               keyword: skillNames.slice(0, 2).join('、') || name,
-              skillIds,
+              skillIds: ensureRequiredMonitorSkills(skillIds),
             }
           : project,
       );

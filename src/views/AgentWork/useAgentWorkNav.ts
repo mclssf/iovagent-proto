@@ -10,6 +10,7 @@ import { agentWorkData } from '@/pinia/agentWork';
 export const agentWorkRouteName: Record<PageId, string> = {
   agent: 'agent-work-agent',
   longTasks: 'agent-work-long-tasks',
+  dailyTasks: 'agent-work-daily-tasks',
   orders: 'agent-work-orders',
   risk: 'agent-work-risk',
   detail: 'agent-work-detail',
@@ -29,7 +30,7 @@ export function useAgentWorkNav() {
       if (route.name === agentWorkRouteName.projectCreate) return Promise.resolve();
       return router.push({ name: agentWorkRouteName[page], query: { from: route.fullPath, ...query } });
     }
-    return router.push({ name: agentWorkRouteName[page] });
+    return router.push({ name: agentWorkRouteName[page], query });
   }
 
   function openOrderDetail(order: Order) {

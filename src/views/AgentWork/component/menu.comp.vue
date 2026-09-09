@@ -29,12 +29,12 @@ const currentUserName = computed(
 );
 
 const publicNavs: { icon: string; id: PageId; label: string }[] = [
-  { id: 'longTasks', label: '长期任务', icon: strokeIconPaths.alarmClock },
   { id: 'downloads', label: '下载', icon: strokeIconPaths.download },
 ];
 
 const projectNavs: { icon: string; id: PageId; label: string }[] = [
   { id: 'agent', label: '智能体工作台', icon: strokeIconPaths.bot },
+  { id: 'dailyTasks', label: '日常任务', icon: strokeIconPaths.alarmClock },
   { id: 'orders', label: '运单列表', icon: strokeIconPaths.list },
   { id: 'risk', label: '异常运单列表', icon: strokeIconPaths.shield },
   { id: 'detail', label: '运单详情与地图', icon: strokeIconPaths.map },

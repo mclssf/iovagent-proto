@@ -36,7 +36,7 @@ export interface TmsSyncCustomer {
   userPhone: string;
 }
 
-export type PageId = 'agent' | 'analytics' | 'detail' | 'downloads' | 'longTasks' | 'orders' | 'projectCreate' | 'projects' | 'risk';
+export type PageId = 'agent' | 'analytics' | 'dailyTasks' | 'detail' | 'downloads' | 'longTasks' | 'orders' | 'projectCreate' | 'projects' | 'risk';
 export type Tone = 'blue' | 'gray' | 'green' | 'orange' | 'purple' | 'red';
 
 export interface Order {

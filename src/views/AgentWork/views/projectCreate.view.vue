@@ -10,6 +10,7 @@ import { agentWorkData } from '@/pinia/agentWork';
 import { strokeIconPaths } from '../strokeIconPaths';
 import { useAgentWorkNav } from '../useAgentWorkNav';
 import { badgeToneClass, projectStatusTone } from '../utils';
+import { ensureRequiredMonitorSkills, monitorDefinitions, requiredMonitorSkillIds } from '../dailyTasks';
 
 type SkillType = 'analysis' | 'capacity' | 'data' | 'logistics' | 'operations';
 type SkillTab = 'all' | SkillType;
@@ -37,7 +38,7 @@ const { goPage } = useAgentWorkNav();
 const route = useRoute();
 const router = useRouter();
 const maxProjectNameLength = 20;
-const defaultLogisticsSkillIds = ['route-risk-expert', 'gps-trace-expert', 'parking-event-expert'];
+const defaultLogisticsSkillIds = ensureRequiredMonitorSkills(['route-risk-expert', 'gps-trace-expert', 'parking-event-expert']);
 const projectName = ref('');
 const activeTab = ref<SkillTab>('all');
 const selectedDataSkillId = ref('');
@@ -79,6 +80,14 @@ const skillTypeLabels: Record<SkillType, string> = {
 };
 
 const skills: ProjectSkill[] = [
+  ...monitorDefinitions.filter((monitor) => monitor.id !== 'parking').map((monitor): ProjectSkill => ({
+    id: monitor.skillId,
+    name: monitor.name,
+    type: 'logistics',
+    description: monitor.description,
+    usage: monitor.required ? '免费' : '付费',
+    icon: strokeIconPaths[monitor.icon],
+  })),
   {
     id: 'jinyu-cement-tms',
     name: '金隅水泥TMS',
@@ -335,7 +344,7 @@ function initializeProjectForm() {
     return;
   }
 
-  const projectSkillIds = getProjectSkillIds();
+  const projectSkillIds = ensureRequiredMonitorSkills(getProjectSkillIds());
   const dataSkill = skills.find((skill) => projectSkillIds.includes(skill.id) && skill.type === 'data');
   projectName.value = project.name;
   selectedDataSkillId.value = dataSkill?.id ?? '';
@@ -378,7 +387,7 @@ function skillAvatarClass(skill: ProjectSkill) {
 }
 
 function toggleSkill(skill: ProjectSkill) {
-  if (isSkillConnecting(skill)) return;
+  if (isSkillConnecting(skill) || requiredMonitorSkillIds.includes(skill.id)) return;
   if (skill.type === 'data') {
     if (selectedDataSkillId.value === skill.id) {
       selectedDataSkillId.value = '';
@@ -676,7 +685,8 @@ onBeforeUnmount(() => {
                 ? 'border-slate-900 shadow-[0_0_0_1px_rgba(15,23,42,0.85),0_10px_22px_rgba(15,23,42,0.08)]'
                 : 'border-transparent hover:border-[#deded9] hover:shadow-md'
             "
-            :disabled="isSkillConnecting(skill)"
+            :disabled="isSkillConnecting(skill) || requiredMonitorSkillIds.includes(skill.id)"
+            :aria-pressed="isSkillSelected(skill)"
             @click="toggleSkill(skill)"
           >
             <div class="flex items-start justify-between gap-3">
@@ -716,7 +726,7 @@ onBeforeUnmount(() => {
                 class="rounded-md px-2 py-1 text-xs font-medium leading-4"
                 :class="isSkillSelected(skill) ? 'bg-slate-900 text-white' : 'bg-[#f1f1ef] text-slate-600'"
               >
-                {{ isSkillSelected(skill) ? '已选择' : '未选择' }}
+                {{ requiredMonitorSkillIds.includes(skill.id) ? '必选 · 状态流转' : isSkillSelected(skill) ? '已选择' : '未选择' }}
               </span>
             </div>
           </button>

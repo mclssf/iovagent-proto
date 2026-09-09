@@ -16,11 +16,21 @@ import { strokeIconPaths } from '../strokeIconPaths';
 import { useAgentWorkNav } from '../useAgentWorkNav';
 import WaybillImportDialog from '../component/waybillImport.dialog.vue';
 import AnalysisReportView from './analysisReport.view.vue';
+import ProjectMonitors from '../component/projectMonitors.comp.vue';
+import '../agentWorkspace.css';
 
 const store = agentWorkData();
 const { agentMessages, agentInput } = storeToRefs(store);
 const { goPage, createDownload, sendAgent } = useAgentWorkNav();
 const agentMessageListRef = ref<HTMLDivElement | null>(null);
+const agentMessageContentRef = ref<HTMLDivElement | null>(null);
+const chatColumnRef = ref<HTMLDivElement | null>(null);
+const taskRailRef = ref<HTMLElement | null>(null);
+const taskToggleRef = ref<HTMLButtonElement | null>(null);
+const isTaskCardOpen = ref(false);
+const isFollowingLatest = ref(true);
+let conversationResizeObserver: ResizeObserver | undefined;
+let lastMessageGeometry = '';
 const panelMapRef = ref<HTMLDivElement | null>(null);
 const panelRouteDistance = ref('约 175 km');
 const panelRouteDuration = ref('约 2h 40m');
@@ -127,7 +137,7 @@ const fileInputRef = ref<HTMLInputElement | null>(null);
 const composerTextareaRef = ref<HTMLTextAreaElement | null>(null);
 const uploadedFiles = ref<File[]>([]);
 const isFileDragActive = ref(false);
-const isRightPanelVisible = ref(store.workspaceMode === 'project');
+const isRightPanelVisible = ref(false);
 const filePickerPurpose = ref<'regular' | 'waybill'>('regular');
 const pendingWaybillImport = ref<PendingWaybillImport | null>(null);
 let fileDragDepth = 0;
@@ -142,11 +152,6 @@ function toggleRightPanelVisibility() {
 
 function closeRightPanelContent() {
   if (store.visibleRightPanel === 'externalH5' || store.visibleRightPanel === 'analysisReport') {
-    if (store.workspaceMode === 'project') {
-      store.showDefaultRightPanel();
-      isRightPanelVisible.value = true;
-      return;
-    }
     store.showDefaultRightPanel();
   }
   isRightPanelVisible.value = false;
@@ -170,6 +175,13 @@ function closeComposerMenusOnOutside(event: MouseEvent) {
   if (!modelSelectRef.value?.contains(event.target as Node)) {
     isModelSelectOpen.value = false;
   }
+  if (!taskRailRef.value?.contains(event.target as Node) && !taskToggleRef.value?.contains(event.target as Node)) isTaskCardOpen.value = false;
+}
+
+function closeTaskCardOnEscape(event: KeyboardEvent) {
+  if (event.key !== 'Escape' || !isTaskCardOpen.value) return;
+  isTaskCardOpen.value = false;
+  taskToggleRef.value?.focus();
 }
 
 function addUploadedFiles(files: File[]) {
@@ -280,6 +292,7 @@ function confirmWaybillImport(payload: { mode: 'create' | 'merge'; projectId: st
 function sendComposerMessage() {
   const text = agentInput.value.trim();
   if (!text && uploadedFiles.value.length === 0) return;
+  isFollowingLatest.value = true;
 
   if (uploadedFiles.value.length > 0) {
     const attachmentText = `附件：${uploadedFiles.value.map((file) => file.name).join('、')}`;
@@ -290,6 +303,24 @@ function sendComposerMessage() {
   }
 
   sendAgent();
+}
+
+function sendQuickPrompt(text: string) {
+  isFollowingLatest.value = true;
+  sendAgent(text);
+}
+
+function resizeComposer() {
+  const textarea = composerTextareaRef.value;
+  if (!textarea) return;
+  textarea.style.height = 'auto';
+  textarea.style.height = `${Math.min(textarea.scrollHeight, 160)}px`;
+}
+
+function handleComposerEnter(event: KeyboardEvent) {
+  if (event.isComposing) return;
+  event.preventDefault();
+  sendComposerMessage();
 }
 
 function formatStepNumber(index: number) {
@@ -304,11 +335,21 @@ function progressStepState(message: ChatMessage, stepIndex: number) {
   return 'pending';
 }
 
-function scrollAgentMessagesToBottom() {
+function scrollAgentMessagesToBottom(force = false) {
+  if (force) isFollowingLatest.value = true;
   nextTick(() => {
-    if (!agentMessageListRef.value) return;
+    if (!agentMessageListRef.value || !isFollowingLatest.value) return;
     agentMessageListRef.value.scrollTop = agentMessageListRef.value.scrollHeight;
   });
+}
+
+function handleMessageScroll() {
+  const element = agentMessageListRef.value;
+  if (!element) return;
+  const atBottom = element.scrollHeight - element.scrollTop - element.clientHeight < 48;
+  const geometry = `${element.clientWidth}/${element.clientHeight}/${element.scrollHeight}`;
+  // Reflow from the composer or H5 is not a user's decision to stop following output.
+  if (atBottom || geometry === lastMessageGeometry) isFollowingLatest.value = atBottom;
 }
 
 const isOrderEventPanel = computed(() => store.visibleRightPanel === 'orderEvent');
@@ -328,10 +369,8 @@ const workspaceTitle = computed(() => {
 });
 const isDynamicRightPanel = computed(() => isExternalH5Panel.value || isAnalysisReportPanel.value);
 const isRightPanelRendered = computed(
-  () => isRightPanelVisible.value && (store.workspaceMode === 'project' || isDynamicRightPanel.value),
+  () => isRightPanelVisible.value && isDynamicRightPanel.value,
 );
-const agentGridClass = computed(() => (isRightPanelRendered.value ? 'grid-cols-[minmax(0,1fr)_minmax(380px,0.96fr)]' : 'grid-cols-1'));
-const conversationRailClass = computed(() => (isRightPanelRendered.value ? 'max-w-[800px]' : 'max-w-[1000px]'));
 const visibleQuickPrompts = computed(() => quickPrompts.slice(0, 3));
 
 const trendData = [
@@ -569,6 +608,19 @@ function clearEventPanelMap() {
 
 onMounted(() => {
   document.addEventListener('click', closeComposerMenusOnOutside);
+  document.addEventListener('keydown', closeTaskCardOnEscape);
+  conversationResizeObserver = new ResizeObserver(() => {
+    const scroller = agentMessageListRef.value;
+    if (scroller) {
+      chatColumnRef.value?.style.setProperty('--message-scrollbar', `${scroller.offsetWidth - scroller.clientWidth}px`);
+      lastMessageGeometry = `${scroller.clientWidth}/${scroller.clientHeight}/${scroller.scrollHeight}`;
+    }
+    scrollAgentMessagesToBottom();
+  });
+  if (agentMessageContentRef.value) conversationResizeObserver.observe(agentMessageContentRef.value);
+  if (agentMessageListRef.value) conversationResizeObserver.observe(agentMessageListRef.value);
+  resizeComposer();
+  scrollAgentMessagesToBottom();
   if (!import.meta.env.DEV) return;
   const { ordersSeed } = store;
   const riskOrders = getRiskOrders(ordersSeed);
@@ -576,6 +628,9 @@ onMounted(() => {
   console.assert(riskOrders.length === 4, '异常运单列表应展示高风险和低风险运单');
   console.assert(riskOrders.every((item) => item.risk !== '无风险'), '异常运单列表不得包含无风险运单');
 });
+
+watch(agentInput, () => nextTick(resizeComposer));
+watch(isRightPanelRendered, () => { isTaskCardOpen.value = false; scrollAgentMessagesToBottom(); });
 
 watch(
   agentMessages,
@@ -588,8 +643,10 @@ watch(
 
 watch(
   [() => store.workspaceMode, () => store.currentConversationId, () => store.currentProjectId],
-  ([workspaceMode]) => {
-    isRightPanelVisible.value = workspaceMode === 'project';
+  () => {
+    isRightPanelVisible.value = isDynamicRightPanel.value;
+    isTaskCardOpen.value = false;
+    scrollAgentMessagesToBottom(true);
     clearEventPanelMap();
   },
   { immediate: true },
@@ -597,22 +654,13 @@ watch(
 
 watch(
   [() => store.visibleRightPanel, () => store.workspaceMode],
-  ([panel, workspaceMode]) => {
+  ([panel]) => {
     if (panel === 'externalH5' || panel === 'analysisReport') {
       isRightPanelVisible.value = true;
       clearEventPanelMap();
       return;
     }
-    if (workspaceMode === 'conversation') {
-      isRightPanelVisible.value = false;
-      clearEventPanelMap();
-      return;
-    }
-    if (panel === 'orderEvent') {
-      isRightPanelVisible.value = true;
-      initEventPanelMap();
-      return;
-    }
+    isRightPanelVisible.value = false;
     clearEventPanelMap();
   },
   { immediate: true },
@@ -628,24 +676,30 @@ watch(isRightPanelVisible, (visible) => {
 
 onBeforeUnmount(() => {
   document.removeEventListener('click', closeComposerMenusOnOutside);
+  document.removeEventListener('keydown', closeTaskCardOnEscape);
+  conversationResizeObserver?.disconnect();
   clearEventPanelMap();
 });
 </script>
 
 <template>
-  <div class="grid h-full overflow-hidden bg-[#fcfcfc]" :class="agentGridClass">
-    <div class="relative flex h-full flex-col overflow-hidden bg-[#fcfcfc]">
-      <div class="flex h-12 items-center justify-between gap-4 border-b border-[#eeeeec] bg-[#fcfcfc] px-4">
-        <div class="flex items-center gap-2.5">
+  <div class="agent-workspace" :class="{ 'has-h5': isRightPanelRendered }">
+    <div class="agent-conversation-pane" :class="{ 'has-project': store.workspaceMode === 'project' }">
+      <div class="agent-workspace-header flex h-12 shrink-0 items-center justify-between gap-4 border-b border-[#eeeeec] bg-[#fcfcfc] px-4">
+        <div class="flex min-w-0 items-center gap-2.5">
           <div class="flex h-7 w-7 items-center justify-center rounded-md bg-[#f2f2ef] text-slate-700">
             <Icon :svg="strokeIconPaths.msg" :size="16" />
           </div>
-          <div>
+          <div class="min-w-0">
             <h1 class="max-w-[420px] truncate text-sm font-semibold leading-5 text-slate-950">{{ workspaceTitle }}</h1>
           </div>
         </div>
+        <div class="flex shrink-0 items-center gap-2">
+        <button v-if="store.workspaceMode === 'project'" ref="taskToggleRef" type="button" class="agent-task-toggle" aria-label="持续任务" title="持续任务" :aria-expanded="isTaskCardOpen" aria-controls="project-task-card" @click="isTaskCardOpen = !isTaskCardOpen">
+          <Icon :svg="strokeIconPaths.alarmClock" :size="15" /><span>持续任务</span>
+        </button>
         <button
-          v-if="store.workspaceMode === 'project' || isRightPanelRendered"
+          v-if="isDynamicRightPanel"
           type="button"
           class="inline-flex items-center gap-1 rounded-md border border-[#deded9] bg-[#f7f7f5] px-2.5 py-1.5 text-xs font-medium text-slate-600 hover:bg-white hover:text-slate-950"
           @click="toggleRightPanelVisibility"
@@ -653,15 +707,18 @@ onBeforeUnmount(() => {
           <Icon :svg="strokeIconPaths.chevron" :size="13" :svg-class="isRightPanelRendered ? 'rotate-180' : ''" />
           {{ isRightPanelRendered ? '隐藏右栏' : '显示右栏' }}
         </button>
+        </div>
       </div>
-      <div ref="agentMessageListRef" class="flex-1 overflow-auto bg-[#fcfcfc] px-5 pt-4 pb-52">
-        <div class="mx-auto w-full space-y-4" :class="conversationRailClass">
-          <div v-if="agentMessages.length === 0" class="flex min-h-[calc(100vh-330px)] flex-col items-center justify-center pt-20 text-center">
+      <div class="agent-workspace-body">
+      <div ref="chatColumnRef" class="agent-chat-column">
+      <div ref="agentMessageListRef" class="agent-message-scroll" @scroll.passive="handleMessageScroll">
+        <div ref="agentMessageContentRef" class="agent-conversation-rail agent-message-content" :class="{ 'is-empty': agentMessages.length === 0 }">
+          <div v-if="agentMessages.length === 0" class="agent-empty-conversation flex flex-col items-center justify-center text-center">
             <span class="flex h-9 w-9 items-center justify-center rounded-lg border border-[#dfdfda] bg-white text-slate-500">
               <Icon :svg="strokeIconPaths.bot" :size="18" />
             </span>
             <h2 class="mt-4 text-[22px] font-semibold leading-8 text-slate-900">今天有什么工作需要处理？</h2>
-            <div class="mt-5 grid w-full max-w-[920px] grid-cols-2 gap-2.5 xl:grid-cols-4">
+            <div class="agent-guide-grid mt-5 grid w-full max-w-[920px] gap-2.5">
               <button
                 v-for="guide in newConversationGuides"
                 :key="guide.title"
@@ -682,12 +739,11 @@ onBeforeUnmount(() => {
               </button>
             </div>
           </div>
-          <div v-for="(m, i) in agentMessages" :key="i" class="flex" :class="m.role === 'user' ? 'justify-end' : 'justify-start'">
+          <div v-for="(m, i) in agentMessages" :key="i" class="agent-message-row flex" :class="m.role === 'user' ? 'justify-end' : 'justify-start'">
             <div
-              class="rounded-md px-4 py-3 text-sm leading-6"
+              class="agent-message rounded-md text-sm leading-6"
               :class="[
-                m.role === 'user' ? 'max-w-[72%] bg-slate-900 text-white' : 'border border-[#deded9] bg-white text-slate-700',
-                m.title ? 'max-w-[86%]' : 'max-w-[72%]',
+                m.role === 'user' ? 'is-user bg-slate-900 px-4 py-3 text-white' : m.title ? 'is-agent border border-[#deded9] bg-white px-4 py-3 text-slate-700' : 'is-agent text-slate-700',
               ]"
             >
             <template v-if="m.role === 'agent' && m.title">
@@ -713,7 +769,7 @@ onBeforeUnmount(() => {
                 <template v-for="(step, stepIndex) in m.steps" :key="step.title">
                   <div
                     v-if="!m.progressMode || progressStepState(m, stepIndex) !== 'pending'"
-                    class="grid gap-3 px-3"
+                    class="agent-process-step grid gap-3 px-3"
                     :class="m.progressMode ? 'grid-cols-[132px_1fr] py-2.5' : 'grid-cols-[82px_1fr] py-1.5'"
                   >
                     <div class="flex min-w-0 items-start gap-2 text-[11px] font-semibold leading-5 text-slate-900">
@@ -784,8 +840,9 @@ onBeforeUnmount(() => {
           </div>
         </div>
       </div>
-      <div class="pointer-events-none absolute right-0 bottom-4 left-0 z-20 px-5">
-        <div class="mx-auto w-full space-y-2.5" :class="conversationRailClass">
+      <div class="agent-composer-dock">
+        <button v-if="!isFollowingLatest" type="button" class="agent-jump-latest" aria-label="回到最新消息" title="回到最新消息" @click="scrollAgentMessagesToBottom(true)"><Icon :svg="strokeIconPaths.arrowUp" :size="16" svg-class="rotate-180" /></button>
+        <div class="agent-conversation-rail space-y-2.5">
           <div
             class="pointer-events-auto flex h-9 items-center gap-2 overflow-hidden rounded-[14px] border border-[#deded9] bg-white px-2.5 shadow-[0_10px_26px_rgba(15,23,42,0.08),0_2px_6px_rgba(15,23,42,0.04)]"
           >
@@ -796,14 +853,14 @@ onBeforeUnmount(() => {
                 :key="s"
                 type="button"
                 class="h-6 min-w-0 flex-1 rounded-full border border-[#e6e6e2] bg-[#f7f7f5] px-3 text-xs text-slate-600 transition hover:border-[#d8d8d2] hover:bg-white hover:text-slate-950"
-                @click="sendAgent(s)"
+                @click="sendQuickPrompt(s)"
               >
                 <span class="block truncate">{{ s }}</span>
               </button>
             </div>
           </div>
           <div
-            class="pointer-events-auto relative rounded-[18px] border bg-white px-3.5 py-2.5 shadow-[0_14px_36px_rgba(15,23,42,0.11),0_2px_7px_rgba(15,23,42,0.04)] transition focus-within:border-[#4c8dff] focus-within:shadow-[0_14px_36px_rgba(15,23,42,0.11),0_0_0_3px_rgba(59,130,246,0.16)]"
+            class="agent-composer pointer-events-auto relative rounded-[18px] border bg-white px-3.5 py-2.5 shadow-[0_14px_36px_rgba(15,23,42,0.11),0_2px_7px_rgba(15,23,42,0.04)] transition focus-within:border-[#4c8dff] focus-within:shadow-[0_14px_36px_rgba(15,23,42,0.11),0_0_0_3px_rgba(59,130,246,0.16)]"
             :class="isFileDragActive ? 'border-[#4c8dff] bg-blue-50/70 shadow-[0_14px_36px_rgba(15,23,42,0.11),0_0_0_3px_rgba(59,130,246,0.16)]' : 'border-[#deded9]'"
             @dragenter.prevent.stop="handleComposerDragEnter"
             @dragover.prevent.stop
@@ -816,7 +873,7 @@ onBeforeUnmount(() => {
             >
               松开以上传文件
             </div>
-            <div v-if="uploadedFiles.length" class="mb-2 flex flex-wrap gap-2 px-1 pt-1">
+            <div v-if="uploadedFiles.length" class="agent-attachments mb-2 flex flex-wrap gap-2 px-1 pt-1">
               <div
                 v-for="(file, index) in uploadedFiles"
                 :key="`${file.name}-${file.size}-${file.lastModified}`"
@@ -840,7 +897,8 @@ onBeforeUnmount(() => {
               class="min-h-[40px] w-full resize-none bg-transparent px-1 text-sm leading-6 text-slate-800 outline-none placeholder:text-slate-400"
               placeholder="发消息..."
               rows="1"
-              @keydown.enter.exact.prevent="sendComposerMessage"
+              @input="resizeComposer"
+              @keydown.enter.exact="handleComposerEnter"
             />
             <div class="mt-1 flex items-center justify-between gap-3">
               <div class="flex min-w-0 items-center gap-1.5">
@@ -850,7 +908,7 @@ onBeforeUnmount(() => {
                   class="flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-slate-600 transition hover:bg-[#f3f3f1] hover:text-slate-900"
                   aria-label="上传文件"
                   title="上传文件"
-                  @click="openFilePicker"
+                  @click="openFilePicker()"
                 >
                   <Icon :svg="strokeIconPaths.paperclip" :size="17" />
                 </button>
@@ -911,11 +969,16 @@ onBeforeUnmount(() => {
           </div>
         </div>
       </div>
+      </div>
+      <aside v-if="store.workspaceMode === 'project'" id="project-task-card" ref="taskRailRef" class="agent-task-rail" :class="{ 'is-open': isTaskCardOpen }" aria-label="项目持续任务">
+        <ProjectMonitors :key="store.currentProjectId" :project-id="store.currentProjectId" />
+      </aside>
+      </div>
     </div>
 
     <div
       v-if="isRightPanelRendered"
-      class="flex h-full flex-col overflow-hidden border-l border-[#eeeeec] bg-white"
+      class="agent-h5-panel flex h-full flex-col overflow-hidden border-l border-[#eeeeec] bg-white"
       :class="isExternalH5Panel ? 'relative z-10 shadow-[-14px_0_28px_-20px_rgba(15,23,42,0.35)]' : ''"
     >
       <div class="flex h-12 shrink-0 items-center justify-between gap-4 border-b border-[#eeeeec] bg-white px-4">
@@ -941,7 +1004,7 @@ onBeforeUnmount(() => {
             type="button"
             class="flex h-7 w-7 items-center justify-center rounded-md text-slate-400 transition hover:bg-[#f2f2ef] hover:text-slate-800"
             :aria-label="isDynamicRightPanel ? '关闭当前右侧页面' : '关闭右侧栏'"
-            :title="isDynamicRightPanel && store.workspaceMode === 'project' ? '关闭页面并返回默认看板' : '隐藏右侧栏'"
+            title="关闭当前右侧页面"
             @click="closeRightPanelContent"
           >
             <Icon :svg="strokeIconPaths.x" :size="15" />
