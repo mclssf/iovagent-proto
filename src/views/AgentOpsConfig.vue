@@ -10,10 +10,11 @@ import { agentWorkData } from '@/pinia/agentWork';
 import { enterpriseOptions, useAgentOpsStore } from '@/pinia/agentOps';
 import type { ManagedSkill, SkillCategory, SkillVisibility } from '@/pinia/agentOps';
 import ToolManagement from './AgentOps/ToolManagement.vue';
+import AgentManagement from './AgentOps/AgentManagement.vue';
 
 import { strokeIconPaths } from './AgentWork/strokeIconPaths';
 
-type ConfigTab = 'dataset' | 'employees' | 'skills' | 'tmsCustomers' | 'tools';
+type ConfigTab = 'dataset' | 'employees' | 'skills' | 'tmsCustomers' | 'tools' | 'agents';
 type LoginType = '短信验证码' | '手机扫码' | '图形验证码' | '无验证';
 type SkillManagementTab = 'skills' | 'systemPrompt';
 
@@ -262,6 +263,7 @@ const menuItems = computed<Array<{ badge?: number; desc: string; icon: string; i
   { id: 'employees', label: '数据员工配置', desc: '抓取账号、登录方式、映射 Skill', icon: strokeIconPaths.bot },
   { id: 'tmsCustomers', label: 'TMS同步客户', desc: '客户提交、连接处理', icon: strokeIconPaths.usersRound, badge: store.unprocessedTmsSyncCustomerCount },
   { id: 'dataset', label: '标准数据集', desc: '运单字段、语义、数据示例', icon: strokeIconPaths.list },
+  { id: 'agents', label: 'Agent 管理', desc: '职责、调用范围、冲突检测', icon: strokeIconPaths.bot },
   { id: 'tools', label: 'Tool 管理', desc: 'MCP 服务、代码工具、加载范围', icon: strokeIconPaths.waypoints },
   { id: 'skills', label: 'Skill 管理', desc: '通用技能、可见范围、系统提示词', icon: strokeIconPaths.settings },
 ]);
@@ -810,7 +812,7 @@ function markTmsCustomerProcessed(customerId: string) {
 </script>
 
 <template>
-  <div class="flex h-screen flex-col overflow-hidden bg-[#f7f7f5] text-slate-900" :class="{ 'ops-catalog-screen': activeTab === 'tools' || activeTab === 'skills' }">
+  <div class="flex h-screen flex-col overflow-hidden bg-[#f7f7f5] text-slate-900" :class="{ 'ops-catalog-screen': ['agents', 'tools', 'skills'].includes(activeTab) }">
     <header class="flex h-14 shrink-0 items-center justify-between border-b border-[#deded9] bg-white px-5">
       <div class="flex min-w-0 items-center gap-3">
         <div class="flex h-8 w-8 shrink-0 items-center justify-center rounded-md border border-[#deded9] bg-[#f7f7f5] text-slate-700">
@@ -818,7 +820,7 @@ function markTmsCustomerProcessed(customerId: string) {
         </div>
         <div class="min-w-0">
           <h1 class="truncate text-sm font-semibold leading-5 text-slate-950">智能体运营配置</h1>
-          <p class="truncate text-xs leading-4 text-slate-500">数据员工、标准数据集、Tool 与 Skill 管理</p>
+          <p class="truncate text-xs leading-4 text-slate-500">数据员工、标准数据集、Agent、Skill 与 Tool 管理</p>
         </div>
       </div>
       <button type="button" class="shrink-0 rounded-md border border-[#deded9] px-3 py-1.5 text-xs text-slate-600 hover:bg-[#f7f7f5]" @click="router.push('/index')">
@@ -1067,6 +1069,7 @@ function markTmsCustomerProcessed(customerId: string) {
           </div>
         </section>
 
+        <AgentManagement v-else-if="activeTab === 'agents'" />
         <ToolManagement v-else-if="activeTab === 'tools'" @edit-skill="openEditSkillModal" />
 
         <section v-else class="flex h-full min-h-0 flex-col overflow-hidden rounded-md border border-[#deded9] bg-white">

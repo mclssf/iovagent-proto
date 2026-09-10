@@ -61,12 +61,12 @@ function saveLoading() {
     </div>
     <div class="flex shrink-0 flex-wrap items-center gap-3 border-b border-[#e2e2dc] px-5 py-3">
       <label class="relative min-w-0 flex-1 sm:max-w-[360px]"><Icon :svg="strokeIconPaths.search" :size="15" svg-class="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" /><input v-model="search" class="ops-input ops-search" aria-label="搜索 Tool" placeholder="搜索名称、描述或关联 Skill" /></label>
-      <select v-model="loadingFilter" class="ops-input !w-auto" aria-label="筛选加载方式"><option value="all">全部加载方式</option><option value="global">全局加载</option><option value="private">私有化加载</option><option value="mixed">同时全局与私有加载</option><option value="unloaded">未加载</option></select>
+      <select v-model="loadingFilter" class="ops-input !w-auto" aria-label="筛选加载方式"><option value="all">全部加载方式</option><option value="global">全局加载</option><option value="private">私有化加载</option><option value="mixed">同时全局与私有加载</option><option value="unloaded">未配置全局或 Skill 私有加载</option></select>
       <span class="text-xs text-slate-500">{{ filteredTools.length }} 个{{ tab === 'mcp' ? '服务' : '工具' }}</span>
     </div>
     <div class="min-h-0 flex-1 overflow-auto">
       <table class="tool-table min-w-[850px]">
-        <thead><tr><th class="w-[27%]">{{ tab === 'mcp' ? 'MCP 服务 / Description' : '工具名称 / Description' }}</th><th class="w-[25%]">{{ tab === 'mcp' ? '服务属性' : '输入 / 输出参数' }}</th><th class="w-[14%]">加载方式</th><th class="w-[25%]">私有化加载的 Skill</th><th>操作</th></tr></thead>
+        <thead><tr><th class="w-[27%]">{{ tab === 'mcp' ? 'MCP 服务 / Description' : '工具名称 / Description' }}</th><th class="w-[25%]">{{ tab === 'mcp' ? '服务属性' : '输入 / 输出参数' }}</th><th class="w-[14%]">全局 / Skill 加载</th><th class="w-[25%]">私有化加载的 Skill</th><th>操作</th></tr></thead>
         <tbody>
           <tr v-for="tool in filteredTools" :key="tool.id">
             <td><button type="button" class="font-medium text-slate-950 hover:underline" @click="showTool(tool)">{{ tool.name }}</button><div class="mt-1 break-all font-mono text-xs text-slate-500">{{ tool.id }}</div><p class="mt-2 text-xs leading-5 text-slate-600">{{ tool.description }}</p></td>
@@ -78,7 +78,7 @@ function saveLoading() {
               <div class="flex flex-wrap gap-1.5">
                 <span v-if="store.getToolLoading(tool.id).global" class="loading-badge global">全局加载</span>
                 <span v-if="store.getToolLoading(tool.id).private" class="loading-badge private">私有化加载</span>
-                <span v-if="store.getToolLoading(tool.id).unloaded" class="loading-badge unloaded">未加载</span>
+                <span v-if="store.getToolLoading(tool.id).unloaded" class="loading-badge unloaded">未配置</span>
               </div>
               <p v-if="store.getToolLoading(tool.id).mixed" class="mt-2 text-xs leading-5 text-amber-700">同时加载，不推荐</p>
               <p v-else class="mt-2 text-xs leading-5 text-slate-500">{{ store.getToolLoading(tool.id).global ? '已加入全局工具列表' : store.getToolLoading(tool.id).private ? '由关联 Skill 按需加载' : '未开启全局，也未关联 Skill' }}</p>
@@ -90,7 +90,7 @@ function saveLoading() {
       </table>
       <div v-if="!filteredTools.length" class="px-5 py-16 text-center"><p class="text-sm text-slate-600">未找到符合条件的 Tool</p><button class="mt-3 text-xs underline" type="button" @click="search = ''; loadingFilter = 'all'">清空筛选</button></div>
     </div>
-    <footer class="border-t border-[#e2e2dc] bg-[#fbfbfa] px-5 py-3 text-xs leading-5 text-slate-500">所有工具默认不勾选全局加载。Skill 绑定与全局加载互相独立；同时开启可能导致 Agent 调用工具混乱，不推荐同时使用。</footer>
+    <footer class="border-t border-[#e2e2dc] bg-[#fbfbfa] px-5 py-3 text-xs leading-5 text-slate-500">所有工具默认不勾选全局加载。Skill 绑定与全局加载互相独立；同时开启可能导致 Agent 调用工具混乱，不推荐同时使用。Agent 的指定加载在 Agent 管理中独立配置。</footer>
 
     <ElDialog v-model="detailOpen" :title="selectedTool?.name" width="960px" top="5vh" class="ops-tool-dialog" :close-on-click-modal="false">
       <div v-if="selectedTool" class="space-y-6 text-slate-700">
@@ -99,7 +99,7 @@ function saveLoading() {
             <code class="text-xs">{{ selectedTool.id }}</code>
             <span v-if="store.getToolLoading(selectedTool.id).global" class="loading-badge global">全局加载</span>
             <span v-if="store.getToolLoading(selectedTool.id).private" class="loading-badge private">私有化加载</span>
-            <span v-if="store.getToolLoading(selectedTool.id).unloaded" class="loading-badge unloaded">未加载</span>
+            <span v-if="store.getToolLoading(selectedTool.id).unloaded" class="loading-badge unloaded">未配置全局或 Skill 私有加载</span>
             <span class="text-xs text-slate-500">工程更新于 {{ selectedTool.updatedAt }}</span>
           </div>
           <p class="mt-3 text-xs text-slate-500">以下属性由研发在工程中维护，页面只读展示。</p>
@@ -128,7 +128,7 @@ function saveLoading() {
         </div>
         <section class="border-t border-[#e2e2dc] pt-5">
           <label class="flex cursor-pointer items-center gap-2 text-sm font-medium"><input v-model="draftGlobalLoading" type="checkbox" class="h-4 w-4 accent-slate-900" />全局加载</label>
-          <p class="mt-2 text-xs leading-5 text-slate-500">默认不勾选。勾选后加入 Agent 的全局工具列表；取消勾选后，仅由已绑定的 Skill 私有加载。</p>
+          <p class="mt-2 text-xs leading-5 text-slate-500">默认不勾选。勾选后加入所有 Agent 的全局工具列表；取消勾选不会改变 Skill 私有加载或 Agent 指定加载配置。</p>
         </section>
         <section class="border-t border-[#e2e2dc] pt-5">
           <h3 class="text-sm font-semibold">私有加载的 Skill（{{ store.skillsForTool(selectedTool.id).length }}）</h3>

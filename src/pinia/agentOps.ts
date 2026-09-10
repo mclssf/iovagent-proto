@@ -1,6 +1,20 @@
 import { defineStore } from 'pinia';
 import { readonly, ref } from 'vue';
 import type { DeepReadonly } from 'vue';
+import { analyzeAgentConflicts } from '@/views/AgentOps/agentConflicts';
+import type { AgentConflictReport } from '@/views/AgentOps/agentConflicts';
+
+export interface AgentConfig {
+  name: string;
+  systemPrompt: string;
+  skillIds: string[];
+  toolIds: string[];
+}
+export interface ManagedAgent extends AgentConfig {
+  id: string;
+  updatedAt: string;
+  updatedBy: string;
+}
 
 export type SkillCategory = '在途专家' | '经营分析参谋' | '运营助手' | '运力与货源';
 export type SkillVisibility = '全部企业' | '指定企业';
@@ -218,6 +232,56 @@ export const useAgentOpsStore = defineStore('agentOps', () => {
   // Engineering-owned definitions are read-only; loading preferences are separate.
   const tools = readonly(ref(createTools()));
   const globalToolIds = ref<string[]>([]);
+  const agents = ref<ManagedAgent[]>([
+    {
+      id: 'transit-agent', name: '在途监控 Agent',
+      systemPrompt: '你是负责物流在途监控的 Agent。\n识别用户的车辆定位、轨迹核验和在途风险意图，选择对应 Skill 完成任务。\n风险结论必须包含运单、证据时间与处置建议；信息不足时先询问。',
+      skillIds: ['route-risk-expert', 'vehicle-location-query', 'vehicle-trace-query'],
+      toolIds: ['vehicle-mcp', 'risk-evaluate'], updatedAt: '2026-09-10 09:00', updatedBy: '系统管理员',
+    },
+    {
+      id: 'operations-agent', name: '运营助手 Agent',
+      systemPrompt: '你是物流运营助手。\n使用物流表格 Skill 整理台账、异常清单和对账数据，使用短信通知 Skill 生成通知任务。\n涉及发送操作时先确认接收人和内容。时间处理可直接使用时间标准化工具。',
+      skillIds: ['operations-logistics-sheet', 'operations-sms-notification'],
+      toolIds: ['datetime-format'], updatedAt: '2026-09-10 09:00', updatedBy: '系统管理员',
+    },
+    {
+      id: 'capacity-agent', name: '运力调度 Agent',
+      systemPrompt: '你是物流运力调度 Agent。\n按用户意图选择找运力、报价查询或私有运力池 Skill。\n先确认起讫地、车型和装货时间，再给出候选运力与报价依据。私有运力数据遵循企业可见范围。',
+      skillIds: ['capacity-find-carrier', 'capacity-quote-query', 'capacity-private-fleet'],
+      toolIds: [], updatedAt: '2026-09-10 09:00', updatedBy: '系统管理员',
+    },
+  ]);
+  const agentReports = ref<Record<string, AgentConflictReport>>({});
+
+  function saveAgent(config: AgentConfig, agentId?: string) {
+    const name = config.name.trim();
+    if (!name || !config.systemPrompt.trim()) throw new Error('请填写 Agent 名称和 System Prompt。');
+    if (name.length > 60) throw new Error('Agent 名称不能超过 60 个字符。');
+    if (agents.value.some((agent) => agent.id !== agentId && agent.name === name)) throw new Error('Agent 名称已存在，请使用其他名称。');
+    if (agentId && !agents.value.some((agent) => agent.id === agentId)) throw new Error('Agent 已不存在，请刷新列表。');
+    const record: ManagedAgent = {
+      id: agentId ?? `agent-${crypto.randomUUID()}`,
+      name, systemPrompt: config.systemPrompt.trim(),
+      skillIds: [...new Set(config.skillIds)], toolIds: [...new Set(config.toolIds)],
+      updatedAt: new Date().toLocaleString('zh-CN', { hour12: false }), updatedBy: '当前运营用户',
+    };
+    const index = agents.value.findIndex((agent) => agent.id === record.id);
+    if (index < 0) agents.value.unshift(record);
+    else agents.value[index] = record;
+    return record;
+  }
+  function deleteAgent(id: string) {
+    agents.value = agents.value.filter((agent) => agent.id !== id);
+    delete agentReports.value[id];
+  }
+  function detectAgentConflicts(id: string) {
+    const agent = agents.value.find((item) => item.id === id);
+    if (!agent) throw new Error('Agent 已不存在。');
+    const report = analyzeAgentConflicts(agent, { skills: skills.value, tools: tools.value, globalToolIds: globalToolIds.value });
+    agentReports.value[id] = report;
+    return report;
+  }
 
   function skillsForTool(toolId: string) {
     return skills.value.filter((skill) => skill.privateToolIds.includes(toolId));
@@ -233,5 +297,5 @@ export const useAgentOpsStore = defineStore('agentOps', () => {
       ? [...new Set([...globalToolIds.value, toolId])]
       : globalToolIds.value.filter((id) => id !== toolId);
   }
-  return { skills, tools, globalToolIds, skillsForTool, getToolLoading, setToolGlobalLoading };
+  return { skills, tools, globalToolIds, agents, agentReports, saveAgent, deleteAgent, detectAgentConflicts, skillsForTool, getToolLoading, setToolGlobalLoading };
 });
