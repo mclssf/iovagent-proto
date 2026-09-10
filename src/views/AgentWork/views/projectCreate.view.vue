@@ -40,7 +40,7 @@ const maxProjectNameLength = 20;
 const defaultLogisticsSkillIds = ['route-risk-expert', 'gps-trace-expert', 'parking-event-expert'];
 const projectName = ref('');
 const activeTab = ref<SkillTab>('all');
-const selectedDataSkillId = ref('');
+const selectedDataSkillIds = ref<string[]>([]);
 const selectedLogisticsSkillIds = ref<string[]>([...defaultLogisticsSkillIds]);
 const selectedOperationsSkillIds = ref<string[]>([]);
 const selectedCapacitySkillIds = ref<string[]>([]);
@@ -118,6 +118,22 @@ const skills: ProjectSkill[] = [
     description: '连接业务系统，自动同步运单、车辆、司机与在途状态。',
     usage: '需登录',
     icon: strokeIconPaths.zap,
+  },
+  {
+    id: 'huadong-cargo-connector',
+    name: '华东货源对接员工',
+    type: 'data',
+    description: '抓取客户系统待外调货源并映射标准字段，持续监听修改、取消和派车状态。',
+    usage: '需登录',
+    icon: strokeIconPaths.packageSearch,
+  },
+  {
+    id: 'huadong-dispatch-writeback',
+    name: '华东派车回写员工',
+    type: 'data',
+    description: '将确认合作的司机、车辆和成交信息回写客户系统，完成指派并触发平台下架。',
+    usage: '需登录',
+    icon: strokeIconPaths.truck,
   },
   {
     id: 'route-risk-expert',
@@ -248,34 +264,34 @@ const skills: ProjectSkill[] = [
     icon: strokeIconPaths.bellRing,
   },
   {
-    id: 'capacity-find-carrier',
-    name: '找运力',
+    id: 'capacity-cargo-normalization',
+    name: '货源解析',
     type: 'capacity',
-    description: '将货源信息发布至运力生态，供司机或承运方接单。',
+    description: '解析 Excel 或连接器采集的货源并映射标准字段，缺失必填项时通过多轮对话补齐。',
+    usage: '免费',
+    icon: strokeIconPaths.fileSpreadsheet,
+  },
+  {
+    id: 'capacity-cargo-publish',
+    name: '货源发布',
+    type: 'capacity',
+    description: '将标准货源发布到大卡和已配置的满帮账号，并统一处理跨平台修改与下架。',
     usage: '免费',
     icon: strokeIconPaths.speaker,
   },
   {
-    id: 'capacity-quote-query',
-    name: '报价查询',
+    id: 'capacity-quote-collection',
+    name: '报价抢单',
     type: 'capacity',
-    description: '查询司机或承运方的抢单及报价信息。',
+    description: '采集大卡与满帮的司机抢单、报价和电话联系反馈，形成统一候选运力列表。',
     usage: '免费',
     icon: strokeIconPaths.receipt,
-  },
-  {
-    id: 'capacity-cargo-search',
-    name: '搜索货源',
-    type: 'capacity',
-    description: '搜索平台已发布的货源信息。',
-    usage: '免费',
-    icon: strokeIconPaths.packageSearch,
   },
   {
     id: 'capacity-private-fleet',
     name: '私有运力池',
     type: 'capacity',
-    description: '管理企业自有及长期合作的司机、车辆和承运商资源，支持定向询价与派单。',
+    description: '通过 Excel 维护企业熟车，叠加车辆位置、目的地预测和当前装卸状态，支持筛选与定向询价。',
     usage: '付费',
     icon: strokeIconPaths.usersRound,
   },
@@ -286,7 +302,7 @@ const filteredSkills = computed(() => (activeTab.value === 'all' ? skills : skil
 const selectedSkills = computed(() =>
   skills.filter(
     (skill) =>
-      skill.id === selectedDataSkillId.value ||
+      selectedDataSkillIds.value.includes(skill.id) ||
       selectedLogisticsSkillIds.value.includes(skill.id) ||
       selectedOperationsSkillIds.value.includes(skill.id) ||
       selectedCapacitySkillIds.value.includes(skill.id) ||
@@ -326,7 +342,7 @@ function initializeProjectForm() {
   }
   if (!project) {
     projectName.value = '';
-    selectedDataSkillId.value = '';
+    selectedDataSkillIds.value = [];
     selectedLogisticsSkillIds.value = [...defaultLogisticsSkillIds];
     selectedOperationsSkillIds.value = [];
     selectedCapacitySkillIds.value = [];
@@ -336,14 +352,14 @@ function initializeProjectForm() {
   }
 
   const projectSkillIds = getProjectSkillIds();
-  const dataSkill = skills.find((skill) => projectSkillIds.includes(skill.id) && skill.type === 'data');
+  const dataSkills = skills.filter((skill) => projectSkillIds.includes(skill.id) && skill.type === 'data');
   projectName.value = project.name;
-  selectedDataSkillId.value = dataSkill?.id ?? '';
+  selectedDataSkillIds.value = dataSkills.map((skill) => skill.id);
   selectedLogisticsSkillIds.value = projectSkillIds.filter((id) => skills.some((skill) => skill.id === id && skill.type === 'logistics'));
   selectedOperationsSkillIds.value = projectSkillIds.filter((id) => skills.some((skill) => skill.id === id && skill.type === 'operations'));
   selectedCapacitySkillIds.value = projectSkillIds.filter((id) => skills.some((skill) => skill.id === id && skill.type === 'capacity'));
   selectedAnalysisSkillIds.value = projectSkillIds.filter((id) => skills.some((skill) => skill.id === id && skill.type === 'analysis'));
-  authorizedSkillIds.value = dataSkill?.usage === '需登录' ? [dataSkill.id] : [];
+  authorizedSkillIds.value = dataSkills.filter((skill) => skill.usage === '需登录').map((skill) => skill.id);
 }
 
 function handleProjectNameInput(event: Event) {
@@ -354,7 +370,7 @@ function handleProjectNameInput(event: Event) {
 }
 
 function isSkillSelected(skill: ProjectSkill) {
-  if (skill.type === 'data') return selectedDataSkillId.value === skill.id;
+  if (skill.type === 'data') return selectedDataSkillIds.value.includes(skill.id);
   if (skill.type === 'logistics') return selectedLogisticsSkillIds.value.includes(skill.id);
   if (skill.type === 'operations') return selectedOperationsSkillIds.value.includes(skill.id);
   if (skill.type === 'analysis') return selectedAnalysisSkillIds.value.includes(skill.id);
@@ -380,8 +396,8 @@ function skillAvatarClass(skill: ProjectSkill) {
 function toggleSkill(skill: ProjectSkill) {
   if (isSkillConnecting(skill)) return;
   if (skill.type === 'data') {
-    if (selectedDataSkillId.value === skill.id) {
-      selectedDataSkillId.value = '';
+    if (selectedDataSkillIds.value.includes(skill.id)) {
+      selectedDataSkillIds.value = selectedDataSkillIds.value.filter((id) => id !== skill.id);
       return;
     }
     if (skill.usage === '需登录' && !authorizedSkillIds.value.includes(skill.id)) {
@@ -392,7 +408,7 @@ function toggleSkill(skill: ProjectSkill) {
       loginForm.password = '';
       return;
     }
-    selectedDataSkillId.value = skill.id;
+    selectedDataSkillIds.value = [...selectedDataSkillIds.value, skill.id];
     return;
   }
 
@@ -483,7 +499,7 @@ function finishSkillLogin() {
   if (!pendingLoginSkill.value) return;
   const skillId = pendingLoginSkill.value.id;
   authorizedSkillIds.value = Array.from(new Set([...authorizedSkillIds.value, skillId]));
-  selectedDataSkillId.value = skillId;
+  selectedDataSkillIds.value = Array.from(new Set([...selectedDataSkillIds.value, skillId]));
   pendingLoginSkill.value = null;
   resetLoginAgentState();
   ElMessage.success('数据员工登录验证完成');
@@ -511,7 +527,7 @@ function startTmsInitialConnection() {
     [skillId]: formatExpectedConnectionTime(),
   };
   authorizedSkillIds.value = Array.from(new Set([...authorizedSkillIds.value, skillId]));
-  selectedDataSkillId.value = skillId;
+  selectedDataSkillIds.value = Array.from(new Set([...selectedDataSkillIds.value, skillId]));
   pendingLoginSkill.value = null;
   resetLoginAgentState();
   loginForm.systemAddress = '';

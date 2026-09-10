@@ -56,6 +56,21 @@ export function handleRouter(_routerList: any) {
             component: () => import('@/views/AgentWork/views/orderDetail.view.vue'),
           },
           {
+            path: 'cargo-sources',
+            name: 'agent-work-cargo-sources',
+            component: () => import('@/views/AgentWork/views/cargoList.view.vue'),
+          },
+          {
+            path: 'cargo-quotes',
+            name: 'agent-work-cargo-quotes',
+            component: () => import('@/views/AgentWork/views/cargoQuotes.view.vue'),
+          },
+          {
+            path: 'private-capacity',
+            name: 'agent-work-private-capacity',
+            component: () => import('@/views/AgentWork/views/privateCapacity.view.vue'),
+          },
+          {
             path: 'analytics',
             name: 'agent-work-analytics',
             component: () => import('@/views/AgentWork/views/analytics.view.vue'),

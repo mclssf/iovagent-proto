@@ -40,6 +40,35 @@ const projectNavs: { icon: string; id: PageId; label: string }[] = [
   { id: 'detail', label: '运单详情与地图', icon: strokeIconPaths.map },
 ];
 
+const capacityProjectNavs: Array<{ icon: string; id: PageId; label: string; skillIds: string[] }> = [
+  {
+    id: 'cargoSources',
+    label: '我发布的货源',
+    icon: strokeIconPaths.packageSearch,
+    skillIds: ['huadong-cargo-connector', 'capacity-cargo-normalization', 'capacity-cargo-publish'],
+  },
+  {
+    id: 'cargoQuotes',
+    label: '报价抢单',
+    icon: strokeIconPaths.receipt,
+    skillIds: ['capacity-quote-collection'],
+  },
+  {
+    id: 'privateCapacity',
+    label: '私有运力池',
+    icon: strokeIconPaths.usersRound,
+    skillIds: ['capacity-private-fleet'],
+  },
+];
+
+function projectNavsFor(project: Project) {
+  const enabledSkillIds = project.skillIds ?? [];
+  return [
+    ...projectNavs,
+    ...capacityProjectNavs.filter((item) => item.skillIds.some((skillId) => enabledSkillIds.includes(skillId))),
+  ];
+}
+
 function goNav(page: PageId) {
   if (page === 'projectCreate') {
     router.push({ name: agentWorkRouteName[page], query: { from: route.fullPath } });
@@ -260,7 +289,7 @@ function logout() {
 
             <div v-if="expandedProjectId === project.id" class="relative ml-3 mt-1 space-y-0.5 pl-3 before:absolute before:top-1 before:bottom-1 before:left-0 before:w-px before:bg-[#d9d9d4]">
               <button
-                v-for="item in projectNavs"
+                v-for="item in projectNavsFor(project)"
                 :key="item.id"
                 type="button"
                 class="flex h-8 w-full items-center gap-2 rounded-md px-2 text-xs transition"

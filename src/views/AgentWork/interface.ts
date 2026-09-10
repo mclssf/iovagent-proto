@@ -36,8 +36,134 @@ export interface TmsSyncCustomer {
   userPhone: string;
 }
 
-export type PageId = 'agent' | 'analytics' | 'detail' | 'downloads' | 'longTasks' | 'orders' | 'projectCreate' | 'projects' | 'risk';
+export type PageId =
+  | 'agent'
+  | 'analytics'
+  | 'cargoQuotes'
+  | 'cargoSources'
+  | 'detail'
+  | 'downloads'
+  | 'longTasks'
+  | 'orders'
+  | 'privateCapacity'
+  | 'projectCreate'
+  | 'projects'
+  | 'risk';
 export type Tone = 'blue' | 'gray' | 'green' | 'orange' | 'purple' | 'red';
+
+export type CargoSourceType = '客户系统' | 'Excel导入';
+export type CargoStatus = '待完善' | '待发布' | '发布中' | '同步异常' | '已下架' | '已派车';
+export type CargoPublishPlatform = '大卡' | '满帮';
+export type CargoPublishStatus = '未发布' | '发布中' | '已下架' | '发布失败';
+
+export interface CargoAddress {
+  city: string;
+  detail: string;
+  district: string;
+  latitude: number;
+  longitude: number;
+  province: string;
+  regionCode: string;
+}
+
+export interface CargoPrice {
+  chargeUnit: '趟' | '吨' | '方';
+  depositFen: number;
+  depositRefundable: boolean;
+  findMode: '电议' | '一口价' | '指定司机';
+  freightFen: number;
+  paymentType: '到付' | '回单付' | '现付';
+  showPrice: boolean;
+}
+
+export interface CargoPublication {
+  accountName?: string;
+  externalCargoId?: string;
+  lastError?: string;
+  platform: CargoPublishPlatform;
+  publishedAt?: string;
+  status: CargoPublishStatus;
+  updatedAt: string;
+}
+
+export interface StandardCargo {
+  cargoName: string;
+  contactCount: number;
+  createdAt: string;
+  dispatcherName: string;
+  dispatcherPhone: string;
+  externalCargoNo: string;
+  goodsType: string;
+  id: string;
+  loadAddresses: CargoAddress[];
+  loadTimeEnd: string;
+  loadTimeStart: string;
+  maxVolume?: number;
+  maxWeight?: number;
+  minVolume?: number;
+  minWeight?: number;
+  packageType: string;
+  platformPublications: CargoPublication[];
+  price: CargoPrice;
+  projectId: string;
+  quoteCount: number;
+  remark: string;
+  sourceSystem: string;
+  sourceType: CargoSourceType;
+  sourceUpdatedAt: string;
+  status: CargoStatus;
+  syncMessage: string;
+  syncStatus: '正常' | '待确认' | '异常';
+  tags: string[];
+  truckLengths: string[];
+  truckNumber: number;
+  truckTypes: string[];
+  unloadAddresses: CargoAddress[];
+  unloadTime?: string;
+  updatedAt: string;
+}
+
+export interface CargoQuote {
+  amountFen?: number;
+  cargoId: string;
+  comments: string[];
+  createdAt: string;
+  distanceKm: number;
+  driverId: string;
+  driverName: string;
+  driverPhone: string;
+  id: string;
+  location: string;
+  rating?: number;
+  recentOrderCount30: number;
+  sourcePlatform: CargoPublishPlatform;
+  status: '待处理' | '已联系' | '已合作' | '已忽略';
+  truckLength: string;
+  truckNo: string;
+  truckType: string;
+  type: '抢单' | '报价' | '电话联系';
+}
+
+export interface PrivateCapacity {
+  baseCity: string;
+  carrierName: string;
+  currentLocation: string;
+  destinationProbability?: number;
+  driverName: string;
+  driverPhone: string;
+  id: string;
+  loadState: '空载' | '满载' | '即将空载' | '即将满载' | '未知';
+  loadStateUpdatedAt: string;
+  positionTime: string;
+  predictedArrivalTime?: string;
+  predictedDestination?: string;
+  routes: string[];
+  source: 'Excel导入';
+  truckLength: string;
+  truckNo: string;
+  truckType: string;
+  updatedAt: string;
+}
 
 export interface Order {
   id: string;
