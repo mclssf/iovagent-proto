@@ -1,0 +1,390 @@
+[
+  {
+    "id": "datetime-format",
+    "name": "时间标准化",
+    "description": "将业务时间转换为统一格式，并处理时区。",
+    "inputs": [
+      {
+        "name": "value",
+        "type": "string",
+        "description": "待转换的时间文本。",
+        "required": true
+      },
+      {
+        "name": "timezone",
+        "type": "string",
+        "description": "时区；默认 Asia/Shanghai。",
+        "required": false
+      }
+    ],
+    "outputs": [
+      {
+        "name": "formatted",
+        "type": "string",
+        "description": "标准化的 ISO 8601 时间。",
+        "required": true
+      },
+      {
+        "name": "timestamp",
+        "type": "number",
+        "description": "Unix 时间戳，单位秒。",
+        "required": true
+      }
+    ],
+    "kind": "code",
+    "updatedAt": "2026-09-08 10:00",
+    "runtime": "Python 3",
+    "entrypoint": "tools/datetime_format.py:run"
+  },
+  {
+    "id": "risk-evaluate",
+    "name": "在途风险评估",
+    "description": "结合运单、实时定位和历史履约信息，输出风险等级与处置建议。",
+    "inputs": [
+      {
+        "name": "waybill",
+        "type": "object",
+        "description": "运单编号、线路、计划到达时间及承运商。",
+        "required": true
+      },
+      {
+        "name": "events",
+        "type": "array",
+        "description": "定位、停车与线路风险事件。",
+        "required": true
+      }
+    ],
+    "outputs": [
+      {
+        "name": "risk_level",
+        "type": "string",
+        "description": "风险等级：高、中、低。",
+        "required": true
+      },
+      {
+        "name": "evidence",
+        "type": "array",
+        "description": "风险证据明细。",
+        "required": true
+      },
+      {
+        "name": "suggestions",
+        "type": "array",
+        "description": "建议处置动作。",
+        "required": true
+      }
+    ],
+    "kind": "code",
+    "updatedAt": "2026-09-08 10:00",
+    "runtime": "Python 3",
+    "entrypoint": "tools/risk_evaluate.py:run"
+  },
+  {
+    "id": "trace-verify",
+    "name": "轨迹真实性核验",
+    "description": "核验轨迹断点、速度跳变与定位漂移。",
+    "inputs": [
+      {
+        "name": "vehicle_plate",
+        "type": "string",
+        "description": "查询车辆的车牌号。",
+        "required": true
+      },
+      {
+        "name": "points",
+        "type": "array",
+        "description": "含经纬度和时间的轨迹点。",
+        "required": true
+      }
+    ],
+    "outputs": [
+      {
+        "name": "valid",
+        "type": "boolean",
+        "description": "轨迹是否通过核验。",
+        "required": true
+      },
+      {
+        "name": "anomalies",
+        "type": "array",
+        "description": "异常点、原因及发生时间。",
+        "required": true
+      }
+    ],
+    "kind": "code",
+    "updatedAt": "2026-09-08 10:00",
+    "runtime": "Python 3",
+    "entrypoint": "tools/trace_verify.py:run"
+  },
+  {
+    "id": "parking-classify",
+    "name": "停车事件分类",
+    "description": "结合停靠位置、时长与运单节点，识别合理停车和高风险长停。",
+    "inputs": [
+      {
+        "name": "stops",
+        "type": "array",
+        "description": "停靠点、开始时间和停车时长。",
+        "required": true
+      },
+      {
+        "name": "waybill",
+        "type": "object",
+        "description": "装卸货位置与计划运输节点。",
+        "required": true
+      }
+    ],
+    "outputs": [
+      {
+        "name": "reasonable_stops",
+        "type": "array",
+        "description": "合理停车记录及依据。",
+        "required": true
+      },
+      {
+        "name": "risky_stops",
+        "type": "array",
+        "description": "高风险停车记录及建议。",
+        "required": true
+      }
+    ],
+    "kind": "code",
+    "updatedAt": "2026-09-08 10:00",
+    "runtime": "Python 3",
+    "entrypoint": "tools/parking_classify.py:run"
+  },
+  {
+    "id": "eta-predict",
+    "name": "到达时间预测",
+    "description": "根据剩余里程、路况与实时速度计算预计到达时间。",
+    "inputs": [
+      {
+        "name": "remaining_km",
+        "type": "number",
+        "description": "剩余运输里程，单位公里。",
+        "required": true
+      },
+      {
+        "name": "speed_kmh",
+        "type": "number",
+        "description": "有效平均速度，单位公里/小时。",
+        "required": true
+      },
+      {
+        "name": "plan_arrival",
+        "type": "string",
+        "description": "计划到达时间。",
+        "required": true
+      }
+    ],
+    "outputs": [
+      {
+        "name": "estimated_arrival",
+        "type": "string",
+        "description": "预计到达时间。",
+        "required": true
+      },
+      {
+        "name": "delay_minutes",
+        "type": "number",
+        "description": "预计晚点分钟数，未晚点时为 0。",
+        "required": true
+      }
+    ],
+    "kind": "code",
+    "updatedAt": "2026-09-08 10:00",
+    "runtime": "Python 3",
+    "entrypoint": "tools/eta_predict.py:run"
+  },
+  {
+    "id": "route-plan",
+    "name": "运输路线规划",
+    "description": "按装卸货地与车辆约束生成可行运输路线。",
+    "inputs": [
+      {
+        "name": "origin",
+        "type": "object",
+        "description": "起点地址及经纬度。",
+        "required": true
+      },
+      {
+        "name": "destination",
+        "type": "object",
+        "description": "终点地址及经纬度。",
+        "required": true
+      },
+      {
+        "name": "vehicle",
+        "type": "object",
+        "description": "车辆类型、载重和限高。",
+        "required": true
+      }
+    ],
+    "outputs": [
+      {
+        "name": "routes",
+        "type": "array",
+        "description": "推荐和备选路线，含里程、时效与通行约束。",
+        "required": true
+      }
+    ],
+    "kind": "code",
+    "updatedAt": "2026-09-08 10:00",
+    "runtime": "Python 3",
+    "entrypoint": "tools/route_plan.py:run"
+  },
+  {
+    "id": "waybill-complete",
+    "name": "运单字段补充",
+    "description": "根据已知运单信息补充缺失字段，保留字段来源。",
+    "inputs": [
+      {
+        "name": "waybill",
+        "type": "object",
+        "description": "待补充的运单。",
+        "required": true
+      },
+      {
+        "name": "context",
+        "type": "object",
+        "description": "授权的车辆、司机和线路资料。",
+        "required": true
+      }
+    ],
+    "outputs": [
+      {
+        "name": "waybill",
+        "type": "object",
+        "description": "补充后的运单。",
+        "required": true
+      },
+      {
+        "name": "sources",
+        "type": "array",
+        "description": "补充字段及数据来源。",
+        "required": true
+      }
+    ],
+    "kind": "code",
+    "updatedAt": "2026-09-08 10:00",
+    "runtime": "Python 3",
+    "entrypoint": "tools/waybill_complete.py:run"
+  },
+  {
+    "id": "waybill-validate",
+    "name": "运单规则校验",
+    "description": "检查运单地址、车辆、时间和状态的一致性，返回字段纠错建议。",
+    "inputs": [
+      {
+        "name": "waybill",
+        "type": "object",
+        "description": "待校验的运单。",
+        "required": true
+      }
+    ],
+    "outputs": [
+      {
+        "name": "valid",
+        "type": "boolean",
+        "description": "是否通过校验。",
+        "required": true
+      },
+      {
+        "name": "corrections",
+        "type": "array",
+        "description": "问题字段、原值和建议修正值。",
+        "required": true
+      }
+    ],
+    "kind": "code",
+    "updatedAt": "2026-09-08 10:00",
+    "runtime": "Python 3",
+    "entrypoint": "tools/waybill_validate.py:run"
+  },
+  {
+    "id": "spreadsheet-export",
+    "name": "运营表格生成",
+    "description": "将结构化业务数据生成台账、异常清单或对账表。",
+    "inputs": [
+      {
+        "name": "rows",
+        "type": "array",
+        "description": "逐行数据。",
+        "required": true
+      },
+      {
+        "name": "columns",
+        "type": "array",
+        "description": "列名、字段键与格式。",
+        "required": true
+      },
+      {
+        "name": "filename",
+        "type": "string",
+        "description": "输出文件名称。",
+        "required": true
+      }
+    ],
+    "outputs": [
+      {
+        "name": "file_url",
+        "type": "string",
+        "description": "生成文件的下载地址。",
+        "required": true
+      },
+      {
+        "name": "row_count",
+        "type": "number",
+        "description": "导出的数据行数。",
+        "required": true
+      }
+    ],
+    "kind": "code",
+    "updatedAt": "2026-09-08 10:00",
+    "runtime": "Python 3",
+    "entrypoint": "tools/spreadsheet_export.py:run"
+  },
+  {
+    "id": "license-recognize",
+    "name": "证照字段识别",
+    "description": "识别驾驶证、行驶证和运输证中的关键字段。",
+    "inputs": [
+      {
+        "name": "file_url",
+        "type": "string",
+        "description": "已授权访问的证照文件地址。",
+        "required": true
+      },
+      {
+        "name": "document_type",
+        "type": "string",
+        "description": "证照类型。",
+        "required": true
+      }
+    ],
+    "outputs": [
+      {
+        "name": "fields",
+        "type": "object",
+        "description": "识别出的证照字段。",
+        "required": true
+      },
+      {
+        "name": "expires_at",
+        "type": "string",
+        "description": "证照有效期。",
+        "required": true
+      },
+      {
+        "name": "needs_review",
+        "type": "boolean",
+        "description": "是否需要人工复核。",
+        "required": true
+      }
+    ],
+    "kind": "code",
+    "updatedAt": "2026-09-08 10:00",
+    "runtime": "Python 3",
+    "entrypoint": "tools/license_recognize.py:run"
+  }
+]

@@ -1,11 +1,10 @@
-import type { AgentConfig, ManagedSkill, ManagedTool, ToolParameter } from '@/pinia/agentOps';
+import type { AgentConfig, AgentCallableSkill, ManagedTool, ToolParameter } from '@/pinia/agentOps';
 
 export interface AgentCatalog {
-  skills: readonly ManagedSkill[];
+  skills: readonly AgentCallableSkill[];
   tools: readonly ManagedTool[];
-  globalToolIds: readonly string[];
 }
-export interface ToolLoadPath { kind: 'direct' | 'global' | 'private'; label: string; skillId?: string; }
+export interface ToolLoadPath { kind: 'direct' | 'private'; label: string; skillId?: string; }
 export interface AgentToolUsage { id: string; tool?: ManagedTool; paths: ToolLoadPath[]; }
 export interface AgentFinding {
   id: string;
@@ -35,7 +34,6 @@ export function resolveAgentTools(agent: AgentConfig, catalog: AgentCatalog): Ag
     if (!usage.paths.some((item) => item.kind === path.kind && item.skillId === path.skillId)) usage.paths.push(path);
   };
   agent.toolIds.forEach((id) => add(id, { kind: 'direct', label: 'Agent 直接加载' }));
-  catalog.globalToolIds.forEach((id) => add(id, { kind: 'global', label: '全局加载' }));
   catalog.skills.filter((skill) => agent.skillIds.includes(skill.id) && skill.enabled).forEach((skill) => {
     skill.privateToolIds.forEach((id) => add(id, { kind: 'private', skillId: skill.id, label: `Skill「${skill.name}」私有加载` }));
   });
@@ -47,10 +45,10 @@ export function agentConfigurationFingerprint(agent: AgentConfig, catalog: Agent
   const usages = resolveAgentTools(agent, catalog);
   return JSON.stringify({
     name: agent.name, systemPrompt: agent.systemPrompt, skillIds: sortIds(agent.skillIds), toolIds: sortIds(agent.toolIds),
-    globalToolIds: sortIds(catalog.globalToolIds),
     skills: catalog.skills.filter((skill) => agent.skillIds.includes(skill.id)).map((skill) => ({
       id: skill.id, name: skill.name, description: skill.description, content: skill.content, enabled: skill.enabled,
       privateToolIds: sortIds(skill.privateToolIds), visibility: skill.visibility, enterpriseIds: sortIds(skill.enterpriseIds),
+      source: skill.source, sourceConfig: skill.sourceConfig, fileName: skill.fileName,
     })).sort((a, b) => a.id.localeCompare(b.id)),
     tools: usages.map((usage) => ({ id: usage.id, tool: usage.tool })).sort((a, b) => a.id.localeCompare(b.id)),
   });
@@ -121,6 +119,7 @@ export function analyzeAgentConflicts(agent: AgentConfig, catalog: AgentCatalog)
   for (const skill of activeSkills) {
     candidates.push({ id: `skill:${skill.id}`, ownerId: skill.id, skillId: skill.id, label: `Skill「${skill.name}」`, description: `${skill.name} ${skill.description}`, paths: [`Agent → Skill「${skill.name}」`] });
     coverage.push(`Skill「${skill.name}」未声明输入、输出 Schema，已检查名称、功能描述与私有工具路径。`);
+    if (skill.source === 'data-employee') coverage.push(`Skill「${skill.name}」来自数据员工配置，按目标系统和登录方式选择；本次检测不执行真实登录或数据采集。`);
     if (skill.visibility === '指定企业') coverage.push(`Skill「${skill.name}」仅对指定企业可见；本次按配置范围检测，实际可用范围仍遵循企业权限。`);
   }
   for (const usage of usages) {
@@ -130,18 +129,24 @@ export function analyzeAgentConflicts(agent: AgentConfig, catalog: AgentCatalog)
       continue;
     }
     const privatePaths = usage.paths.filter((path) => path.kind === 'private');
-    const exposedPaths = usage.paths.filter((path) => path.kind !== 'private');
-    if ((privatePaths.length && exposedPaths.length) || exposedPaths.length > 1) {
+    const exposedPaths = usage.paths.filter((path) => path.kind === 'direct');
+    if (privatePaths.length && exposedPaths.length) {
       findings.push({
-        id: `duplicate-${tool.id}`, kind: 'duplicate', severity: privatePaths.length ? 'high' : 'review',
+        id: `duplicate-${tool.id}`, kind: 'duplicate', severity: 'high',
         title: `${tool.name}存在多条加载路径`,
         paths: usage.paths.map((path) => `Agent → ${path.label} → ${tool.name}`),
-        evidence: [`同一 Tool（${tool.id}）同时通过${usage.paths.map((path) => path.label).join('、')}可达。`, privatePaths.length ? 'Agent 可绕过 Skill 直接选择该工具，可能跳过 Skill 的执行指引。' : 'Agent 直接加载与全局加载重复；两项配置仍各自独立。'],
-        suggestion: privatePaths.length ? '优先保留 Skill 的私有调用路径，按需取消 Agent 直接加载或全局加载；如需保留，在 System Prompt 中说明调用边界与优先级。' : '可移除 Agent 的重复直接加载配置；如需保留，请明确其用途。',
+        evidence: [`同一 Tool（${tool.id}）同时通过${usage.paths.map((path) => path.label).join('、')}可达。`, 'Agent 可绕过 Skill 直接选择该工具，可能跳过 Skill 的执行指引。'],
+        suggestion: '优先保留 Skill 的私有调用路径，按需取消此 Agent 的直接加载；如需保留，在 System Prompt 中说明调用边界与优先级。',
       });
     }
-    if (tool.kind === 'mcp') coverage.push(`MCP「${tool.name}」的 ${tool.methods.length} 个方法未声明输入、输出 Schema，已检查方法名称、描述与加载路径。`);
     const paths = usage.paths.map((path) => `Agent → ${path.label} → ${tool.name}`);
+    if (tool.kind === 'mcp') {
+      if (!tool.methods.length) {
+        coverage.push(`MCP「${tool.name}」尚未发现可调用方法，无法检查服务方法的意图与 Schema。`);
+        findings.push({ id: `undiscovered-mcp-${tool.id}`, kind: 'configuration', severity: 'review', title: `MCP「${tool.name}」尚未发现方法`, paths,
+          evidence: ['已配置加载此服务，但当前没有可供检查的方法定义。'], suggestion: '连接服务并读取方法与 Schema 后重新检测；当前演示未接入真实服务。' });
+      } else coverage.push(`MCP「${tool.name}」的 ${tool.methods.length} 个方法未声明输入、输出 Schema，已检查方法名称、描述与加载路径。`);
+    }
     if (tool.kind === 'code') {
       candidates.push({ id: `tool:${tool.id}`, ownerId: tool.id, label: `Tool「${tool.name}」`, description: `${tool.name} ${tool.description}`, inputs: tool.inputs, outputs: tool.outputs, paths });
     } else {

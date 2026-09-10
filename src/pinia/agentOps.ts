@@ -1,8 +1,23 @@
 import { defineStore } from 'pinia';
-import { readonly, ref } from 'vue';
+import { computed, readonly, ref } from 'vue';
 import type { DeepReadonly } from 'vue';
 import { analyzeAgentConflicts } from '@/views/AgentOps/agentConflicts';
 import type { AgentConflictReport } from '@/views/AgentOps/agentConflicts';
+import { createDataEmployeeSkills } from './dataEmployeeSkills';
+import type { DataEmployeeSkill } from './dataEmployeeSkills';
+import agentRegistry from '@/data/agentOpsAgents.json';
+import codeRegistry from '@/data/agentOpsCodeTools.json';
+import { loadAgentRegistry, loadCodeToolRegistry, parseAgentRegistry, parseCodeToolRegistry } from '@/views/AgentOps/registry';
+import { normalizeMcpConfig } from '@/views/AgentOps/mcpConfig';
+import type { McpConfig, McpKeyValue } from '@/views/AgentOps/mcpConfig';
+
+export type AgentRole = 'data-employee' | 'general-chat' | 'project-chat' | 'custom';
+export const agentRoleDescriptions: Record<AgentRole, string> = {
+  'data-employee': '按数据来源选择 Skill，完成系统登录、数据采集与标准字段映射。',
+  'general-chat': '负责未绑定项目的通用对话，按用户提供的信息选择能力。',
+  'project-chat': '负责当前项目内的对话，结合项目数据与企业权限调用能力。',
+  custom: '按独立的 System Prompt 和能力配置处理任务。',
+};
 
 export interface AgentConfig {
   name: string;
@@ -12,6 +27,7 @@ export interface AgentConfig {
 }
 export interface ManagedAgent extends AgentConfig {
   id: string;
+  role: AgentRole;
   updatedAt: string;
   updatedBy: string;
 }
@@ -33,6 +49,11 @@ export interface ManagedSkill {
   visibility: SkillVisibility;
   updatedAt: string;
   updatedBy: string;
+}
+export interface AgentCallableSkill extends Omit<ManagedSkill, 'category'> {
+  category: SkillCategory | '数据员工';
+  source?: 'data-employee' | 'common';
+  sourceConfig?: { loginUrl: string; loginType: string; version: string };
 }
 export interface ToolParameter {
   name: string;
@@ -59,8 +80,14 @@ export interface McpTool extends ToolBase {
   endpoint: string;
   version: string;
   provider: string;
-  auth: '无需认证' | 'Bearer Token' | 'OAuth 2.0';
+  auth: '无需认证' | 'Bearer Token' | 'OAuth 2.0' | '自定义请求头';
   timeout: number;
+  args: string[];
+  bearerTokenEnvVar: string;
+  headers: McpKeyValue[];
+  envHeaders: McpKeyValue[];
+  envVars: McpKeyValue[];
+  discovery: 'demo' | 'pending';
   methods: { name: string; description: string }[];
 }
 export type ManagedTool = DeepReadonly<CodeTool | McpTool>;
@@ -166,17 +193,13 @@ function createSkills(): ManagedSkill[] {
   }));
 }
 
-const parameter = (name: string, type: ToolParameter['type'], description: string, required = true): ToolParameter => ({ name, type, description, required });
 const updatedAt = '2026-09-08 10:00';
-function createTools(): ManagedTool[] {
+function createMcpTools(): McpTool[] {
   const mcp = (id: string, name: string, description: string, methods: McpTool['methods']): McpTool => ({
     id, name, description, methods, kind: 'mcp', updatedAt,
     transport: 'Streamable HTTP', endpoint: `https://${id}.example.com/mcp`,
     version: '1.0.0', provider: '大卡物流平台', auth: 'Bearer Token', timeout: 30,
-  });
-  const code = (id: string, name: string, description: string, inputs: ToolParameter[], outputs: ToolParameter[]): CodeTool => ({
-    id, name, description, inputs, outputs, kind: 'code', updatedAt,
-    runtime: 'Python 3', entrypoint: `tools/${id.replace(/-/g, '_')}.py:run`,
+    args: [], bearerTokenEnvVar: 'MCP_BEARER_TOKEN', headers: [], envHeaders: [], envVars: [], discovery: 'demo',
   });
   return [
     mcp('vehicle-mcp', '车辆与轨迹服务', '提供车辆最新定位、历史轨迹、停靠事件与线路查询能力。', [
@@ -202,83 +225,150 @@ function createTools(): ManagedTool[] {
       { name: 'search_cargo', description: '检索已发布货源。' },
       { name: 'query_private_fleet', description: '查询当前企业自有及合作运力。' },
     ]),
-    code('datetime-format', '时间标准化', '将业务时间转换为统一格式，并处理时区。', [
-      parameter('value', 'string', '待转换的时间文本。'), parameter('timezone', 'string', '时区；默认 Asia/Shanghai。', false),
-    ], [parameter('formatted', 'string', '标准化的 ISO 8601 时间。'), parameter('timestamp', 'number', 'Unix 时间戳，单位秒。')]),
-    code('risk-evaluate', '在途风险评估', '结合运单、实时定位和历史履约信息，输出风险等级与处置建议。', [
-      parameter('waybill', 'object', '运单编号、线路、计划到达时间及承运商。'), parameter('events', 'array', '定位、停车与线路风险事件。'),
-    ], [parameter('risk_level', 'string', '风险等级：高、中、低。'), parameter('evidence', 'array', '风险证据明细。'), parameter('suggestions', 'array', '建议处置动作。')]),
-    code('trace-verify', '轨迹真实性核验', '核验轨迹断点、速度跳变与定位漂移。', [
-      parameter('vehicle_plate', 'string', '查询车辆的车牌号。'), parameter('points', 'array', '含经纬度和时间的轨迹点。'),
-    ], [parameter('valid', 'boolean', '轨迹是否通过核验。'), parameter('anomalies', 'array', '异常点、原因及发生时间。')]),
-    code('parking-classify', '停车事件分类', '结合停靠位置、时长与运单节点，识别合理停车和高风险长停。', [
-      parameter('stops', 'array', '停靠点、开始时间和停车时长。'), parameter('waybill', 'object', '装卸货位置与计划运输节点。'),
-    ], [parameter('reasonable_stops', 'array', '合理停车记录及依据。'), parameter('risky_stops', 'array', '高风险停车记录及建议。')]),
-    code('eta-predict', '到达时间预测', '根据剩余里程、路况与实时速度计算预计到达时间。', [
-      parameter('remaining_km', 'number', '剩余运输里程，单位公里。'), parameter('speed_kmh', 'number', '有效平均速度，单位公里/小时。'), parameter('plan_arrival', 'string', '计划到达时间。'),
-    ], [parameter('estimated_arrival', 'string', '预计到达时间。'), parameter('delay_minutes', 'number', '预计晚点分钟数，未晚点时为 0。')]),
-    code('route-plan', '运输路线规划', '按装卸货地与车辆约束生成可行运输路线。', [
-      parameter('origin', 'object', '起点地址及经纬度。'), parameter('destination', 'object', '终点地址及经纬度。'), parameter('vehicle', 'object', '车辆类型、载重和限高。'),
-    ], [parameter('routes', 'array', '推荐和备选路线，含里程、时效与通行约束。')]),
-    code('waybill-complete', '运单字段补充', '根据已知运单信息补充缺失字段，保留字段来源。', [parameter('waybill', 'object', '待补充的运单。'), parameter('context', 'object', '授权的车辆、司机和线路资料。')], [parameter('waybill', 'object', '补充后的运单。'), parameter('sources', 'array', '补充字段及数据来源。')]),
-    code('waybill-validate', '运单规则校验', '检查运单地址、车辆、时间和状态的一致性，返回字段纠错建议。', [parameter('waybill', 'object', '待校验的运单。')], [parameter('valid', 'boolean', '是否通过校验。'), parameter('corrections', 'array', '问题字段、原值和建议修正值。')]),
-    code('spreadsheet-export', '运营表格生成', '将结构化业务数据生成台账、异常清单或对账表。', [parameter('rows', 'array', '逐行数据。'), parameter('columns', 'array', '列名、字段键与格式。'), parameter('filename', 'string', '输出文件名称。')], [parameter('file_url', 'string', '生成文件的下载地址。'), parameter('row_count', 'number', '导出的数据行数。')]),
-    code('license-recognize', '证照字段识别', '识别驾驶证、行驶证和运输证中的关键字段。', [parameter('file_url', 'string', '已授权访问的证照文件地址。'), parameter('document_type', 'string', '证照类型。')], [parameter('fields', 'object', '识别出的证照字段。'), parameter('expires_at', 'string', '证照有效期。'), parameter('needs_review', 'boolean', '是否需要人工复核。')]),
+
   ];
 }
 
 export const useAgentOpsStore = defineStore('agentOps', () => {
   const skills = ref(createSkills());
-  // Engineering-owned definitions are read-only; loading preferences are separate.
-  const tools = readonly(ref(createTools()));
-  const globalToolIds = ref<string[]>([]);
-  const agents = ref<ManagedAgent[]>([
-    {
-      id: 'transit-agent', name: '在途监控 Agent',
-      systemPrompt: '你是负责物流在途监控的 Agent。\n识别用户的车辆定位、轨迹核验和在途风险意图，选择对应 Skill 完成任务。\n风险结论必须包含运单、证据时间与处置建议；信息不足时先询问。',
-      skillIds: ['route-risk-expert', 'vehicle-location-query', 'vehicle-trace-query'],
-      toolIds: ['vehicle-mcp', 'risk-evaluate'], updatedAt: '2026-09-10 09:00', updatedBy: '系统管理员',
-    },
-    {
-      id: 'operations-agent', name: '运营助手 Agent',
-      systemPrompt: '你是物流运营助手。\n使用物流表格 Skill 整理台账、异常清单和对账数据，使用短信通知 Skill 生成通知任务。\n涉及发送操作时先确认接收人和内容。时间处理可直接使用时间标准化工具。',
-      skillIds: ['operations-logistics-sheet', 'operations-sms-notification'],
-      toolIds: ['datetime-format'], updatedAt: '2026-09-10 09:00', updatedBy: '系统管理员',
-    },
-    {
-      id: 'capacity-agent', name: '运力调度 Agent',
-      systemPrompt: '你是物流运力调度 Agent。\n按用户意图选择找运力、报价查询或私有运力池 Skill。\n先确认起讫地、车型和装货时间，再给出候选运力与报价依据。私有运力数据遵循企业可见范围。',
-      skillIds: ['capacity-find-carrier', 'capacity-quote-query', 'capacity-private-fleet'],
-      toolIds: [], updatedAt: '2026-09-10 09:00', updatedBy: '系统管理员',
-    },
+  const dataEmployeeSkills = ref(createDataEmployeeSkills());
+  // Data acquisition definitions have one source, shared by both configuration views.
+  const agentCallableSkills = computed<AgentCallableSkill[]>(() => [
+    ...skills.value.map((skill) => ({ ...skill, source: 'common' as const })),
+    ...dataEmployeeSkills.value.map((skill) => ({
+      id: skill.id, name: skill.name, category: '数据员工' as const, source: 'data-employee' as const,
+      description: skill.description, content: skill.skillContent, fileName: skill.skillFileName,
+      enabled: true, privateToolIds: [], visibility: skill.visibility, enterpriseIds: skill.enterpriseIds,
+      updatedAt: skill.skillUpdated, updatedBy: '数据员工配置',
+      sourceConfig: { loginUrl: skill.loginUrl, loginType: skill.loginType, version: skill.skillVersion },
+    })),
   ]);
+  const codeTools = ref(parseCodeToolRegistry(codeRegistry));
+  const mcpServices = ref(createMcpTools());
+  const tools = readonly(computed<ManagedTool[]>(() => [...mcpServices.value, ...codeTools.value]));
+  const agents = ref<ManagedAgent[]>(parseAgentRegistry(agentRegistry));
+  const configuredAgentIds = ref<string[]>([]);
   const agentReports = ref<Record<string, AgentConflictReport>>({});
+  const agentSync = ref({ busy: false, lastSyncedAt: '', error: '', summary: '' });
+  const codeToolSync = ref({ busy: false, lastSyncedAt: '', error: '', summary: '' });
 
-  function saveAgent(config: AgentConfig, agentId?: string) {
+  async function syncAgents(loader: () => Promise<unknown> = loadAgentRegistry) {
+    if (agentSync.value.busy) return;
+    agentSync.value.busy = true;
+    agentSync.value.error = '';
+    try {
+      const incoming = parseAgentRegistry(await loader());
+      const current = new Map(agents.value.map((agent) => [agent.id, agent]));
+      const next = incoming.map((definition) => {
+        const configured = current.get(definition.id);
+        if (configured && configuredAgentIds.value.includes(definition.id)) return { ...configured, role: definition.role };
+        return { ...definition, skillIds: definition.role === 'data-employee' ? dataEmployeeSkills.value.map((skill) => skill.id) : definition.skillIds };
+      });
+      const added = incoming.filter((agent) => !current.has(agent.id)).length;
+      const removed = agents.value.filter((agent) => !incoming.some((item) => item.id === agent.id)).length;
+      agents.value = next;
+      configuredAgentIds.value = configuredAgentIds.value.filter((id) => incoming.some((agent) => agent.id === id));
+      Object.keys(agentReports.value).filter((id) => !incoming.some((agent) => agent.id === id)).forEach((id) => delete agentReports.value[id]);
+      agentSync.value.lastSyncedAt = new Date().toLocaleString('zh-CN', { hour12: false });
+      agentSync.value.summary = `已读取 ${incoming.length} 个 Agent，新增 ${added} 个、移除 ${removed} 个；已保存的配置保留。`;
+      return incoming.length;
+    } catch (error) {
+      agentSync.value.error = error instanceof Error ? error.message : '同步失败，请重试。';
+      throw error;
+    } finally { agentSync.value.busy = false; }
+  }
+  async function syncCodeTools(loader: () => Promise<unknown> = loadCodeToolRegistry) {
+    if (codeToolSync.value.busy) return;
+    codeToolSync.value.busy = true;
+    codeToolSync.value.error = '';
+    try {
+      const incoming = parseCodeToolRegistry(await loader());
+      if (incoming.some((tool) => mcpServices.value.some((mcp) => mcp.id === tool.id))) throw new Error('工具标识与 MCP 服务冲突，本次同步未应用。');
+      const added = incoming.filter((tool) => !codeTools.value.some((item) => item.id === tool.id)).length;
+      const removed = codeTools.value.filter((tool) => !incoming.some((item) => item.id === tool.id)).length;
+      codeTools.value = incoming;
+      codeToolSync.value.lastSyncedAt = new Date().toLocaleString('zh-CN', { hour12: false });
+      codeToolSync.value.summary = `已读取 ${incoming.length} 个代码工具，新增 ${added} 个、移除 ${removed} 个。加载配置保留${removed ? '；失效引用可在 Agent 冲突检测中查看' : ''}。`;
+      return incoming.length;
+    } catch (error) {
+      codeToolSync.value.error = error instanceof Error ? error.message : '同步失败，请重试。';
+      throw error;
+    } finally { codeToolSync.value.busy = false; }
+  }
+
+  function saveMcp(config: McpConfig, id?: string) {
+    const value = normalizeMcpConfig(config);
+    const current = mcpServices.value.find((tool) => tool.id === id);
+    if (id && !current) throw new Error('MCP 服务不存在，代码工具不能在页面中编辑。');
+    if (current && current.transport !== value.transport) throw new Error('编辑时不能切换连接类型，请删除后重新添加。');
+    if (mcpServices.value.some((tool) => tool.id !== id && tool.name === value.name)) throw new Error('MCP 名称已存在，请使用其他名称。');
+    const connection = (tool: McpConfig) => JSON.stringify([tool.transport, tool.endpoint, tool.args, tool.bearerTokenEnvVar, tool.headers, tool.envHeaders, tool.envVars]);
+    const connectionChanged = !current || connection(current) !== connection(value);
+    const record: McpTool = {
+      ...value, id: current?.id ?? `mcp-${crypto.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(16).slice(2)}`}`, kind: 'mcp',
+      provider: current?.provider ?? '运营配置', version: connectionChanged ? '' : current.version,
+      auth: value.bearerTokenEnvVar ? 'Bearer Token' : value.headers.length || value.envHeaders.length ? '自定义请求头' : '无需认证',
+      methods: connectionChanged ? [] : current.methods, discovery: connectionChanged ? 'pending' : current.discovery,
+      updatedAt: new Date().toLocaleString('zh-CN', { hour12: false }),
+    };
+    const index = mcpServices.value.findIndex((tool) => tool.id === record.id);
+    if (index < 0) mcpServices.value.unshift(record);
+    else mcpServices.value[index] = record;
+    return record;
+  }
+  function mcpUsage(id: string) {
+    return { skills: skillsForTool(id), agents: agentsForTool(id) };
+  }
+  function deleteMcp(id: string) {
+    if (!mcpServices.value.some((tool) => tool.id === id)) throw new Error('MCP 服务不存在，代码工具不能在页面中删除。');
+    mcpServices.value = mcpServices.value.filter((tool) => tool.id !== id);
+    skills.value.forEach((skill) => { skill.privateToolIds = skill.privateToolIds.filter((toolId) => toolId !== id); });
+    agents.value.forEach((agent) => {
+      if (agent.toolIds.includes(id)) {
+        agent.toolIds = agent.toolIds.filter((toolId) => toolId !== id);
+        configuredAgentIds.value = [...new Set([...configuredAgentIds.value, agent.id])];
+      }
+    });
+  }
+
+  function availableSkillsForAgent(agentId?: string) {
+    const agent = agents.value.find((item) => item.id === agentId);
+    return agentCallableSkills.value.filter((skill) => agent?.role === 'data-employee' ? skill.source === 'data-employee' : skill.source === 'common');
+  }
+  function saveDataEmployeeSkill(skill: DataEmployeeSkill) {
+    const index = dataEmployeeSkills.value.findIndex((item) => item.id === skill.id);
+    const record = { ...skill, enterpriseIds: [...skill.enterpriseIds] };
+    if (index >= 0) dataEmployeeSkills.value[index] = record;
+    else {
+      dataEmployeeSkills.value.unshift(record);
+      agents.value.filter((agent) => agent.role === 'data-employee').forEach((agent) => {
+        agent.skillIds = [...new Set([...agent.skillIds, record.id])];
+      });
+    }
+  }
+
+  function saveAgent(config: AgentConfig, agentId: string) {
+    if (!agentId || !agents.value.some((agent) => agent.id === agentId)) throw new Error('Agent 只能编辑，请先同步工程中已注册的 Agent。');
     const name = config.name.trim();
     if (!name || !config.systemPrompt.trim()) throw new Error('请填写 Agent 名称和 System Prompt。');
     if (name.length > 60) throw new Error('Agent 名称不能超过 60 个字符。');
     if (agents.value.some((agent) => agent.id !== agentId && agent.name === name)) throw new Error('Agent 名称已存在，请使用其他名称。');
-    if (agentId && !agents.value.some((agent) => agent.id === agentId)) throw new Error('Agent 已不存在，请刷新列表。');
     const record: ManagedAgent = {
-      id: agentId ?? `agent-${crypto.randomUUID()}`,
+      id: agentId,
+      role: agents.value.find((agent) => agent.id === agentId)?.role ?? 'custom',
       name, systemPrompt: config.systemPrompt.trim(),
       skillIds: [...new Set(config.skillIds)], toolIds: [...new Set(config.toolIds)],
       updatedAt: new Date().toLocaleString('zh-CN', { hour12: false }), updatedBy: '当前运营用户',
     };
     const index = agents.value.findIndex((agent) => agent.id === record.id);
-    if (index < 0) agents.value.unshift(record);
-    else agents.value[index] = record;
+    agents.value[index] = record;
+    configuredAgentIds.value = [...new Set([...configuredAgentIds.value, agentId])];
     return record;
-  }
-  function deleteAgent(id: string) {
-    agents.value = agents.value.filter((agent) => agent.id !== id);
-    delete agentReports.value[id];
   }
   function detectAgentConflicts(id: string) {
     const agent = agents.value.find((item) => item.id === id);
     if (!agent) throw new Error('Agent 已不存在。');
-    const report = analyzeAgentConflicts(agent, { skills: skills.value, tools: tools.value, globalToolIds: globalToolIds.value });
+    const report = analyzeAgentConflicts(agent, { skills: agentCallableSkills.value, tools: tools.value });
     agentReports.value[id] = report;
     return report;
   }
@@ -286,16 +376,13 @@ export const useAgentOpsStore = defineStore('agentOps', () => {
   function skillsForTool(toolId: string) {
     return skills.value.filter((skill) => skill.privateToolIds.includes(toolId));
   }
+  function agentsForTool(toolId: string) {
+    return agents.value.filter((agent) => agent.toolIds.includes(toolId));
+  }
   function getToolLoading(toolId: string) {
-    const global = globalToolIds.value.includes(toolId);
+    const direct = agentsForTool(toolId).length > 0;
     const privateLoading = skillsForTool(toolId).length > 0;
-    return { global, private: privateLoading, mixed: global && privateLoading, unloaded: !global && !privateLoading };
+    return { direct, private: privateLoading, unloaded: !direct && !privateLoading };
   }
-  function setToolGlobalLoading(toolId: string, enabled: boolean) {
-    if (!tools.value.some((tool) => tool.id === toolId)) return;
-    globalToolIds.value = enabled
-      ? [...new Set([...globalToolIds.value, toolId])]
-      : globalToolIds.value.filter((id) => id !== toolId);
-  }
-  return { skills, tools, globalToolIds, agents, agentReports, saveAgent, deleteAgent, detectAgentConflicts, skillsForTool, getToolLoading, setToolGlobalLoading };
+  return { skills, dataEmployeeSkills, agentCallableSkills, availableSkillsForAgent, saveDataEmployeeSkill, tools, agents, agentReports, saveAgent, detectAgentConflicts, skillsForTool, agentsForTool, getToolLoading, agentSync, codeToolSync, syncAgents, syncCodeTools, saveMcp, deleteMcp, mcpUsage };
 });
