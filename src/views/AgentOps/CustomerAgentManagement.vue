@@ -107,7 +107,7 @@ onBeforeUnmount(() => emit('editingChange', false));
     <div class="agent-page-header"><div><h2>客户 Agent 配置</h2><p>为已开通大卡数字人的客户，配置可用 Agent 及每个 Agent 的 Skill、Tool。</p></div><span class="customer-total">{{ store.customers.length }} 个已开通客户</span></div>
     <div class="agent-toolbar"><label class="agent-search"><Icon :svg="strokeIconPaths.search" :size="15" /><input v-model="search" class="ops-input ops-search" aria-label="搜索客户" placeholder="搜索客户名称" /></label><select v-model="typeFilter" class="ops-input customer-type-filter" aria-label="开通类型"><option>全部</option><option>正式</option><option>试用</option></select><span>共 {{ filteredCustomers.length }} 个客户</span></div>
     <div class="customer-table-scroll"><table class="customer-table"><thead><tr><th>客户</th><th>开通周期（合同开始 — 合同结束）</th><th>开通类型</th><th>可用 Agent</th><th>操作</th></tr></thead><tbody>
-      <tr v-for="item in filteredCustomers" :key="item.id"><td><strong>{{ item.name }}</strong></td><td class="customer-dates">{{ item.contractStart }} <span>—</span> {{ item.contractEnd }}</td><td><span class="agent-status" :class="item.activationType === '试用' ? 'is-warning' : 'is-success'">{{ item.activationType }}</span></td><td><div class="agent-tags"><span v-for="binding in item.agentConfigs" :key="binding.agentId" class="agent-tag">{{ agentName(binding.agentId) }}</span><span v-if="!item.agentConfigs.length" class="agent-muted">待配置</span></div></td><td><button type="button" class="ops-secondary" :aria-label="`配置 ${item.name}`" @click="openCustomer(item)">配置</button></td></tr>
+      <tr v-for="item in filteredCustomers" :key="item.id"><td><strong>{{ item.name }}</strong><p class="customer-cid">CID：{{ item.cid }}</p></td><td class="customer-dates">{{ item.contractStart }} <span>—</span> {{ item.contractEnd }}</td><td><span class="agent-status" :class="item.activationType === '试用' ? 'is-warning' : 'is-success'">{{ item.activationType }}</span></td><td><div class="agent-tags"><span v-for="binding in item.agentConfigs" :key="binding.agentId" class="agent-tag">{{ agentName(binding.agentId) }}</span><span v-if="!item.agentConfigs.length" class="agent-muted">待配置</span></div></td><td><button type="button" class="ops-secondary" :aria-label="`配置 ${item.name}`" @click="openCustomer(item)">配置</button></td></tr>
     </tbody></table><div v-if="!filteredCustomers.length" class="agent-empty"><h3>没有匹配的客户</h3><p>尝试其他名称或开通类型。</p><button class="ops-secondary" @click="search = ''; typeFilter = '全部'">清除筛选</button></div></div>
     <p class="customer-footnote">客户与合同为演示数据。配置保存在当前演示会话中。</p>
   </section>
@@ -171,6 +171,7 @@ onBeforeUnmount(() => emit('editingChange', false));
 .customer-table td:last-child { width: 100px; }
 .customer-table td:last-child button { white-space: nowrap; min-width: 56px; }
 .customer-table tr:hover td { background: #fafaf8; }
+.customer-cid { margin-top: 6px; color: #64748b; font-size: 11px; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
 .customer-dates { font-variant-numeric: tabular-nums; white-space: nowrap; }
 .customer-dates span { color: #94a3b8; margin: 0 4px; }
 .customer-footnote { border-top: 1px solid #e2e2dc; padding: 12px 20px; color: #64748b; font-size: 12px; }
