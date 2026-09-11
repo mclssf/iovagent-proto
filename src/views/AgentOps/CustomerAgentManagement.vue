@@ -1,13 +1,14 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, reactive, ref, watch } from 'vue';
-import { ElMessage, ElMessageBox, ElOption, ElSelect } from 'element-plus';
+import { ElMessage, ElMessageBox, ElTooltip } from 'element-plus';
 import { Icon } from '@packages/icon';
-import { skillGroups, useAgentOpsStore } from '@/pinia/agentOps';
-import type { SkillGroup } from '@/pinia/agentOps';
-import { selectSkillGroup } from '@/pinia/customerAgents';
+import { useAgentOpsStore } from '@/pinia/agentOps';
 import type { ActivatedCustomer, CustomerAgentBinding, CustomerAgentTarget } from '@/pinia/customerAgents';
 import { agentConfigurationFingerprint, resolveAgentTools } from './agentConflicts';
 import CustomerConflictReport from './CustomerConflictReport.vue';
+import CustomerCapabilityPicker from './CustomerCapabilityPicker.vue';
+import { mergeCapabilitySelection } from './capabilitySelection';
+import type { CapabilityOption } from './capabilitySelection';
 import { strokeIconPaths } from '../AgentWork/strokeIconPaths';
 
 const props = defineProps<{ initialTarget?: CustomerAgentTarget }>();
@@ -22,8 +23,8 @@ const draft = reactive<Record<string, CustomerAgentBinding>>({});
 const enabledAgentIds = ref<string[]>([]);
 const savedDraft = ref('');
 const formError = ref('');
-const skillSearch = ref('');
-const pendingTool = ref('');
+const pickerOpen = ref(false);
+const pickerKind = ref<'skill' | 'tool'>('skill');
 const reportOpen = ref(false);
 const customer = computed(() => store.customers.find(item => item.id === editingId.value));
 const activeAgent = computed(() => store.agents.find(agent => agent.id === selectedAgentId.value));
@@ -34,12 +35,21 @@ const fingerprint = () => JSON.stringify(draftConfigs.value);
 const hasChanges = computed(() => fingerprint() !== savedDraft.value);
 const filteredCustomers = computed(() => store.customers.filter(item => item.name.toLowerCase().includes(search.value.trim().toLowerCase()) && (typeFilter.value === '全部' || item.activationType === typeFilter.value)));
 const catalog = computed(() => ({ skills: store.availableSkillsForAgent(selectedAgentId.value), tools: store.tools }));
-const filteredSkills = computed(() => catalog.value.skills.filter(skill => `${skill.name} ${skill.description} ${skill.group}`.toLowerCase().includes(skillSearch.value.trim().toLowerCase())));
 const loadConfig = computed(() => ({ name: activeAgent.value?.name ?? '', systemPrompt: activeAgent.value?.systemPrompt ?? '', skillIds: activeEnabled.value ? activeBinding.value?.skillIds ?? [] : [], toolIds: activeEnabled.value ? activeBinding.value?.toolIds ?? [] : [] }));
 const usages = computed(() => resolveAgentTools(loadConfig.value, catalog.value));
 const overlaps = computed(() => usages.value.filter(usage => usage.paths.some(path => path.kind === 'direct') && usage.paths.some(path => path.kind === 'private')));
-const toolOptions = computed(() => store.tools.filter(tool => !activeBinding.value?.toolIds.includes(tool.id)));
-const invalidSkills = computed(() => activeBinding.value?.skillIds.filter(id => !catalog.value.skills.some(skill => skill.id === id)) ?? []);
+const selectedSkills = computed(() => (activeBinding.value?.skillIds ?? []).map(id => ({ id, skill: catalog.value.skills.find(skill => skill.id === id) })));
+const selectedTools = computed(() => (activeBinding.value?.toolIds ?? []).map(id => ({ id, tool: store.tools.find(tool => tool.id === id) })));
+const skillOptions = computed<CapabilityOption[]>(() => catalog.value.skills.map(skill => ({
+  id: skill.id, name: skill.name, description: skill.description, group: skill.group, disabled: !skill.enabled,
+  detail: skill.privateToolIds.length ? `私有 Tool：${privateNames(skill.privateToolIds)}` : undefined,
+})));
+const toolOptions = computed<CapabilityOption[]>(() => store.tools.map(tool => ({
+  id: tool.id, name: tool.name, description: tool.description, kind: tool.kind,
+  warning: usages.value.some(usage => usage.id === tool.id && usage.paths.some(path => path.kind === 'private')) ? '已由所选 Skill 私有加载；直接添加后将存在多条加载路径。' : undefined,
+})));
+const pickerItems = computed(() => pickerKind.value === 'skill' ? skillOptions.value : toolOptions.value);
+const pickerLoadedIds = computed(() => (pickerKind.value === 'skill' ? activeBinding.value?.skillIds : activeBinding.value?.toolIds) ?? []);
 const invalidAgents = computed(() => enabledAgentIds.value.filter(id => !store.agents.some(agent => agent.id === id)));
 const report = computed(() => store.customerReports[editingId.value]?.[selectedAgentId.value]);
 const reportStale = computed(() => !!report.value && report.value.fingerprint !== agentConfigurationFingerprint(loadConfig.value, catalog.value));
@@ -61,21 +71,15 @@ function toggleAgent(id: string, enabled: boolean) {
   enabledAgentIds.value = enabled ? [...new Set([...enabledAgentIds.value, id])] : enabledAgentIds.value.filter(item => item !== id);
   if (enabled) selectedAgentId.value = id;
 }
-function groupState(group: SkillGroup) {
-  const members = catalog.value.skills.filter(skill => skill.group === group && skill.enabled);
-  const selected = members.filter(skill => activeBinding.value?.skillIds.includes(skill.id)).length;
-  return { total: members.length, selected, checked: !!members.length && selected === members.length, partial: selected > 0 && selected < members.length };
+function openPicker(kind: 'skill' | 'tool') {
+  pickerKind.value = kind;
+  pickerOpen.value = true;
 }
-function toggleGroup(group: SkillGroup, checked: boolean) {
-  if (activeBinding.value) activeBinding.value.skillIds = selectSkillGroup(activeBinding.value.skillIds, group, catalog.value.skills, checked);
-}
-function toggleSkill(id: string, checked: boolean) {
-  if (!activeBinding.value) return;
-  activeBinding.value.skillIds = checked ? [...new Set([...activeBinding.value.skillIds, id])] : activeBinding.value.skillIds.filter(item => item !== id);
-}
-function addTool(id: string) {
-  if (id && activeBinding.value && !activeBinding.value.toolIds.includes(id)) activeBinding.value.toolIds.push(id);
-  pendingTool.value = '';
+function addCapabilities(ids: string[]) {
+  if (!activeEnabled.value || !activeBinding.value) return;
+  const field = pickerKind.value === 'skill' ? 'skillIds' : 'toolIds';
+  activeBinding.value[field] = mergeCapabilitySelection(activeBinding.value[field], ids, pickerItems.value);
+  pickerOpen.value = false;
 }
 function save(andDetect = false) {
   try {
@@ -94,7 +98,7 @@ async function backToList() {
   editingId.value = '';
 }
 watch(editingId, id => emit('editingChange', !!id), { flush: 'sync' });
-watch(selectedAgentId, () => { skillSearch.value = ''; pendingTool.value = ''; reportOpen.value = false; });
+watch([selectedAgentId, editingId, activeEnabled], () => { pickerOpen.value = false; reportOpen.value = false; });
 watch(() => props.initialTarget, target => {
   const item = store.customers.find(customer => customer.id === target?.customerId);
   if (item) openCustomer(item, target?.agentId);
@@ -114,7 +118,7 @@ onBeforeUnmount(() => emit('editingChange', false));
 
   <section v-if="customer" class="agent-editor-page" aria-label="客户 Agent 配置页面">
     <header class="agent-editor-header">
-      <div class="agent-editor-title"><button type="button" class="agent-back" @click="backToList"><Icon :svg="strokeIconPaths.arrowUp" :size="16" svg-class="-rotate-90" />返回客户列表</button><h2 ref="editorHeading" tabindex="-1">{{ customer.name }}<span>客户 Agent 配置</span></h2><p class="customer-contract">{{ customer.activationType }} · {{ customer.contractStart }} — {{ customer.contractEnd }}</p></div>
+      <div class="agent-editor-title"><button type="button" class="agent-back" @click="backToList"><Icon :svg="strokeIconPaths.arrowUp" :size="16" svg-class="-rotate-90" />返回客户列表</button><h2 ref="editorHeading" tabindex="-1">{{ customer.name }}<span>客户 Agent 配置</span></h2><dl class="customer-contract"><div><dt>CID：</dt><dd>{{ customer.cid }}</dd></div><div><dt>开通类型：</dt><dd>{{ customer.activationType }}</dd></div><div><dt>合同周期：</dt><dd>{{ customer.contractStart }} — {{ customer.contractEnd }}</dd></div></dl></div>
       <div class="agent-editor-actions"><span :class="{ 'is-dirty': hasChanges }" role="status">{{ hasChanges ? '有未保存的修改' : '配置已保存' }}</span><button type="button" class="ops-secondary" @click="save()">保存配置</button><button type="button" class="ops-primary" :disabled="!activeEnabled || !activeAgent" @click="save(true)">保存并检测当前 Agent</button></div>
       <p v-if="formError" class="agent-form-error" role="alert">{{ formError }}</p>
     </header>
@@ -128,39 +132,54 @@ onBeforeUnmount(() => emit('editingChange', false));
       <div class="agent-editor-scroll customer-config-scroll">
         <div v-if="activeAgent && activeBinding" class="customer-config-content">
           <div class="customer-agent-heading"><div><h3>{{ activeAgent.name }}</h3><p>{{ activeAgent.role === 'data-employee' ? '从数据员工配置中选择采集与映射 Skill。' : '从 Skill 管理中选择该客户需要的能力。' }}</p></div><span class="agent-status" :class="activeEnabled ? 'is-success' : ''">{{ activeEnabled ? '已授权使用' : '未授权使用' }}</span></div>
-          <details class="customer-prompt"><summary>查看 System Prompt · 由 Agent 管理统一维护</summary><pre>{{ activeAgent.systemPrompt }}</pre></details>
           <div v-if="!activeEnabled" class="agent-empty"><h3>该客户尚未启用此 Agent</h3><p>启用后，可单独配置此 Agent 的 Skill 和直接加载的 Tool。</p><button class="ops-primary" @click="toggleAgent(selectedAgentId, true)">允许该客户使用</button></div>
           <template v-else>
             <div class="customer-loading-columns">
-              <section class="agent-loading-section"><h3>Skill 加载 <span>已选 {{ activeBinding.skillIds.length }} 个</span></h3><p>按组批量选择，也可逐项调整。私有 Tool 随所选 Skill 加载。</p>
-                <div class="customer-skill-groups"><label v-for="group in skillGroups" :key="group" class="customer-group"><input type="checkbox" :checked="groupState(group).checked" :indeterminate="groupState(group).partial" :disabled="!groupState(group).total" :aria-label="`批量选择 ${group}`" @change="toggleGroup(group, ($event.target as HTMLInputElement).checked)" /><span>{{ group }}<small>{{ groupState(group).selected }} / {{ groupState(group).total }}</small></span></label></div>
-                <p class="customer-group-help">批量选择当前组内可用 Skill；后续新增或调整分组不会自动改变客户配置。</p>
-                <input v-model="skillSearch" class="ops-input" placeholder="搜索 Skill 名称或描述" aria-label="搜索可加载 Skill" />
-                <div class="customer-skills" aria-label="可加载 Skill 列表"><label v-for="skill in filteredSkills" :key="skill.id" class="customer-skill-row"><input type="checkbox" :checked="activeBinding.skillIds.includes(skill.id)" :disabled="!skill.enabled && !activeBinding.skillIds.includes(skill.id)" :aria-label="`加载 Skill ${skill.name}`" @change="toggleSkill(skill.id, ($event.target as HTMLInputElement).checked)" /><span><strong>{{ skill.name }}</strong><span class="agent-tag">{{ skill.group }}</span><span v-if="!skill.enabled" class="agent-inline-warning">已停用</span><p>{{ skill.description }}</p><p v-if="skill.privateToolIds.length" class="customer-private">私有 Tool：{{ privateNames(skill.privateToolIds) }}</p></span></label><p v-if="!filteredSkills.length" class="agent-selection-empty">没有匹配的 Skill。</p></div>
-                <div v-for="id in invalidSkills" :key="id" class="agent-notice warning"><span>已失效或不适用的 Skill：{{ id }}</span><button class="agent-text-link" @click="toggleSkill(id, false)">移除</button></div>
+              <section class="agent-loading-section customer-config-block" aria-label="Skill 加载配置">
+                <div class="customer-loading-header"><h3>Skill 加载 <span>当前已选 {{ selectedSkills.length }} 个</span></h3><button type="button" class="ops-secondary" @click="openPicker('skill')"><Icon :svg="strokeIconPaths.plus" :size="14" />添加 Skill</button></div>
+                <p>通过搜索或按组批量添加 Skill。私有 Tool 随所选 Skill 加载。</p>
+                <ul class="customer-selected-tags" aria-label="已选 Skill 加载列表">
+                  <li v-for="{ id, skill } in selectedSkills" :key="id" class="customer-capability-tag" :class="{ 'is-warning': !skill || !skill.enabled }">
+                    <ElTooltip placement="top" :show-after="250" :hide-after="0">
+                      <template #content><div class="customer-tag-details"><strong>{{ skill?.group ?? 'Skill 已失效' }}</strong><p>{{ skill?.description ?? '该 Skill 已失效或不适用于当前 Agent，请移除后保存。' }}</p><p v-if="skill?.privateToolIds.length">私有 Tool：{{ privateNames(skill.privateToolIds) }}</p><p v-if="skill && !skill.enabled">Skill 已停用，暂不可调用。</p></div></template>
+                      <span class="customer-tag-label" tabindex="0">{{ skill?.name ?? id }}<span v-if="!skill" class="customer-tag-state">已失效</span><span v-else-if="!skill.enabled" class="customer-tag-state">已停用</span></span>
+                    </ElTooltip>
+                    <button type="button" class="customer-tag-remove" :aria-label="`移除 Skill ${skill?.name ?? id}`" @click="activeBinding.skillIds = activeBinding.skillIds.filter(item => item !== id)"><Icon :svg="strokeIconPaths.x" :size="13" /></button>
+                  </li>
+                </ul>
+                <p v-if="!selectedSkills.length" class="agent-selection-empty">尚未选择 Skill。点击“添加 Skill”搜索或按组批量选择。</p>
               </section>
-              <section class="agent-loading-section"><h3>Tool 直接加载 <span>已选 {{ activeBinding.toolIds.length }} 个</span></h3><p>指定该客户下此 Agent 可直接调用的工具，与 Skill 私有加载独立。</p>
-                <ElSelect v-model="pendingTool" filterable class="agent-picker" placeholder="添加 MCP 服务或代码工具" aria-label="添加直接加载 Tool" @change="addTool"><ElOption v-for="tool in toolOptions" :key="tool.id" :value="tool.id" :label="`${tool.name} · ${tool.kind === 'mcp' ? 'MCP' : '代码工具'}`" /></ElSelect>
-                <ul class="agent-selected-list"><li v-for="id in activeBinding.toolIds" :key="id"><div><strong>{{ toolName(id) }}</strong><p>{{ store.tools.find(tool => tool.id === id)?.description }}</p><p v-if="overlaps.some(usage => usage.id === id)" class="agent-inline-warning">与所选 Skill 的私有 Tool 重叠</p></div><button type="button" class="agent-remove" :aria-label="`移除 Tool ${toolName(id)}`" @click="activeBinding.toolIds = activeBinding.toolIds.filter(item => item !== id)"><Icon :svg="strokeIconPaths.x" :size="15" /></button></li></ul><p v-if="!activeBinding.toolIds.length" class="agent-selection-empty">尚未指定直接工具。Skill 的私有工具仍可随 Skill 调用。</p>
+              <section class="agent-loading-section customer-config-block" aria-label="Tool 加载配置">
+                <div class="customer-loading-header"><h3>Tool 直接加载 <span>当前已选 {{ selectedTools.length }} 个</span></h3><button type="button" class="ops-secondary" @click="openPicker('tool')"><Icon :svg="strokeIconPaths.plus" :size="14" />添加 Tool</button></div>
+                <p>指定该客户下此 Agent 可直接调用的工具，与 Skill 私有加载独立。</p>
+                <ul class="customer-selected-tags" aria-label="已选 Tool 加载列表">
+                  <li v-for="{ id, tool } in selectedTools" :key="id" class="customer-capability-tag" :class="{ 'is-warning': !tool || overlaps.some(usage => usage.id === id) }">
+                    <ElTooltip placement="top" :show-after="250" :hide-after="0">
+                      <template #content><div class="customer-tag-details"><strong>{{ !tool ? 'Tool 已失效' : tool.kind === 'mcp' ? 'MCP 服务' : '代码工具' }}</strong><p>{{ tool?.description ?? '该 Tool 已失效，请移除后保存。' }}</p><p v-if="overlaps.some(usage => usage.id === id)">与所选 Skill 的私有 Tool 重叠，建议通过冲突检测检查调用边界。</p></div></template>
+                      <span class="customer-tag-label" tabindex="0">{{ tool?.name ?? id }}<span v-if="!tool" class="customer-tag-state">已失效</span><span v-else-if="overlaps.some(usage => usage.id === id)" class="customer-tag-state">多路径</span></span>
+                    </ElTooltip>
+                    <button type="button" class="customer-tag-remove" :aria-label="`移除 Tool ${toolName(id)}`" @click="activeBinding.toolIds = activeBinding.toolIds.filter(item => item !== id)"><Icon :svg="strokeIconPaths.x" :size="13" /></button>
+                  </li>
+                </ul>
+                <p v-if="!selectedTools.length" class="agent-selection-empty">尚未指定直接工具。点击“添加 Tool”批量选择；Skill 的私有工具仍可随 Skill 调用。</p>
                 <div v-if="overlaps.length" class="agent-notice warning" role="status"><div><strong>{{ overlaps.length }} 个 Tool 存在多条加载路径</strong><p>{{ overlaps.map(usage => toolName(usage.id)).join('、') }}。允许保存，建议通过冲突检测检查调用边界。</p></div></div>
-                <div class="customer-detection"><h4>当前客户 · 当前 Agent 的冲突检测</h4><p>检查加载路径、功能描述及工具 Schema 的疑似歧义。</p><button v-if="report" class="agent-text-link" @click="reportOpen = true">{{ reportStale ? '配置已变化 · 查看上次检测结果' : `查看检测结果 · ${report.findings.length} 项` }}</button><p v-else>尚未检测。点击页首“保存并检测当前 Agent”开始。</p></div>
               </section>
             </div>
-            <section class="agent-scope-section"><h3>全部可调用的 Tool <span>{{ usages.filter(usage => usage.tool).length }} 个，按工具去重</span></h3><p>范围：{{ customer.name }} → {{ activeAgent.name }}。合并直接工具与已启用 Skill 的私有工具。</p><div class="agent-scope-list"><div v-for="usage in usages" :key="usage.id" class="agent-scope-row"><strong>{{ toolName(usage.id) }}</strong><div class="agent-tags"><span v-for="path in usage.paths" :key="path.label" class="agent-tag" :class="{ 'is-private': path.kind === 'private' }">{{ path.label }}</span></div></div><p v-if="!usages.length" class="agent-selection-empty">当前没有可调用的 Tool。</p></div></section>
+            <section class="customer-detection customer-config-block" aria-label="当前 Agent 冲突检测"><h3>当前客户 · 当前 Agent 的冲突检测</h3><p>检查加载路径、功能描述及工具 Schema 的疑似歧义。</p><button v-if="report" class="agent-text-link" @click="reportOpen = true">{{ reportStale ? '配置已变化 · 查看上次检测结果' : `查看检测结果 · ${report.findings.length} 项` }}</button><p v-else>尚未检测。点击页首“保存并检测当前 Agent”开始。</p></section>
+            <section class="agent-scope-section customer-config-block"><h3>全部可调用的 Tool <span>{{ usages.filter(usage => usage.tool).length }} 个，按工具去重</span></h3><p>范围：{{ customer.name }} → {{ activeAgent.name }}。合并直接工具与已启用 Skill 的私有工具。</p><div class="agent-scope-list"><div v-for="usage in usages" :key="usage.id" class="agent-scope-row"><strong>{{ toolName(usage.id) }}</strong><div class="agent-tags"><span v-for="path in usage.paths" :key="path.label" class="agent-tag" :class="{ 'is-private': path.kind === 'private' }">{{ path.label }}</span></div></div><p v-if="!usages.length" class="agent-selection-empty">当前没有可调用的 Tool。</p></div></section>
           </template>
         </div>
         <div v-else class="agent-empty"><h3>请选择有效的 Agent</h3><p>已失效的 Agent 可从左侧移除；最新目录在 Agent 管理中同步。</p></div>
         <p class="agent-editor-footnote">配置保存在当前演示会话中。Skill 定义与私有工具绑定继续在对应 Skill 中维护。</p>
       </div>
     </div>
+    <CustomerCapabilityPicker :open="pickerOpen" :kind="pickerKind" :context="`${customer.name} · ${activeAgent?.name ?? ''}`" :items="pickerItems" :loaded-ids="pickerLoadedIds" @close="pickerOpen = false" @add="addCapabilities" />
     <CustomerConflictReport :open="reportOpen" :report="report" :customer-name="customer.name" :agent-name="activeAgent?.name ?? ''" :stale="reportStale" @close="reportOpen = false" @rerun="save(true)" />
   </section>
 </template>
 <style scoped src="./agentManagement.css"></style>
 <style scoped>
-.customer-agent-nav input[type="checkbox"], .customer-group input[type="checkbox"], .customer-skill-row input[type="checkbox"] { width: 15px; height: 15px; flex-shrink: 0; accent-color: #334155; cursor: pointer; }
-.customer-skill-row input[type="checkbox"] { margin-top: 2px; }
-.customer-group input:disabled, .customer-skill-row input:disabled { cursor: not-allowed; }
+.customer-agent-nav input[type="checkbox"] { width: 15px; height: 15px; flex-shrink: 0; accent-color: #334155; cursor: pointer; }
 .customer-total { color: #64748b; white-space: nowrap; font-size: 12px; }
 .customer-type-filter { width: 120px; }
 .customer-table-scroll { flex: 1; min-height: 0; overflow: auto; }
@@ -175,7 +194,10 @@ onBeforeUnmount(() => emit('editingChange', false));
 .customer-dates { font-variant-numeric: tabular-nums; white-space: nowrap; }
 .customer-dates span { color: #94a3b8; margin: 0 4px; }
 .customer-footnote { border-top: 1px solid #e2e2dc; padding: 12px 20px; color: #64748b; font-size: 12px; }
-.customer-contract { margin-top: 8px; font-size: 12px; color: #64748b; }
+.customer-contract { display: flex; flex-wrap: wrap; gap: 4px 16px; margin-top: 8px; font-size: 12px; line-height: 1.7; color: #64748b; font-variant-numeric: tabular-nums; }
+.customer-contract > div { display: flex; min-width: 0; }
+.customer-contract dt { flex-shrink: 0; }
+.customer-contract dd { overflow-wrap: anywhere; }
 .customer-editor-body { display: flex; flex: 1; min-height: 0; }
 .customer-agent-nav { flex: 0 0 260px; padding: 28px 20px; background: #f7f7f5; border-right: 1px solid #e2e2dc; overflow: auto; }
 .customer-agent-nav h3 { font-size: 14px; font-weight: 600; }
@@ -188,28 +210,32 @@ onBeforeUnmount(() => emit('editingChange', false));
 .customer-agent-option button span { display: block; color: #64748b; font-size: 11px; margin-top: 5px; }
 .customer-agent-nav .customer-nav-note { border-top: 1px solid #e2e2dc; padding-top: 20px; margin-top: 24px; }
 .customer-config-content { max-width: 1320px; margin: 0 auto; }
-.customer-agent-heading { display: flex; justify-content: space-between; gap: 16px; }
+.customer-agent-heading { display: flex; justify-content: space-between; gap: 16px; padding-bottom: 20px; margin-bottom: 24px; border-bottom: 1px solid #e2e2dc; }
 .customer-agent-heading h3 { font-size: 18px; color: #0f172a; font-weight: 600; }
 .customer-agent-heading p { margin-top: 6px; font-size: 12px; color: #64748b; }
 .customer-agent-heading > span { align-self: start; white-space: nowrap; }
-.customer-prompt { font-size: 12px; margin: 18px 0 28px; color: #64748b; border-bottom: 1px solid #e2e2dc; padding-bottom: 20px; }
-.customer-prompt summary { cursor: pointer; }
-.customer-prompt pre { white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.8; margin-top: 12px; background: #f7f7f5; padding: 14px; color: #475569; }
-.customer-loading-columns { display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr); gap: 32px; }
-.customer-skill-groups { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin-top: 16px; }
-.customer-group { display: flex; gap: 7px; align-items: center; border: 1px solid #deded9; border-radius: 4px; padding: 8px; cursor: pointer; font-size: 11px; }
-.customer-group small { display: block; color: #64748b; margin-top: 2px; }
-.customer-group-help { font-size: 11px !important; margin: 10px 0 14px !important; line-height: 1.8; }
-.customer-skills { max-height: 420px; overflow: auto; margin-top: 8px; border-bottom: 1px solid #e2e2dc; scrollbar-width: thin; }
-.customer-skill-row { display: flex; align-items: start; gap: 10px; padding: 13px 0; border-bottom: 1px solid #e9e9e4; cursor: pointer; }
-.customer-skill-row > span { min-width: 0; }
-.customer-skill-row strong { font-size: 12px; margin-right: 8px; }
-.customer-skill-row p { font-size: 11px; color: #64748b; line-height: 1.8; margin-top: 5px; }
-.customer-skill-row .customer-private { color: #475569; }
-.customer-detection { border-top: 1px solid #e2e2dc; margin-top: 24px; padding-top: 18px; font-size: 12px; line-height: 1.8; }
-.customer-detection h4 { font-weight: 600; }
+.customer-loading-columns { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 20px; }
+.customer-config-block { min-width: 0; padding: 20px; border: 1px solid #deded9; border-radius: 6px; }
+.customer-config-block > p { line-height: 1.8; }
+.customer-config-block.agent-scope-section { margin-top: 20px; }
+.customer-loading-header { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; }
+.customer-loading-header h3 span { display: block; margin: 6px 0 0; }
+.customer-loading-header button { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
+.customer-selected-tags { display: flex; flex-wrap: wrap; align-items: start; gap: 8px; margin-top: 18px; }
+.customer-selected-tags:empty { display: none; }
+.customer-capability-tag { display: inline-flex; align-items: center; max-width: 100%; border: 1px solid #dce1e7; border-radius: 4px; background: #f4f6f8; color: #334155; font-size: 12px; line-height: 1.7; }
+.customer-capability-tag.is-warning { color: #92400e; background: #fff7e5; border-color: #e8ce9f; }
+.customer-tag-label { min-width: 0; padding: 4px 2px 4px 10px; overflow-wrap: anywhere; cursor: help; }
+.customer-tag-label:focus-visible { outline: 2px solid #64748b; outline-offset: 2px; border-radius: 3px; }
+.customer-tag-state { margin-left: 6px; font-size: 11px; }
+.customer-tag-remove { display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; width: 28px; height: 28px; margin: 1px 2px; border-radius: 3px; color: inherit; }
+.customer-tag-remove:hover { color: #b42318; background: #feece9; }
+.customer-tag-details { max-width: min(300px, calc(100vw - 48px)); font-size: 12px; line-height: 1.8; overflow-wrap: anywhere; }
+.customer-tag-details p { margin-top: 4px; }
+.customer-detection { margin-top: 20px; font-size: 12px; line-height: 1.8; }
+.customer-detection h3 { font-size: 14px; font-weight: 600; color: #0f172a; }
 .customer-detection p { color: #64748b; margin: 6px 0; }
-@media (max-width: 1100px) { .customer-agent-nav { flex-basis: 220px; padding: 20px 12px; } .customer-loading-columns { grid-template-columns: 1fr; gap: 28px; } }
+@media (max-width: 1100px) { .customer-agent-nav { flex-basis: 220px; padding: 20px 12px; } .customer-loading-columns { grid-template-columns: 1fr; } }
 @media (max-width: 760px) {
   .customer-table { min-width: 840px; }
   .customer-editor-body { display: block; overflow: auto; }
@@ -218,7 +244,6 @@ onBeforeUnmount(() => emit('editingChange', false));
   .customer-agent-nav > p { margin-bottom: 10px; }
   .customer-agent-nav .customer-nav-note { display: none; }
   .customer-config-scroll { overflow: visible; }
-  .customer-skill-groups { gap: 5px; }
-  .customer-group { padding: 6px; gap: 5px; }
+  .customer-config-block, .customer-config-block.agent-loading-section { padding: 16px; }
 }
 </style>

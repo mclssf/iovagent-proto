@@ -62,6 +62,27 @@ try {
   assert.equal(JSON.stringify(store.customers), allCustomerBindings, 'adding or editing a Skill never grants it to customers automatically');
 
   const groupCatalog = store.availableSkillsForAgent(generalAgent.id);
+  const { filterCapabilityOptions, mergeCapabilitySelection } = await server.ssrLoadModule('/src/views/AgentOps/capabilitySelection.ts');
+  const pickerSkills = groupCatalog.map(skill => ({ ...skill, disabled: !skill.enabled }));
+  const multiGroup = filterCapabilityOptions(pickerSkills, '', ['基础 Skill 组', '扩展 Skill 组'], 'all');
+  assert(multiGroup.length > 0 && multiGroup.every(skill => skill.group !== '定制 Skill 组'), 'group filters combine with OR');
+  const searchTarget = multiGroup.find(skill => !skill.disabled);
+  assert.deepEqual(filterCapabilityOptions(pickerSkills, ` ${searchTarget.id.toUpperCase()} `, [searchTarget.group], 'all').map(skill => skill.id), [searchTarget.id], 'search combines with groups and handles whitespace/case');
+  assert.equal(filterCapabilityOptions(pickerSkills, searchTarget.id, ['定制 Skill 组'], 'all').length, 0);
+  assert.equal(filterCapabilityOptions(pickerSkills, 'no-matching-capability', [], 'all').length, 0);
+  const selectedBefore = ['existing-disabled-or-invalid'];
+  const addedGroup = mergeCapabilitySelection(selectedBefore, [...multiGroup.map(skill => skill.id), 'missing'], pickerSkills);
+  assert.deepEqual(selectedBefore, ['existing-disabled-or-invalid'], 'picker does not mutate current grants before confirmation');
+  assert(addedGroup.includes(selectedBefore[0]) && !addedGroup.includes('missing') && !addedGroup.includes('capacity-cargo-search'), 'preserve existing grants, reject invalid or disabled additions');
+  const customIds = filterCapabilityOptions(pickerSkills, '', ['定制 Skill 组'], 'all').map(skill => skill.id);
+  const addedAcrossFilters = mergeCapabilitySelection(addedGroup, customIds, pickerSkills);
+  assert(addedGroup.every(id => addedAcrossFilters.includes(id)), 'changing filters and adding another group preserves earlier selections');
+  assert.deepEqual(mergeCapabilitySelection(addedAcrossFilters, multiGroup.map(skill => skill.id), pickerSkills), addedAcrossFilters, 'repeated batch additions cannot duplicate grants');
+  const mcpCandidates = filterCapabilityOptions(store.tools, '', [], 'mcp');
+  assert(mcpCandidates.length > 0 && mcpCandidates.every(tool => tool.kind === 'mcp'));
+  const codeCandidates = filterCapabilityOptions(store.tools, '', [], 'code');
+  const mixedTools = mergeCapabilitySelection([mcpCandidates[0].id], [codeCandidates[0].id, mcpCandidates[0].id], store.tools);
+  assert.deepEqual(mixedTools, [mcpCandidates[0].id, codeCandidates[0].id], 'MCP and code tools can be added together without duplicates');
   const baseIds = selectSkillGroup([], '基础 Skill 组', groupCatalog, true);
   assert(baseIds.length > 1 && baseIds.every(id => groupCatalog.find(skill => skill.id === id).group === '基础 Skill 组'));
   assert.deepEqual(selectSkillGroup(baseIds, '基础 Skill 组', groupCatalog, true), baseIds, 'bulk selection is idempotent');
