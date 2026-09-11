@@ -1,4 +1,4 @@
-import type { AgentConfig, AgentCallableSkill, ManagedTool, ToolParameter } from '@/pinia/agentOps';
+import type { AgentLoadConfig, AgentCallableSkill, ManagedTool, ToolParameter } from '@/pinia/agentOps';
 
 export interface AgentCatalog {
   skills: readonly AgentCallableSkill[];
@@ -26,7 +26,7 @@ export interface AgentConflictReport {
   schemaCount: number;
 }
 
-export function resolveAgentTools(agent: AgentConfig, catalog: AgentCatalog): AgentToolUsage[] {
+export function resolveAgentTools(agent: AgentLoadConfig, catalog: AgentCatalog): AgentToolUsage[] {
   const usages = new Map<string, AgentToolUsage>();
   const add = (id: string, path: ToolLoadPath) => {
     if (!usages.has(id)) usages.set(id, { id, tool: catalog.tools.find((tool) => tool.id === id), paths: [] });
@@ -40,14 +40,14 @@ export function resolveAgentTools(agent: AgentConfig, catalog: AgentCatalog): Ag
   return [...usages.values()];
 }
 
-export function agentConfigurationFingerprint(agent: AgentConfig, catalog: AgentCatalog): string {
+export function agentConfigurationFingerprint(agent: AgentLoadConfig, catalog: AgentCatalog): string {
   const sortIds = (ids: readonly string[]) => [...new Set(ids)].sort();
   const usages = resolveAgentTools(agent, catalog);
   return JSON.stringify({
     name: agent.name, systemPrompt: agent.systemPrompt, skillIds: sortIds(agent.skillIds), toolIds: sortIds(agent.toolIds),
     skills: catalog.skills.filter((skill) => agent.skillIds.includes(skill.id)).map((skill) => ({
       id: skill.id, name: skill.name, description: skill.description, content: skill.content, enabled: skill.enabled,
-      privateToolIds: sortIds(skill.privateToolIds), visibility: skill.visibility, enterpriseIds: sortIds(skill.enterpriseIds),
+      privateToolIds: sortIds(skill.privateToolIds),
       source: skill.source, sourceConfig: skill.sourceConfig, fileName: skill.fileName,
     })).sort((a, b) => a.id.localeCompare(b.id)),
     tools: usages.map((usage) => ({ id: usage.id, tool: usage.tool })).sort((a, b) => a.id.localeCompare(b.id)),
@@ -100,7 +100,7 @@ function commonParameters(a: readonly ToolParameter[] = [], b: readonly ToolPara
   return a.filter((param) => b.some((other) => param.name === other.name && param.type === other.type)).map((param) => `${param.name}: ${param.type}`);
 }
 
-export function analyzeAgentConflicts(agent: AgentConfig, catalog: AgentCatalog): AgentConflictReport {
+export function analyzeAgentConflicts(agent: AgentLoadConfig, catalog: AgentCatalog): AgentConflictReport {
   const findings: AgentFinding[] = [];
   const coverage: string[] = [];
   const usages = resolveAgentTools(agent, catalog);
@@ -120,7 +120,6 @@ export function analyzeAgentConflicts(agent: AgentConfig, catalog: AgentCatalog)
     candidates.push({ id: `skill:${skill.id}`, ownerId: skill.id, skillId: skill.id, label: `Skill「${skill.name}」`, description: `${skill.name} ${skill.description}`, paths: [`Agent → Skill「${skill.name}」`] });
     coverage.push(`Skill「${skill.name}」未声明输入、输出 Schema，已检查名称、功能描述与私有工具路径。`);
     if (skill.source === 'data-employee') coverage.push(`Skill「${skill.name}」来自数据员工配置，按目标系统和登录方式选择；本次检测不执行真实登录或数据采集。`);
-    if (skill.visibility === '指定企业') coverage.push(`Skill「${skill.name}」仅对指定企业可见；本次按配置范围检测，实际可用范围仍遵循企业权限。`);
   }
   for (const usage of usages) {
     const tool = usage.tool;

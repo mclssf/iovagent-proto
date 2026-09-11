@@ -1,7 +1,6 @@
 import type { CodeTool, ManagedAgent } from '@/pinia/agentOps';
 
 function object(value: unknown): value is Record<string, unknown> { return !!value && typeof value === 'object' && !Array.isArray(value); }
-function strings(value: unknown): value is string[] { return Array.isArray(value) && value.every((item) => typeof item === 'string'); }
 function uniqueIds(value: unknown): value is Record<string, unknown>[] {
   return Array.isArray(value) && value.every((item) => object(item) && typeof item.id === 'string' && item.id.trim()) && new Set(value.map((item) => item.id)).size === value.length;
 }
@@ -9,9 +8,9 @@ export function parseAgentRegistry(value: unknown): ManagedAgent[] {
   if (!uniqueIds(value) || !value.every((item) =>
     ['data-employee', 'general-chat', 'project-chat', 'custom'].includes(String(item.role)) &&
     typeof item.name === 'string' && item.name.trim() && typeof item.systemPrompt === 'string' && item.systemPrompt.trim() &&
-    strings(item.skillIds) && strings(item.toolIds) && typeof item.updatedAt === 'string' && typeof item.updatedBy === 'string'
+    typeof item.updatedAt === 'string' && typeof item.updatedBy === 'string'
   )) throw new Error('Agent 目录格式不正确，未更新当前配置。');
-  return JSON.parse(JSON.stringify(value)) as ManagedAgent[];
+  return value.map(({ id, role, name, systemPrompt, updatedAt, updatedBy }) => ({ id, role, name, systemPrompt, updatedAt, updatedBy })) as ManagedAgent[];
 }
 export function parseCodeToolRegistry(value: unknown): CodeTool[] {
   const parameters = (items: unknown) => Array.isArray(items) && items.every((item) => object(item) &&

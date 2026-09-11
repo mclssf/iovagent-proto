@@ -1,9 +1,9 @@
-import type { SkillVisibility } from './agentOps';
+import type { SkillGroup } from './agentOps';
 
 export type LoginType = '短信验证码' | '手机扫码' | '图形验证码' | '无验证';
 export interface DataEmployeeSkill {
   description: string;
-  enterpriseIds: string[];
+  privateToolIds: string[];
   id: string;
   loginType: LoginType;
   loginUrl: string;
@@ -12,15 +12,15 @@ export interface DataEmployeeSkill {
   skillFileName: string;
   skillUpdated: string;
   skillVersion: string;
-  visibility: SkillVisibility;
+  group: SkillGroup;
 }
 
 export function createDataEmployeeSkills(): DataEmployeeSkill[] {
   return [
     {
       id: 'jinyu-cement-tms',
-      visibility: '指定企业',
-      enterpriseIds: ['ent-jinyu'],
+      group: '定制 Skill 组',
+      privateToolIds: [],
       name: '金隅水泥TMS',
       description: '面向金隅水泥运输业务的 TMS 数据采集与运单映射 Skill。',
       loginUrl: 'https://tms.jinyu.demo/login',
@@ -47,8 +47,8 @@ export function createDataEmployeeSkills(): DataEmployeeSkill[] {
     },
     {
       id: 'zhilian-shunda-tms',
-      visibility: '指定企业',
-      enterpriseIds: ['ent-zhilian'],
+      group: '定制 Skill 组',
+      privateToolIds: [],
       name: '智链顺达TMS',
       description: '负责从智链顺达调度中心抓取执行中运输任务。',
       loginUrl: 'https://tms.zhilian-shunda.demo/login',
@@ -75,8 +75,8 @@ export function createDataEmployeeSkills(): DataEmployeeSkill[] {
     },
     {
       id: 'jinmailang-logistics',
-      visibility: '指定企业',
-      enterpriseIds: ['ent-jinmailang'],
+      group: '定制 Skill 组',
+      privateToolIds: [],
       name: '今麦郎物流管理',
       description: '面向今麦郎发运看板和运单列表的数据采集 Skill。',
       loginUrl: 'https://logistics.jinmailang.demo/login',
@@ -102,8 +102,8 @@ export function createDataEmployeeSkills(): DataEmployeeSkill[] {
     },
     {
       id: 'spreadsheet-waybill',
-      visibility: '全部企业',
-      enterpriseIds: [],
+      group: '基础 Skill 组',
+      privateToolIds: [],
       name: '表格运单',
       description: '用于上传表格运单并映射为标准运单数据集。',
       loginUrl: '本地表格导入',
@@ -128,8 +128,8 @@ export function createDataEmployeeSkills(): DataEmployeeSkill[] {
     },
     {
       id: 'scan-login-tms',
-      visibility: '全部企业',
-      enterpriseIds: [],
+      group: '扩展 Skill 组',
+      privateToolIds: [],
       name: '扫码登录TMS',
       description: '通过手机扫码登录 TMS，抓取并映射在途运单列表的 Skill。',
       loginUrl: 'https://tms.scan-login.demo/login',

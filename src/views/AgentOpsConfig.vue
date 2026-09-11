@@ -7,15 +7,17 @@ import { Icon } from '@packages/icon';
 import { ElDialog, ElMessage, ElMessageBox, ElOption, ElSelect } from 'element-plus';
 
 import { agentWorkData } from '@/pinia/agentWork';
-import { enterpriseOptions, useAgentOpsStore } from '@/pinia/agentOps';
-import type { ManagedSkill, SkillCategory, SkillVisibility } from '@/pinia/agentOps';
+import { skillGroups, useAgentOpsStore } from '@/pinia/agentOps';
+import type { AgentCallableSkill, ManagedSkill, SkillCategory, SkillGroup } from '@/pinia/agentOps';
 import type { DataEmployeeSkill as DataEmployee, LoginType } from '@/pinia/dataEmployeeSkills';
 import ToolManagement from './AgentOps/ToolManagement.vue';
 import AgentManagement from './AgentOps/AgentManagement.vue';
+import CustomerAgentManagement from './AgentOps/CustomerAgentManagement.vue';
+import type { CustomerAgentTarget } from '@/pinia/customerAgents';
 
 import { strokeIconPaths } from './AgentWork/strokeIconPaths';
 
-type ConfigTab = 'dataset' | 'employees' | 'skills' | 'tmsCustomers' | 'tools' | 'agents';
+type ConfigTab = 'dataset' | 'employees' | 'skills' | 'tmsCustomers' | 'tools' | 'agents' | 'customers';
 type SkillManagementTab = 'skills' | 'systemPrompt';
 
 interface WaybillField {
@@ -43,16 +45,25 @@ const router = useRouter();
 const store = agentWorkData();
 const opsStore = useAgentOpsStore();
 const { skills: managedSkills, tools: managedTools, dataEmployeeSkills: dataEmployees } = storeToRefs(opsStore);
-const activeTab = ref<ConfigTab>('employees');
+const activeTab = ref<ConfigTab>('customers');
 const agentConfigPageOpen = ref(false);
-const agentToEdit = ref('');
+const customerToEdit = ref<CustomerAgentTarget>();
 function updateAgentEditing(open: boolean) {
   agentConfigPageOpen.value = open;
-  if (!open) agentToEdit.value = '';
+  if (!open) customerToEdit.value = undefined;
 }
-function editAgentFromTool(id: string) {
-  agentToEdit.value = id;
-  activeTab.value = 'agents';
+function editCustomerAgentFromTool(target: CustomerAgentTarget) {
+  customerToEdit.value = target;
+  activeTab.value = 'customers';
+}
+function editSkillFromTool(skill: AgentCallableSkill) {
+  if (skill.source === 'data-employee') {
+    const employee = dataEmployees.value.find(item => item.id === skill.id);
+    if (employee) { activeTab.value = 'employees'; openEditEmployeeModal(employee); }
+  } else {
+    const common = managedSkills.value.find(item => item.id === skill.id);
+    if (common) openEditSkillModal(common);
+  }
 }
 
 const activeSkillManagementTab = ref<SkillManagementTab>('skills');
@@ -68,13 +79,13 @@ const visibleCustomerPasswordIds = ref<string[]>([]);
 const loginTypes: LoginType[] = ['无验证', '图形验证码', '短信验证码', '手机扫码'];
 const newEmployeeForm = reactive({
   description: '',
-  enterpriseIds: [] as string[],
   loginType: '无验证' as LoginType,
   loginUrl: '',
   name: '',
   skillContent: '',
   skillFileName: '',
-  visibility: '全部企业' as SkillVisibility,
+  privateToolIds: [] as string[],
+  group: '基础 Skill 组' as SkillGroup,
 });
 const validationForm = reactive({
   graphicCode: '',
@@ -84,19 +95,17 @@ const validationForm = reactive({
 });
 const validationResult = ref<ValidationResult | null>(null);
 const skillSearch = ref('');
+const skillGroupFilter = ref<'全部' | SkillGroup>('全部');
 const skillCategoryFilter = ref<'全部' | SkillCategory>('全部');
-const pendingEnterpriseId = ref('');
 const pendingPrivateToolId = ref('');
-const employeeEnterpriseSearch = ref('');
 const skillForm = reactive({
   category: '在途专家' as SkillCategory,
   description: '',
-  enterpriseIds: [] as string[],
   privateToolIds: [] as string[],
   fileContent: '',
   fileName: '',
   name: '',
-  visibility: '全部企业' as SkillVisibility,
+  group: '基础 Skill 组' as SkillGroup,
 });
 
 const systemPrompt = ref<SystemPromptConfig>({
@@ -117,19 +126,19 @@ const systemPrompt = ref<SystemPromptConfig>({
 const selectedEmployeeId = ref(dataEmployees.value[0]!.id);
 
 const menuItems = computed<Array<{ badge?: number; desc: string; icon: string; id: ConfigTab; label: string }>>(() => [
+  { id: 'customers', label: '客户 Agent 配置', desc: '客户授权、能力加载、冲突检测', icon: strokeIconPaths.usersRound },
   { id: 'employees', label: '数据员工配置', desc: '数据员工 Agent 的采集与映射 Skill', icon: strokeIconPaths.bot },
   { id: 'tmsCustomers', label: 'TMS同步客户', desc: '客户提交、连接处理', icon: strokeIconPaths.usersRound, badge: store.unprocessedTmsSyncCustomerCount },
   { id: 'dataset', label: '标准数据集', desc: '运单字段、语义、数据示例', icon: strokeIconPaths.list },
-  { id: 'agents', label: 'Agent 管理', desc: '职责、调用范围、冲突检测', icon: strokeIconPaths.bot },
+  { id: 'agents', label: 'Agent 管理', desc: '名称、System Prompt', icon: strokeIconPaths.bot },
   { id: 'tools', label: 'Tool 管理', desc: 'MCP 服务、代码工具、加载范围', icon: strokeIconPaths.waypoints },
-  { id: 'skills', label: 'Skill 管理', desc: '通用技能、可见范围、系统提示词', icon: strokeIconPaths.settings },
+  { id: 'skills', label: 'Skill 管理', desc: '通用技能、分组、私有工具', icon: strokeIconPaths.settings },
 ]);
 const skillManagementTabs: { id: SkillManagementTab; label: string }[] = [
   { id: 'skills', label: 'Skill 列表' },
   { id: 'systemPrompt', label: 'System Prompt 管理' },
 ];
 const skillCategoryOptions: Array<'全部' | SkillCategory> = ['全部', '在途专家', '经营分析参谋', '运营助手', '运力与货源'];
-const skillVisibilityOptions: SkillVisibility[] = ['全部企业', '指定企业'];
 
 const waybillFields: WaybillField[] = [
   { name: 'waybill_no', semantic: '运单唯一编号，用于跨系统识别同一票运输任务。', example: 'WB202606250018' },
@@ -170,24 +179,15 @@ const filteredManagedSkills = computed(() => {
   return managedSkills.value.filter((skill) => {
     const matchesCategory = skillCategoryFilter.value === '全部' || skill.category === skillCategoryFilter.value;
     const matchesSearch = !search || `${skill.name} ${skill.description} ${skill.fileName} ${skill.category}`.toLowerCase().includes(search);
-    return matchesCategory && matchesSearch;
+    return matchesCategory && matchesSearch && (skillGroupFilter.value === '全部' || skill.group === skillGroupFilter.value);
   });
 });
-const availableEnterpriseOptions = computed(() => enterpriseOptions.filter((enterprise) => !skillForm.enterpriseIds.includes(enterprise.id)));
 const availablePrivateTools = computed(() => managedTools.value.filter((tool) => !skillForm.privateToolIds.includes(tool.id)));
-function enterpriseName(id: string) {
-  return enterpriseOptions.find((enterprise) => enterprise.id === id)?.name ?? id;
-}
 function toolName(id: string) {
   return managedTools.value.find((tool) => tool.id === id)?.name ?? id;
 }
 function toolById(id: string) {
   return managedTools.value.find((tool) => tool.id === id);
-}
-function addEnterprise() {
-  if (!pendingEnterpriseId.value || skillForm.enterpriseIds.includes(pendingEnterpriseId.value)) return;
-  skillForm.enterpriseIds.push(pendingEnterpriseId.value);
-  pendingEnterpriseId.value = '';
 }
 function addPrivateTool() {
   if (!availablePrivateTools.value.some((tool) => tool.id === pendingPrivateToolId.value)) return;
@@ -195,10 +195,6 @@ function addPrivateTool() {
   pendingPrivateToolId.value = '';
 }
 
-const filteredEmployeeEnterpriseOptions = computed(() => {
-  const search = employeeEnterpriseSearch.value.trim().toLowerCase();
-  return enterpriseOptions.filter((enterprise) => !search || enterprise.name.toLowerCase().includes(search));
-});
 
 function bumpVersion(version: string) {
   const versionNumber = Number(version.replace('v', ''));
@@ -212,13 +208,6 @@ function loginTypeClass(loginType: LoginType) {
   return 'border-emerald-200 bg-emerald-50 text-emerald-700';
 }
 
-function formatEmployeeVisibility(employee: DataEmployee) {
-  if (employee.visibility === '全部企业') return '全部企业';
-  const names = employee.enterpriseIds
-    .map((id) => enterpriseOptions.find((enterprise) => enterprise.id === id)?.name)
-    .filter(Boolean);
-  return names.length ? names.join('、') : '未指定企业';
-}
 
 function showSkill(employee: DataEmployee) {
   selectedEmployeeId.value = employee.id;
@@ -256,13 +245,12 @@ function sendSmsCode() {
 
 function resetNewEmployeeForm() {
   editingEmployeeId.value = '';
-  employeeEnterpriseSearch.value = '';
   newEmployeeForm.name = '';
   newEmployeeForm.description = '';
   newEmployeeForm.loginUrl = '';
   newEmployeeForm.loginType = '无验证';
-  newEmployeeForm.visibility = '全部企业';
-  newEmployeeForm.enterpriseIds = [];
+  newEmployeeForm.group = '基础 Skill 组';
+  newEmployeeForm.privateToolIds = [];
   newEmployeeForm.skillContent = '';
   newEmployeeForm.skillFileName = '';
 }
@@ -279,8 +267,8 @@ function openEditEmployeeModal(employee: DataEmployee) {
   newEmployeeForm.description = employee.description;
   newEmployeeForm.loginUrl = employee.loginUrl;
   newEmployeeForm.loginType = employee.loginType;
-  newEmployeeForm.visibility = employee.visibility;
-  newEmployeeForm.enterpriseIds = [...employee.enterpriseIds];
+  newEmployeeForm.group = employee.group;
+  newEmployeeForm.privateToolIds = [...employee.privateToolIds];
   newEmployeeForm.skillContent = employee.skillContent;
   newEmployeeForm.skillFileName = employee.skillFileName;
   isCreateEmployeeModalOpen.value = true;
@@ -300,11 +288,6 @@ async function uploadNewEmployeeSkill(event: Event) {
   input.value = '';
 }
 
-function toggleEmployeeEnterprise(enterpriseId: string) {
-  newEmployeeForm.enterpriseIds = newEmployeeForm.enterpriseIds.includes(enterpriseId)
-    ? newEmployeeForm.enterpriseIds.filter((id) => id !== enterpriseId)
-    : [...newEmployeeForm.enterpriseIds, enterpriseId];
-}
 
 function confirmCreateEmployee() {
   const name = newEmployeeForm.name.trim();
@@ -322,16 +305,11 @@ function confirmCreateEmployee() {
     ElMessage.warning('请输入接入地址');
     return;
   }
-  if (newEmployeeForm.visibility === '指定企业' && newEmployeeForm.enterpriseIds.length === 0) {
-    ElMessage.warning('请至少选择一个可见企业');
-    return;
-  }
   if (!newEmployeeForm.skillFileName || !newEmployeeForm.skillContent) {
     ElMessage.warning('请上传数据获取映射 skill 文件');
     return;
   }
 
-  const enterpriseIds = newEmployeeForm.visibility === '全部企业' ? [] : [...newEmployeeForm.enterpriseIds];
   if (isEditingEmployee.value) {
     const employee = dataEmployees.value.find((item) => item.id === editingEmployeeId.value);
     if (!employee) {
@@ -341,14 +319,14 @@ function confirmCreateEmployee() {
     const isSkillChanged = newEmployeeForm.skillFileName !== employee.skillFileName || newEmployeeForm.skillContent !== employee.skillContent;
     opsStore.saveDataEmployeeSkill({
       ...employee, name, description, loginUrl,
-      loginType: newEmployeeForm.loginType, visibility: newEmployeeForm.visibility, enterpriseIds,
+      loginType: newEmployeeForm.loginType, group: newEmployeeForm.group, privateToolIds: [...newEmployeeForm.privateToolIds],
       skillContent: newEmployeeForm.skillContent, skillFileName: newEmployeeForm.skillFileName,
       skillUpdated: '刚刚', skillVersion: isSkillChanged ? bumpVersion(employee.skillVersion) : employee.skillVersion,
     });
     selectedEmployeeId.value = employee.id;
     isCreateEmployeeModalOpen.value = false;
     resetNewEmployeeForm();
-    ElMessage.success('数据员工 Skill 已保存，Agent 中的配置已同步');
+    ElMessage.success('数据员工 Skill 已保存，可在客户 Agent 配置中选择');
     return;
   }
 
@@ -358,8 +336,8 @@ function confirmCreateEmployee() {
     description,
     loginUrl,
     loginType: newEmployeeForm.loginType,
-    visibility: newEmployeeForm.visibility,
-    enterpriseIds,
+    group: newEmployeeForm.group,
+    privateToolIds: [...newEmployeeForm.privateToolIds],
     skillVersion: 'v1.0',
     skillUpdated: '刚刚',
     skillFileName: newEmployeeForm.skillFileName,
@@ -369,7 +347,7 @@ function confirmCreateEmployee() {
   selectedEmployeeId.value = employee.id;
   isCreateEmployeeModalOpen.value = false;
   resetNewEmployeeForm();
-  ElMessage.success('Skill 已新增，并加入数据员工 Agent 的加载列表');
+  ElMessage.success('Skill 已新增，请在客户 Agent 配置中按需加载');
 }
 
 function buildValidationEntity(employee: DataEmployee) {
@@ -444,23 +422,14 @@ async function uploadSkill(employee: DataEmployee, event: Event) {
   ElMessage.success(`${employee.name} 的数据映射 skill 已更新`);
 }
 
-function formatSkillVisibility(skill: ManagedSkill) {
-  if (skill.visibility === '全部企业') return '全部企业';
-  const names = skill.enterpriseIds
-    .map((id) => enterpriseOptions.find((enterprise) => enterprise.id === id)?.name)
-    .filter(Boolean);
-  return names.length ? names.join('、') : '未指定企业';
-}
 
 function resetSkillForm() {
   editingSkillId.value = '';
-  pendingEnterpriseId.value = '';
   pendingPrivateToolId.value = '';
   skillForm.name = '';
   skillForm.description = '';
   skillForm.category = '在途专家';
-  skillForm.visibility = '全部企业';
-  skillForm.enterpriseIds = [];
+  skillForm.group = '基础 Skill 组';
   skillForm.privateToolIds = [];
   skillForm.fileName = '';
   skillForm.fileContent = '';
@@ -473,13 +442,11 @@ function openCreateSkillModal() {
 
 function openEditSkillModal(skill: ManagedSkill) {
   editingSkillId.value = skill.id;
-  pendingEnterpriseId.value = '';
   pendingPrivateToolId.value = '';
   skillForm.name = skill.name;
   skillForm.description = skill.description;
   skillForm.category = skill.category;
-  skillForm.visibility = skill.visibility;
-  skillForm.enterpriseIds = [...skill.enterpriseIds];
+  skillForm.group = skill.group;
   skillForm.privateToolIds = [...skill.privateToolIds];
   skillForm.fileName = skill.fileName;
   skillForm.fileContent = skill.content;
@@ -510,16 +477,11 @@ function confirmSkillForm() {
     ElMessage.warning('请输入 Skill 描述');
     return;
   }
-  if (skillForm.visibility === '指定企业' && skillForm.enterpriseIds.length === 0) {
-    ElMessage.warning('请至少选择一个企业');
-    return;
-  }
   if (!skillForm.fileName || !skillForm.fileContent) {
     ElMessage.warning('请上传 Skill 文件');
     return;
   }
 
-  const enterpriseIds = skillForm.visibility === '全部企业' ? [] : [...skillForm.enterpriseIds];
   if (isEditingSkill.value) {
     managedSkills.value = managedSkills.value.map((skill) =>
       skill.id === editingSkillId.value
@@ -528,8 +490,8 @@ function confirmSkillForm() {
             name,
             description,
             category: skillForm.category,
-            visibility: skillForm.visibility,
-            enterpriseIds,
+            group: skillForm.group,
+
             privateToolIds: [...skillForm.privateToolIds],
             fileName: skillForm.fileName,
             content: skillForm.fileContent,
@@ -546,8 +508,8 @@ function confirmSkillForm() {
         name,
         description,
         category: skillForm.category,
-        visibility: skillForm.visibility,
-        enterpriseIds,
+        group: skillForm.group,
+
         privateToolIds: [...skillForm.privateToolIds],
         fileName: skillForm.fileName,
         content: skillForm.fileContent,
@@ -650,7 +612,7 @@ function markTmsCustomerProcessed(customerId: string) {
 </script>
 
 <template>
-  <div class="flex h-screen flex-col overflow-hidden bg-[#f7f7f5] text-slate-900" :class="{ 'ops-catalog-screen': ['agents', 'tools', 'skills'].includes(activeTab) }">
+  <div class="flex h-screen flex-col overflow-hidden bg-[#f7f7f5] text-slate-900" :class="{ 'ops-catalog-screen': ['customers', 'agents', 'tools', 'skills', 'employees'].includes(activeTab) }">
     <header v-if="!agentConfigPageOpen" class="flex h-14 shrink-0 items-center justify-between border-b border-[#deded9] bg-white px-5">
       <div class="flex min-w-0 items-center gap-3">
         <div class="flex h-8 w-8 shrink-0 items-center justify-center rounded-md border border-[#deded9] bg-[#f7f7f5] text-slate-700">
@@ -658,7 +620,7 @@ function markTmsCustomerProcessed(customerId: string) {
         </div>
         <div class="min-w-0">
           <h1 class="truncate text-sm font-semibold leading-5 text-slate-950">智能体运营配置</h1>
-          <p class="truncate text-xs leading-4 text-slate-500">数据员工、标准数据集、Agent、Skill 与 Tool 管理</p>
+          <p class="truncate text-xs leading-4 text-slate-500">客户 Agent 配置、Agent 定义、Skill 与 Tool 管理</p>
         </div>
       </div>
       <button type="button" class="shrink-0 rounded-md border border-[#deded9] px-3 py-1.5 text-xs text-slate-600 hover:bg-[#f7f7f5]" @click="router.push('/index')">
@@ -721,7 +683,7 @@ function markTmsCustomerProcessed(customerId: string) {
               </button>
             </div>
           </div>
-          <div class="flex flex-wrap items-center justify-between gap-2 border-b border-[#e2e2dc] px-4 py-3 text-xs leading-5 text-slate-600"><span>每项配置都是数据员工 Agent 可加载的采集与映射 Skill，新增后自动加入其加载列表。</span><button type="button" class="shrink-0 font-medium underline underline-offset-4" @click="activeTab = 'agents'">查看 Agent 管理</button></div>
+          <div class="flex flex-wrap items-center justify-between gap-2 border-b border-[#e2e2dc] px-4 py-3 text-xs leading-5 text-slate-600"><span>每项配置都是采集与映射 Skill，可在客户 Agent 配置中为数据员工 Agent 按组或逐项选择。</span><button type="button" class="shrink-0 font-medium underline underline-offset-4" @click="activeTab = 'customers'">配置客户 Agent</button></div>
           <div class="min-h-0 flex-1 overflow-auto">
             <table class="w-full table-fixed border-collapse text-left text-sm">
               <thead class="sticky top-0 z-10 bg-[#f7f7f5]">
@@ -744,8 +706,8 @@ function markTmsCustomerProcessed(customerId: string) {
                     <div class="mt-2 max-w-[400px] truncate font-mono text-xs text-slate-500">{{ employee.loginUrl }}</div>
                     <div class="mt-2 flex flex-wrap items-center gap-1.5">
                       <span class="inline-flex rounded-md border px-2 py-0.5 text-xs font-medium" :class="loginTypeClass(employee.loginType)">{{ employee.loginType }}</span>
-                      <span class="inline-flex max-w-[230px] truncate rounded-md border border-[#deded9] bg-white px-2 py-0.5 text-xs text-slate-600" :title="formatEmployeeVisibility(employee)">
-                        {{ employee.visibility === '全部企业' ? '全部企业可见' : `指定企业：${formatEmployeeVisibility(employee)}` }}
+                      <span class="inline-flex max-w-[230px] truncate rounded-md border border-[#deded9] bg-white px-2 py-0.5 text-xs text-slate-600" :title="employee.group">
+                        {{ employee.group }}
                       </span>
                       <span class="text-xs text-slate-400">{{ employee.skillVersion }} · 更新于 {{ employee.skillUpdated }}</span>
                     </div>
@@ -908,8 +870,9 @@ function markTmsCustomerProcessed(customerId: string) {
           </div>
         </section>
 
-        <AgentManagement v-else-if="activeTab === 'agents'" :initial-agent-id="agentToEdit" @editing-change="updateAgentEditing" @manage-data-skills="activeTab = 'employees'" />
-        <ToolManagement v-else-if="activeTab === 'tools'" @edit-skill="openEditSkillModal" @edit-agent="editAgentFromTool" />
+        <CustomerAgentManagement v-else-if="activeTab === 'customers'" :initial-target="customerToEdit" @editing-change="updateAgentEditing" />
+        <AgentManagement v-else-if="activeTab === 'agents'" @editing-change="updateAgentEditing" @manage-customers="activeTab = 'customers'" />
+        <ToolManagement v-else-if="activeTab === 'tools'" @edit-skill="editSkillFromTool" @edit-customer-agent="editCustomerAgentFromTool" />
 
         <section v-else class="flex h-full min-h-0 flex-col overflow-hidden rounded-md border border-[#deded9] bg-white">
           <div class="flex h-12 shrink-0 items-center justify-between border-b border-[#e2e2dc] px-4">
@@ -948,6 +911,7 @@ function markTmsCustomerProcessed(customerId: string) {
                 </select>
                 <span class="shrink-0 text-xs text-slate-500">{{ filteredManagedSkills.length }} / {{ managedSkills.length }} 个</span>
               </div>
+              <select v-model="skillGroupFilter" class="ops-input !w-auto" aria-label="筛选 Skill 分组"><option value="全部">全部分组</option><option v-for="group in skillGroups" :key="group">{{ group }}</option></select>
               <button type="button" class="inline-flex h-9 shrink-0 items-center gap-1.5 rounded-md bg-slate-900 px-3 text-xs font-medium text-white hover:bg-slate-800" @click="openCreateSkillModal">
                 <Icon :svg="strokeIconPaths.plus" :size="14" />
                 添加 Skill
@@ -960,7 +924,7 @@ function markTmsCustomerProcessed(customerId: string) {
                   <tr class="text-xs font-semibold text-slate-500">
                     <th class="w-[18%] px-4 py-3">Skill 名称</th>
                     <th class="w-[10%] px-3 py-3">分类</th>
-                    <th class="w-[15%] px-3 py-3">可见范围</th>
+                    <th class="w-[15%] px-3 py-3">Skill 分组</th>
                     <th class="w-[15%] px-3 py-3">私有工具</th>
                     <th class="w-[15%] px-3 py-3">Skill 文件</th>
                     <th class="w-[12%] px-3 py-3">最后更新</th>
@@ -983,10 +947,7 @@ function markTmsCustomerProcessed(customerId: string) {
                       <span class="inline-flex whitespace-nowrap rounded-md bg-[#f2f2ef] px-2 py-1 text-xs text-slate-600">{{ skill.category }}</span>
                     </td>
                     <td class="px-3 py-3 align-middle">
-                      <div class="text-xs font-medium text-slate-700">{{ skill.visibility }}</div>
-                      <div v-if="skill.visibility === '指定企业'" class="mt-1 text-xs leading-5 text-slate-500" :title="formatSkillVisibility(skill)">
-                        {{ formatSkillVisibility(skill) }}
-                      </div>
+                      <span class="text-xs text-slate-700">{{ skill.group }}</span>
                     </td>
                     <td class="px-3 py-3 align-middle">
                       <button type="button" class="text-xs leading-5 text-slate-700 hover:underline" :aria-label="`配置 ${skill.name} 的私有工具`" @click="openEditSkillModal(skill)">{{ skill.privateToolIds.length }} 个私有工具</button>
@@ -1066,6 +1027,7 @@ function markTmsCustomerProcessed(customerId: string) {
           <div class="mt-5 space-y-5">
             <label class="ops-field">Skill 名称<input v-model.trim="skillForm.name" class="ops-input" placeholder="请输入 Skill 名称" maxlength="80" /></label>
             <label class="ops-field">Skill 分类<select v-model="skillForm.category" class="ops-input"><option v-for="category in skillCategoryOptions.slice(1)" :key="category" :value="category">{{ category }}</option></select></label>
+            <label class="ops-field">Skill 分组<select v-model="skillForm.group" class="ops-input"><option v-for="group in skillGroups" :key="group" :value="group">{{ group }}</option></select><span class="text-xs font-normal text-slate-500">用于客户按组批量选择；修改分组不改变已保存的客户授权。</span></label>
             <label class="ops-field">Skill 描述<textarea v-model.trim="skillForm.description" class="ops-input !h-auto py-2" rows="4" placeholder="描述 Skill 的用途与适用场景" /></label>
             <div>
               <h4 class="mb-2 text-xs font-medium text-slate-700">Skill 文件</h4>
@@ -1077,22 +1039,8 @@ function markTmsCustomerProcessed(customerId: string) {
         </section>
         <div class="min-w-0 space-y-7">
           <section>
-            <div class="flex items-center justify-between gap-2"><h3 class="text-sm font-semibold text-slate-950">企业可见范围</h3><span class="text-xs text-slate-500">{{ skillForm.visibility === '全部企业' ? '全部企业可见' : `已添加 ${skillForm.enterpriseIds.length} 家企业` }}</span></div>
-            <fieldset class="mt-4"><legend class="sr-only">Skill 可见范围</legend><div class="flex flex-wrap gap-5 text-sm text-slate-700"><label v-for="visibility in skillVisibilityOptions" :key="visibility" class="flex cursor-pointer items-center gap-2"><input v-model="skillForm.visibility" type="radio" :value="visibility" />{{ visibility }}可见</label></div></fieldset>
-            <p class="mt-2 text-xs leading-5 text-slate-500">{{ skillForm.visibility === '全部企业' ? '对所有企业开放，后续新增企业也自动可见。' : '逐行添加可见企业，未列出的企业无法选择此 Skill。' }}</p>
-            <template v-if="skillForm.visibility === '指定企业'">
-              <div class="mt-4 overflow-hidden rounded-md border border-[#deded9]">
-                <div class="grid grid-cols-[40px_1fr_auto] gap-2 bg-[#f7f7f5] px-3 py-2 text-xs text-slate-500"><span>序号</span><span>可见企业</span><span>操作</span></div>
-                <div v-for="(id, index) in skillForm.enterpriseIds" :key="id" class="grid grid-cols-[40px_minmax(0,1fr)_auto] items-center gap-2 border-t border-[#ededea] px-3 py-2.5" data-testid="visible-enterprise-row"><span class="text-xs tabular-nums text-slate-500">{{ index + 1 }}</span><div><p class="break-words text-sm text-slate-700">{{ enterpriseName(id) }}</p><p class="mt-0.5 font-mono text-xs text-slate-500">{{ id }}</p></div><button type="button" class="rounded p-1.5 text-slate-500 hover:bg-red-50 hover:text-red-600" :aria-label="`移除企业 ${enterpriseName(id)}`" @click="skillForm.enterpriseIds = skillForm.enterpriseIds.filter((item) => item !== id)"><Icon :svg="strokeIconPaths.trash" :size="15" /></button></div>
-                <p v-if="!skillForm.enterpriseIds.length" class="px-3 py-6 text-center text-xs text-slate-500">尚未添加企业，请在下方逐行添加。</p>
-              </div>
-              <div class="mt-3 flex items-center gap-2"><ElSelect v-model="pendingEnterpriseId" filterable clearable class="min-w-0 flex-1" aria-label="选择可见企业" placeholder="搜索并选择一家企业" :disabled="!availableEnterpriseOptions.length"><ElOption v-for="enterprise in availableEnterpriseOptions" :key="enterprise.id" :label="enterprise.name" :value="enterprise.id" /></ElSelect><button type="button" class="ops-secondary shrink-0" :disabled="!pendingEnterpriseId" @click="addEnterprise"><Icon :svg="strokeIconPaths.plus" :size="14" />添加企业</button></div>
-              <p v-if="!availableEnterpriseOptions.length" class="mt-2 text-xs text-slate-500">当前企业已全部添加；后续新增企业仍需手动添加。</p>
-            </template>
-          </section>
-          <section class="border-t border-[#e2e2dc] pt-6">
             <div class="flex items-center justify-between gap-2"><h3 class="text-sm font-semibold text-slate-950">私有化加载的 Tool</h3><span class="text-xs text-slate-500">已添加 {{ skillForm.privateToolIds.length }} 个</span></div>
-            <p class="mt-2 text-xs leading-5 text-slate-500">添加后，本 Skill 执行时会按需加载这些工具。同一工具可被多个 Skill 私有化加载；Agent 也可独立指定 Tool，实际调用范围由各 Agent 的配置决定。</p>
+            <p class="mt-2 text-xs leading-5 text-slate-500">添加后，本 Skill 执行时会按需加载这些工具。同一工具可被多个 Skill 私有化加载；每个客户也可为 Agent 独立指定 Tool，实际调用范围由客户 Agent 配置决定。</p>
             <div class="mt-4 overflow-hidden rounded-md border border-[#deded9]">
               <div class="grid grid-cols-[minmax(0,1fr)_90px_auto] gap-2 bg-[#f7f7f5] px-3 py-2 text-xs text-slate-500"><span>工具名称 / Description</span><span>工具类型</span><span>操作</span></div>
               <div v-for="id in skillForm.privateToolIds" :key="id" class="grid grid-cols-[minmax(0,1fr)_90px_auto] items-start gap-2 border-t border-[#ededea] px-3 py-3" data-testid="private-tool-row"><div class="min-w-0"><p class="text-sm font-medium text-slate-700">{{ toolName(id) }}</p><p class="mt-1 break-all font-mono text-xs text-slate-500">{{ id }}</p><p class="mt-1 text-xs leading-5 text-slate-500">{{ toolById(id)?.description }}</p></div><span class="pt-0.5 text-xs text-slate-600">{{ toolById(id)?.kind === 'mcp' ? 'MCP 服务' : '代码工具' }}</span><button type="button" class="rounded p-1.5 text-slate-500 hover:bg-red-50 hover:text-red-600" :aria-label="`移除私有工具 ${toolName(id)}`" @click="skillForm.privateToolIds = skillForm.privateToolIds.filter((item) => item !== id)"><Icon :svg="strokeIconPaths.trash" :size="15" /></button></div>
@@ -1125,7 +1073,7 @@ function markTmsCustomerProcessed(customerId: string) {
         </div>
         <div class="flex flex-wrap gap-x-5 gap-y-1 border-b border-[#e2e2dc] px-4 py-3 text-xs text-slate-500">
           <span>分类：<strong class="font-medium text-slate-700">{{ previewingSkill.category }}</strong></span>
-          <span>可见范围：<strong class="font-medium text-slate-700">{{ formatSkillVisibility(previewingSkill) }}</strong></span>
+          <span>Skill 分组：<strong class="font-medium text-slate-700">{{ previewingSkill.group }}</strong></span>
           <span>最后更新：<strong class="font-medium text-slate-700">{{ previewingSkill.updatedAt }} · {{ previewingSkill.updatedBy }}</strong></span>
           <span class="w-full">私有工具：<strong class="font-medium text-slate-700">{{ previewingSkill.privateToolIds.map(toolName).join('、') || '未绑定私有工具' }}</strong></span>
           <p class="w-full pt-1 text-sm leading-5 text-slate-600">{{ previewingSkill.description }}</p>
@@ -1274,7 +1222,7 @@ function markTmsCustomerProcessed(customerId: string) {
     </div>
 
     <div v-if="isCreateEmployeeModalOpen" role="dialog" aria-modal="true" :aria-label="employeeFormTitle" class="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/40 p-6">
-      <div class="flex max-h-[88vh] w-full max-w-[560px] flex-col overflow-hidden rounded-md border border-[#deded9] bg-white shadow-xl">
+      <div class="flex max-h-[88vh] w-full max-w-[760px] flex-col overflow-hidden rounded-md border border-[#deded9] bg-white shadow-xl">
         <div class="flex h-12 shrink-0 items-center justify-between border-b border-[#e2e2dc] px-4">
           <div class="flex items-center gap-2.5">
             <div class="flex h-7 w-7 items-center justify-center rounded-md bg-[#f2f2ef] text-slate-700">
@@ -1325,50 +1273,12 @@ function markTmsCustomerProcessed(customerId: string) {
             </select>
           </label>
 
-          <div>
-            <span class="mb-1.5 block text-xs font-medium text-slate-600">可见范围</span>
-            <div class="grid grid-cols-2 gap-2">
-              <button
-                v-for="visibility in skillVisibilityOptions"
-                :key="visibility"
-                type="button"
-                class="h-10 rounded-md border text-sm font-medium transition"
-                :class="newEmployeeForm.visibility === visibility ? 'border-slate-900 bg-slate-900 text-white' : 'border-[#deded9] bg-[#fbfbfa] text-slate-600 hover:bg-[#f7f7f5]'"
-                @click="newEmployeeForm.visibility = visibility"
-              >
-                {{ visibility }}
-              </button>
-            </div>
-          </div>
-
-          <div v-if="newEmployeeForm.visibility === '指定企业'" class="overflow-hidden rounded-md border border-[#deded9]">
-            <label class="relative block border-b border-[#e2e2dc] bg-[#fbfbfa] p-2">
-              <Icon :svg="strokeIconPaths.search" :size="15" svg-class="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" />
-              <input
-                v-model.trim="employeeEnterpriseSearch"
-                class="h-9 w-full rounded-md border border-[#deded9] bg-white pl-8 pr-3 text-xs outline-none focus:border-slate-400"
-                placeholder="搜索可见企业"
-              />
-            </label>
-            <div class="max-h-[180px] overflow-auto p-2">
-              <button
-                v-for="enterprise in filteredEmployeeEnterpriseOptions"
-                :key="enterprise.id"
-                type="button"
-                class="flex w-full items-center justify-between rounded-md px-2.5 py-2 text-left text-sm text-slate-600 hover:bg-[#f7f7f5]"
-                @click="toggleEmployeeEnterprise(enterprise.id)"
-              >
-                <span>{{ enterprise.name }}</span>
-                <span
-                  class="flex h-4 w-4 items-center justify-center rounded border"
-                  :class="newEmployeeForm.enterpriseIds.includes(enterprise.id) ? 'border-slate-900 bg-slate-900 text-white' : 'border-[#cfcfca] bg-white text-transparent'"
-                >
-                  <Icon :svg="strokeIconPaths.check" :size="11" />
-                </span>
-              </button>
-              <div v-if="filteredEmployeeEnterpriseOptions.length === 0" class="py-5 text-center text-xs text-slate-400">未找到企业</div>
-            </div>
-            <div class="border-t border-[#e2e2dc] bg-[#fbfbfa] px-3 py-2 text-xs text-slate-500">已选择 {{ newEmployeeForm.enterpriseIds.length }} 家企业</div>
+          <label class="ops-field">Skill 分组<select v-model="newEmployeeForm.group" class="ops-input"><option v-for="group in skillGroups" :key="group" :value="group">{{ group }}</option></select></label>
+          <div class="border-t border-[#e2e2dc] pt-4">
+            <h3 class="text-sm font-semibold">私有化加载的 Tool</h3>
+            <p class="mt-2 text-xs leading-5 text-slate-500">随此 Skill 加载，与客户为 Agent 指定的直接工具独立。</p>
+            <ElSelect v-model="newEmployeeForm.privateToolIds" multiple filterable class="mt-3 w-full" aria-label="数据员工 Skill 私有工具" placeholder="选择私有 MCP 服务或代码工具"><ElOption v-for="tool in managedTools" :key="tool.id" :value="tool.id" :label="tool.name" /></ElSelect>
+            <ul class="mt-3 divide-y divide-[#e2e2dc]"><li v-for="id in newEmployeeForm.privateToolIds" :key="id" class="flex items-start justify-between gap-3 py-2 text-xs"><div><strong>{{ toolName(id) }}</strong><p class="mt-1 leading-5 text-slate-500">{{ toolById(id)?.description }}</p></div><button type="button" :aria-label="`移除私有工具 ${toolName(id)}`" @click="newEmployeeForm.privateToolIds = newEmployeeForm.privateToolIds.filter(item => item !== id)">移除</button></li></ul>
           </div>
 
           <div>
