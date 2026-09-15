@@ -50,7 +50,9 @@ export function agentConfigurationFingerprint(agent: AgentLoadConfig, catalog: A
       privateToolIds: sortIds(skill.privateToolIds),
       source: skill.source, sourceConfig: skill.sourceConfig, fileName: skill.fileName,
     })).sort((a, b) => a.id.localeCompare(b.id)),
-    tools: usages.map((usage) => ({ id: usage.id, tool: usage.tool })).sort((a, b) => a.id.localeCompare(b.id)),
+    tools: usages.map(({ id, tool }) => ({ id, tool: tool?.kind === 'mcp'
+      ? { id: tool.id, kind: tool.kind, name: tool.name, description: tool.description, transport: tool.transport, endpoint: tool.endpoint, discovery: tool.discovery, methods: tool.methods }
+      : tool })).sort((a, b) => a.id.localeCompare(b.id)),
   });
 }
 
@@ -99,6 +101,17 @@ function textSimilarity(a: string, b: string) {
 function commonParameters(a: readonly ToolParameter[] = [], b: readonly ToolParameter[] = []) {
   return a.filter((param) => b.some((other) => param.name === other.name && param.type === other.type)).map((param) => `${param.name}: ${param.type}`);
 }
+function schemaParameters(schema?: Readonly<Record<string, unknown>>): ToolParameter[] | undefined {
+  if (!schema) return undefined;
+  const properties = schema.properties;
+  if (!properties || typeof properties !== 'object' || Array.isArray(properties)) return [];
+  return Object.entries(properties).flatMap(([name, value]) => {
+    if (!value || typeof value !== 'object' || !('type' in value)) return [];
+    const type = value.type === 'integer' ? 'number' : value.type;
+    if (!['string', 'number', 'boolean', 'object', 'array'].includes(String(type))) return [];
+    return [{ name, type: type as ToolParameter['type'], required: Array.isArray(schema.required) && schema.required.includes(name), description: '' }];
+  });
+}
 
 export function analyzeAgentConflicts(agent: AgentLoadConfig, catalog: AgentCatalog): AgentConflictReport {
   const findings: AgentFinding[] = [];
@@ -140,16 +153,20 @@ export function analyzeAgentConflicts(agent: AgentLoadConfig, catalog: AgentCata
     }
     const paths = usage.paths.map((path) => `Agent → ${path.label} → ${tool.name}`);
     if (tool.kind === 'mcp') {
-      if (!tool.methods.length) {
+      if (!tool.methods.length && tool.discovery !== 'synced') {
         coverage.push(`MCP「${tool.name}」尚未发现可调用方法，无法检查服务方法的意图与 Schema。`);
         findings.push({ id: `undiscovered-mcp-${tool.id}`, kind: 'configuration', severity: 'review', title: `MCP「${tool.name}」尚未发现方法`, paths,
-          evidence: ['已配置加载此服务，但当前没有可供检查的方法定义。'], suggestion: '连接服务并读取方法与 Schema 后重新检测；当前演示未接入真实服务。' });
-      } else coverage.push(`MCP「${tool.name}」的 ${tool.methods.length} 个方法未声明输入、输出 Schema，已检查方法名称、描述与加载路径。`);
+          evidence: ['已配置加载此服务，但当前没有可供检查的方法定义。'], suggestion: '在 Tool 管理中同步工具与 Schema 后重新检测。' });
+      } else if (!tool.methods.length) coverage.push(`MCP「${tool.name}」最近同步返回 0 个工具，当前没有可调用的服务工具。`);
+      else {
+        const withSchema = tool.methods.filter(method => method.inputSchema).length;
+        coverage.push(`MCP「${tool.name}」的 ${tool.methods.length} 个工具中，${withSchema} 个提供输入 Schema。检查名称、描述、加载路径及 Schema 顶层参数；复杂嵌套约束需人工复核。`);
+      }
     }
     if (tool.kind === 'code') {
       candidates.push({ id: `tool:${tool.id}`, ownerId: tool.id, label: `Tool「${tool.name}」`, description: `${tool.name} ${tool.description}`, inputs: tool.inputs, outputs: tool.outputs, paths });
     } else {
-      for (const method of tool.methods) candidates.push({ id: `tool:${tool.id}:${method.name}`, ownerId: tool.id, label: `${tool.name} / ${method.name}`, description: `${method.name} ${method.description}`, paths: paths.map((path) => `${path} / ${method.name}`) });
+      for (const method of tool.methods) candidates.push({ id: `tool:${tool.id}:${method.name}`, ownerId: tool.id, label: `${tool.name} / ${method.name}`, description: `${method.name} ${method.description}`, inputs: schemaParameters(method.inputSchema), outputs: schemaParameters(method.outputSchema), paths: paths.map((path) => `${path} / ${method.name}`) });
     }
   }
   for (let i = 0; i < candidates.length; i++) {
@@ -187,6 +204,6 @@ export function analyzeAgentConflicts(agent: AgentLoadConfig, catalog: AgentCata
     fingerprint: agentConfigurationFingerprint(agent, catalog), checkedAt: new Date().toLocaleString('zh-CN', { hour12: false }),
     findings: findings.sort((a, b) => Number(b.severity === 'high') - Number(a.severity === 'high')),
     coverage, skillCount: activeSkills.length, toolCount: usages.filter((usage) => usage.tool).length,
-    candidateCount: candidates.length, schemaCount: usages.filter((usage) => usage.tool?.kind === 'code').length,
+    candidateCount: candidates.length, schemaCount: candidates.filter(candidate => candidate.inputs !== undefined).length,
   };
 }

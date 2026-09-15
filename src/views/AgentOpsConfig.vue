@@ -6,8 +6,8 @@ import { Icon } from '@packages/icon';
 import { ElDialog, ElMessage, ElMessageBox, ElOption, ElSelect } from 'element-plus';
 
 import { agentWorkData } from '@/pinia/agentWork';
-import { commonSkillGroups, skillGroups, useAgentOpsStore } from '@/pinia/agentOps';
-import type { AgentCallableSkill, CommonSkillGroup, ManagedSkill, SkillCategory, SkillGroup } from '@/pinia/agentOps';
+import { commonSkillGroups, useAgentOpsStore } from '@/pinia/agentOps';
+import type { AgentCallableSkill, CommonSkillGroup, ManagedSkill, SkillCategory } from '@/pinia/agentOps';
 import { dataEmployeeSkillGroup } from '@/pinia/dataEmployeeSkills';
 import type { DataEmployeeSkill as DataEmployee, LoginType } from '@/pinia/dataEmployeeSkills';
 import ToolManagement from './AgentOps/ToolManagement.vue';
@@ -84,7 +84,7 @@ const validationForm = reactive({
 });
 const validationResult = ref<ValidationResult | null>(null);
 const skillSearch = ref('');
-const skillGroupFilter = ref<'全部' | SkillGroup>('全部');
+const skillGroupFilter = ref<'全部' | CommonSkillGroup>('全部');
 const skillCategoryFilter = ref<'全部' | SkillCategory>('全部');
 const pendingPrivateToolId = ref('');
 const skillForm = reactive({
@@ -104,7 +104,7 @@ const menuItems = computed<Array<{ badge?: number; desc: string; icon: string; i
   { id: 'employees', label: '数据员工配置', desc: '数据员工 Agent 的采集与映射 Skill', icon: strokeIconPaths.bot },
   { id: 'tmsCustomers', label: 'TMS同步客户', desc: '客户提交、连接处理', icon: strokeIconPaths.usersRound, badge: store.unprocessedTmsSyncCustomerCount },
   { id: 'agents', label: 'Agent 管理', desc: 'System Prompt、默认能力配置', icon: strokeIconPaths.bot },
-  { id: 'tools', label: 'Tool 管理', desc: 'MCP 服务、代码工具、加载范围', icon: strokeIconPaths.waypoints },
+  { id: 'tools', label: 'Tool 管理', desc: 'MCP 服务、内置API工具、加载范围', icon: strokeIconPaths.waypoints },
   { id: 'skills', label: 'Skill 管理', desc: '通用技能、分组、私有工具', icon: strokeIconPaths.settings },
 ]);
 const skillCategoryOptions: Array<'全部' | SkillCategory> = ['全部', '在途专家', '经营分析参谋', '运营助手', '运力与货源'];
@@ -124,14 +124,7 @@ const filteredManagedSkills = computed(() => {
     return matchesCategory && matchesSearch && (skillGroupFilter.value === '全部' || skill.group === skillGroupFilter.value);
   });
 });
-const isDataEmployeeGroup = computed(() => skillGroupFilter.value === dataEmployeeSkillGroup);
-const filteredDataEmployeeSkills = computed(() => {
-  const search = skillSearch.value.trim().toLowerCase();
-  return dataEmployees.value.filter((skill) => !search || `${skill.name} ${skill.description} ${skill.skillFileName}`.toLowerCase().includes(search));
-});
-const skillListCount = computed(() => isDataEmployeeGroup.value
-  ? `${filteredDataEmployeeSkills.value.length} / ${dataEmployees.value.length}`
-  : `${filteredManagedSkills.value.length} / ${managedSkills.value.length}`);
+const skillListCount = computed(() => `${filteredManagedSkills.value.length} / ${managedSkills.value.length}`);
 const availablePrivateTools = computed(() => managedTools.value.filter((tool) => !skillForm.privateToolIds.includes(tool.id)));
 function toolName(id: string) {
   return managedTools.value.find((tool) => tool.id === id)?.name ?? id;
@@ -793,7 +786,6 @@ function markTmsCustomerProcessed(customerId: string) {
               </label>
               <select
                 v-model="skillCategoryFilter"
-                :disabled="isDataEmployeeGroup"
                 aria-label="筛选 Skill 分类"
                 class="h-9 rounded-md border border-[#deded9] bg-[#fbfbfa] px-3 text-xs text-slate-600 outline-none focus:border-slate-400"
               >
@@ -801,30 +793,14 @@ function markTmsCustomerProcessed(customerId: string) {
               </select>
               <span class="shrink-0 text-xs text-slate-500">{{ skillListCount }} 个</span>
             </div>
-            <select v-model="skillGroupFilter" class="ops-input !w-auto" aria-label="筛选 Skill 分组"><option value="全部">通用 Skill · 全部分组</option><option v-for="group in skillGroups" :key="group">{{ group }}</option></select>
-            <button v-if="isDataEmployeeGroup" type="button" class="ops-primary" @click="activeTab = 'employees'">管理数据员工 Skill</button>
-            <button v-else type="button" class="inline-flex h-9 shrink-0 items-center gap-1.5 rounded-md bg-slate-900 px-3 text-xs font-medium text-white hover:bg-slate-800" @click="openCreateSkillModal">
+            <select v-model="skillGroupFilter" class="ops-input !w-auto" aria-label="筛选 Skill 分组"><option value="全部">通用 Skill · 全部分组</option><option v-for="group in commonSkillGroups" :key="group">{{ group }}</option></select>
+            <button type="button" class="inline-flex h-9 shrink-0 items-center gap-1.5 rounded-md bg-slate-900 px-3 text-xs font-medium text-white hover:bg-slate-800" @click="openCreateSkillModal">
               <Icon :svg="strokeIconPaths.plus" :size="14" />
               添加 Skill
             </button>
           </div>
 
-          <div v-if="isDataEmployeeGroup" class="min-h-0 flex-1 overflow-auto">
-            <p class="border-b border-[#e2e2dc] bg-[#fbfbfa] px-4 py-3 text-xs leading-5 text-slate-600">此组收录数据员工配置中的全部 Skill，分组按来源自动确定。可在客户 Agent 配置中按组筛选、批量添加。</p>
-            <ul class="divide-y divide-[#ededea]" aria-label="数据员工 Skill 分组列表">
-              <li v-for="employee in filteredDataEmployeeSkills" :key="employee.id" class="flex items-start justify-between gap-4 px-4 py-4">
-                <div class="min-w-0">
-                  <h3 class="text-sm font-medium text-slate-950">{{ employee.name }}</h3>
-                  <p class="mt-1 text-xs leading-5 text-slate-600">{{ employee.description }}</p>
-                  <p class="mt-2 break-all font-mono text-xs text-slate-500">{{ employee.skillFileName }}</p>
-                  <p class="mt-2 text-xs text-slate-500">{{ employee.group }} · 私有工具 {{ employee.privateToolIds.length }} 个</p>
-                </div>
-                <button type="button" class="ops-secondary shrink-0" :aria-label="`配置 ${employee.name}`" @click="openEditEmployeeModal(employee)">配置</button>
-              </li>
-            </ul>
-            <div v-if="!filteredDataEmployeeSkills.length" class="flex h-40 items-center justify-center text-sm text-slate-500">未找到符合条件的数据员工 Skill</div>
-          </div>
-          <div v-else class="min-h-0 flex-1 overflow-auto">
+          <div class="min-h-0 flex-1 overflow-auto">
             <table class="w-full min-w-[1120px] table-fixed border-collapse text-left text-sm">
               <thead class="sticky top-0 z-10 bg-[#f7f7f5]">
                 <tr class="text-xs font-semibold text-slate-500">
@@ -927,11 +903,11 @@ function markTmsCustomerProcessed(customerId: string) {
             <p class="mt-2 text-xs leading-5 text-slate-500">添加后，本 Skill 执行时会按需加载这些工具。同一工具可被多个 Skill 私有化加载；每个客户也可为 Agent 独立指定 Tool，实际调用范围由客户 Agent 配置决定。</p>
             <div class="mt-4 overflow-hidden rounded-md border border-[#deded9]">
               <div class="grid grid-cols-[minmax(0,1fr)_90px_auto] gap-2 bg-[#f7f7f5] px-3 py-2 text-xs text-slate-500"><span>工具名称 / Description</span><span>工具类型</span><span>操作</span></div>
-              <div v-for="id in skillForm.privateToolIds" :key="id" class="grid grid-cols-[minmax(0,1fr)_90px_auto] items-start gap-2 border-t border-[#ededea] px-3 py-3" data-testid="private-tool-row"><div class="min-w-0"><p class="text-sm font-medium text-slate-700">{{ toolName(id) }}</p><p class="mt-1 break-all font-mono text-xs text-slate-500">{{ id }}</p><p class="mt-1 text-xs leading-5 text-slate-500">{{ toolById(id)?.description }}</p></div><span class="pt-0.5 text-xs text-slate-600">{{ toolById(id)?.kind === 'mcp' ? 'MCP 服务' : '代码工具' }}</span><button type="button" class="rounded p-1.5 text-slate-500 hover:bg-red-50 hover:text-red-600" :aria-label="`移除私有工具 ${toolName(id)}`" @click="skillForm.privateToolIds = skillForm.privateToolIds.filter((item) => item !== id)"><Icon :svg="strokeIconPaths.trash" :size="15" /></button></div>
+              <div v-for="id in skillForm.privateToolIds" :key="id" class="grid grid-cols-[minmax(0,1fr)_90px_auto] items-start gap-2 border-t border-[#ededea] px-3 py-3" data-testid="private-tool-row"><div class="min-w-0"><p class="text-sm font-medium text-slate-700">{{ toolName(id) }}</p><p class="mt-1 break-all font-mono text-xs text-slate-500">{{ id }}</p><p class="mt-1 text-xs leading-5 text-slate-500">{{ toolById(id)?.description }}</p></div><span class="pt-0.5 text-xs text-slate-600">{{ toolById(id)?.kind === 'mcp' ? 'MCP 服务' : '内置API工具' }}</span><button type="button" class="rounded p-1.5 text-slate-500 hover:bg-red-50 hover:text-red-600" :aria-label="`移除私有工具 ${toolName(id)}`" @click="skillForm.privateToolIds = skillForm.privateToolIds.filter((item) => item !== id)"><Icon :svg="strokeIconPaths.trash" :size="15" /></button></div>
               <p v-if="!skillForm.privateToolIds.length" class="px-3 py-6 text-center text-xs leading-5 text-slate-500">尚未添加私有工具，请从下方工具目录中选择。</p>
             </div>
             <div class="mt-3 flex items-center gap-2"><ElSelect v-model="pendingPrivateToolId" filterable clearable class="min-w-0 flex-1" aria-label="选择私有工具" placeholder="搜索并选择一个私有工具" :disabled="!availablePrivateTools.length"><ElOption v-for="tool in availablePrivateTools" :key="tool.id" :label="`${tool.name} · ${tool.kind === 'mcp' ? 'MCP' : '代码'}`" :value="tool.id" /></ElSelect><button type="button" class="ops-secondary shrink-0" :disabled="!pendingPrivateToolId" @click="addPrivateTool"><Icon :svg="strokeIconPaths.plus" :size="14" />添加 Tool</button></div>
-            <p class="mt-2 text-xs leading-5 text-slate-500">{{ availablePrivateTools.length ? '可选择所有尚未添加的 MCP 服务和代码工具。' : '所有工具均已添加。' }}</p>
+            <p class="mt-2 text-xs leading-5 text-slate-500">{{ availablePrivateTools.length ? '可选择所有尚未添加的 MCP 服务和内置API工具。' : '所有工具均已添加。' }}</p>
           </section>
         </div>
       </form>
@@ -1161,7 +1137,7 @@ function markTmsCustomerProcessed(customerId: string) {
           <div class="border-t border-[#e2e2dc] pt-4">
             <h3 class="text-sm font-semibold">私有化加载的 Tool</h3>
             <p class="mt-2 text-xs leading-5 text-slate-500">随此 Skill 加载，与客户为 Agent 指定的直接工具独立。</p>
-            <ElSelect v-model="newEmployeeForm.privateToolIds" multiple filterable class="mt-3 w-full" aria-label="数据员工 Skill 私有工具" placeholder="选择私有 MCP 服务或代码工具"><ElOption v-for="tool in managedTools" :key="tool.id" :value="tool.id" :label="tool.name" /></ElSelect>
+            <ElSelect v-model="newEmployeeForm.privateToolIds" multiple filterable class="mt-3 w-full" aria-label="数据员工 Skill 私有工具" placeholder="选择私有 MCP 服务或内置API工具"><ElOption v-for="tool in managedTools" :key="tool.id" :value="tool.id" :label="tool.name" /></ElSelect>
             <ul class="mt-3 divide-y divide-[#e2e2dc]"><li v-for="id in newEmployeeForm.privateToolIds" :key="id" class="flex items-start justify-between gap-3 py-2 text-xs"><div><strong>{{ toolName(id) }}</strong><p class="mt-1 leading-5 text-slate-500">{{ toolById(id)?.description }}</p></div><button type="button" :aria-label="`移除私有工具 ${toolName(id)}`" @click="newEmployeeForm.privateToolIds = newEmployeeForm.privateToolIds.filter(item => item !== id)">移除</button></li></ul>
           </div>
 

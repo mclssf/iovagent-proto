@@ -11,7 +11,9 @@ import { loadAgentRegistry, loadCodeToolRegistry, parseAgentRegistry, parseCodeT
 import { normalizeMcpConfig } from '@/views/AgentOps/mcpConfig';
 import { createActivatedCustomers, defaultAgentBinding } from './customerAgents';
 import type { CustomerAgentBinding } from './customerAgents';
-import type { McpConfig, McpKeyValue } from '@/views/AgentOps/mcpConfig';
+import type { McpConfig } from '@/views/AgentOps/mcpConfig';
+import { inspectMcpServer } from '@/views/AgentOps/mcpConnection';
+import type { McpInspector, McpMethod } from '@/views/AgentOps/mcpConnection';
 
 export type AgentRole = 'data-employee' | 'general-chat' | 'project-chat' | 'custom';
 export const agentRoleDescriptions: Record<AgentRole, string> = {
@@ -81,19 +83,21 @@ export interface CodeTool extends ToolBase {
   inputs: ToolParameter[];
   outputs: ToolParameter[];
 }
-export interface McpTool extends ToolBase {
+export interface McpTool extends ToolBase, McpConfig {
   kind: 'mcp';
-  transport: 'Streamable HTTP';
-  endpoint: string;
   version: string;
+  protocolVersion: string;
   provider: string;
-  auth: '无需认证' | 'Bearer Token' | 'OAuth 2.0' | '自定义请求头';
-  timeout: number;
-  bearerTokenEnvVar: string;
-  headers: McpKeyValue[];
-  envHeaders: McpKeyValue[];
-  discovery: 'demo' | 'pending';
-  methods: { name: string; description: string }[];
+  discovery: 'demo' | 'pending' | 'synced';
+  methods: McpMethod[];
+  activity: 'idle' | 'testing' | 'syncing';
+  connectionStatus: 'unknown' | 'connected' | 'error';
+  connectionResult: string;
+  lastTestedAt: string;
+  syncStatus: 'never' | 'success' | 'error';
+  syncResult: string;
+  lastSyncedAt: string;
+  lastSyncAttemptAt: string;
 }
 export type ManagedTool = DeepReadonly<CodeTool | McpTool>;
 
@@ -185,12 +189,14 @@ function createSkills(): ManagedSkill[] {
 }
 
 const updatedAt = '2026-09-08 10:00';
+const emptyMcpStatus = () => ({ protocolVersion: '', activity: 'idle' as const, connectionStatus: 'unknown' as const, connectionResult: '', lastTestedAt: '', syncStatus: 'never' as const, syncResult: '', lastSyncedAt: '', lastSyncAttemptAt: '' });
+const mcpTimestamp = () => new Date().toLocaleString('sv-SE', { hour12: false });
 function createMcpTools(): McpTool[] {
   const mcp = (id: string, name: string, description: string, methods: McpTool['methods']): McpTool => ({
     id, name, description, methods, kind: 'mcp', updatedAt,
     transport: 'Streamable HTTP', endpoint: `https://${id}.example.com/mcp`,
-    version: '1.0.0', provider: '大卡物流平台', auth: 'Bearer Token', timeout: 30,
-    bearerTokenEnvVar: 'MCP_BEARER_TOKEN', headers: [], envHeaders: [], discovery: 'demo',
+    version: '', provider: '大卡物流平台', auth: '无需认证', timeout: 30,
+    bearerToken: '', headers: [], discovery: 'demo', ...emptyMcpStatus(),
   });
   return [
     mcp('vehicle-mcp', '车辆与轨迹服务', '提供车辆最新定位、历史轨迹、停靠事件与线路查询能力。', [
@@ -236,6 +242,7 @@ export const useAgentOpsStore = defineStore('agentOps', () => {
   ]);
   const codeTools = ref(parseCodeToolRegistry(codeRegistry));
   const mcpServices = ref(createMcpTools());
+  const mcpOperations = new Map<string, AbortController>();
   const tools = readonly(computed<ManagedTool[]>(() => [...mcpServices.value, ...codeTools.value]));
   const agents = ref<ManagedAgent[]>(parseAgentRegistry(agentRegistry));
   const configuredAgentIds = ref<string[]>([]);
@@ -289,7 +296,7 @@ export const useAgentOpsStore = defineStore('agentOps', () => {
       const removed = codeTools.value.filter((tool) => !incoming.some((item) => item.id === tool.id)).length;
       codeTools.value = incoming;
       codeToolSync.value.lastSyncedAt = new Date().toLocaleString('zh-CN', { hour12: false });
-      codeToolSync.value.summary = `已读取 ${incoming.length} 个代码工具，新增 ${added} 个、移除 ${removed} 个。加载配置保留${removed ? '；失效引用可在 Agent 冲突检测中查看' : ''}。`;
+      codeToolSync.value.summary = `已读取 ${incoming.length} 个内置API工具，新增 ${added} 个、移除 ${removed} 个。加载配置保留${removed ? '；失效引用可在 Agent 冲突检测中查看' : ''}。`;
       return incoming.length;
     } catch (error) {
       codeToolSync.value.error = error instanceof Error ? error.message : '同步失败，请重试。';
@@ -300,15 +307,17 @@ export const useAgentOpsStore = defineStore('agentOps', () => {
   function saveMcp(config: McpConfig, id?: string) {
     const value = normalizeMcpConfig(config);
     const current = mcpServices.value.find((tool) => tool.id === id);
-    if (id && !current) throw new Error('MCP 服务不存在，代码工具不能在页面中编辑。');
+    if (id && !current) throw new Error('MCP 服务不存在，内置API工具不能在页面中编辑。');
     if (mcpServices.value.some((tool) => tool.id !== id && tool.name === value.name)) throw new Error('MCP 名称已存在，请使用其他名称。');
-    const connection = (tool: McpConfig) => JSON.stringify([tool.transport, tool.endpoint, tool.bearerTokenEnvVar, tool.headers, tool.envHeaders]);
+    const connection = (tool: McpConfig) => JSON.stringify([tool.transport, tool.endpoint, tool.auth, tool.bearerToken, tool.headers, tool.timeout]);
     const connectionChanged = !current || connection(current) !== connection(value);
+    if (id && connectionChanged) { mcpOperations.get(id)?.abort(); mcpOperations.delete(id); }
     const record: McpTool = {
+      ...(current ?? emptyMcpStatus()),
       ...value, id: current?.id ?? `mcp-${crypto.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(16).slice(2)}`}`, kind: 'mcp',
       provider: current?.provider ?? '运营配置', version: connectionChanged ? '' : current.version,
-      auth: value.bearerTokenEnvVar ? 'Bearer Token' : value.headers.length || value.envHeaders.length ? '自定义请求头' : '无需认证',
       methods: connectionChanged ? [] : current.methods, discovery: connectionChanged ? 'pending' : current.discovery,
+      ...(connectionChanged ? emptyMcpStatus() : {}),
       updatedAt: new Date().toLocaleString('zh-CN', { hour12: false }),
     };
     const index = mcpServices.value.findIndex((tool) => tool.id === record.id);
@@ -316,11 +325,60 @@ export const useAgentOpsStore = defineStore('agentOps', () => {
     else mcpServices.value[index] = record;
     return record;
   }
+  async function runMcpOperation(id: string, listTools: boolean, inspect: McpInspector = inspectMcpServer) {
+    const service = mcpServices.value.find(tool => tool.id === id);
+    if (!service) throw new Error('MCP 服务不存在。');
+    if (mcpOperations.has(id)) return false;
+    const controller = new AbortController();
+    mcpOperations.set(id, controller);
+    const current = () => mcpOperations.get(id) === controller ? mcpServices.value.find(tool => tool.id === id) : undefined;
+    service.activity = listTools ? 'syncing' : 'testing';
+    service.connectionResult = '';
+    if (listTools) service.lastSyncAttemptAt = mcpTimestamp();
+    let connected = false;
+    try {
+      const result = await inspect({ ...service, headers: service.headers.map(row => ({ ...row })) }, { listTools, signal: controller.signal, onConnected: info => {
+        const target = current();
+        if (!target) return;
+        connected = true;
+        Object.assign(target, { protocolVersion: info.protocolVersion, version: info.serverVersion, provider: info.provider, connectionStatus: 'connected', connectionResult: '初始化成功', lastTestedAt: mcpTimestamp() });
+      } });
+      const target = current();
+      if (!target) return false;
+      if (listTools) {
+        if (!result.methods) throw new Error('服务未返回工具定义，本次同步未应用。');
+        const previous = new Map(target.methods.map(method => [method.name, JSON.stringify(method)]));
+        const added = result.methods.filter(method => !previous.has(method.name)).length;
+        const changed = result.methods.filter(method => previous.has(method.name) && previous.get(method.name) !== JSON.stringify(method)).length;
+        const removed = target.methods.filter(method => !result.methods!.some(next => next.name === method.name)).length;
+        target.methods = JSON.parse(JSON.stringify(result.methods));
+        target.discovery = 'synced';
+        target.syncStatus = 'success';
+        target.lastSyncedAt = mcpTimestamp();
+        target.syncResult = `同步成功 · ${result.methods.length} 个工具，新增 ${added}、更新 ${changed}、移除 ${removed}`;
+      }
+      return true;
+    } catch (cause) {
+      const target = current();
+      if (!target) return false;
+      const message = cause instanceof Error ? cause.message : '操作失败，请重试。';
+      if (!connected) { target.connectionStatus = 'error'; target.connectionResult = message; target.lastTestedAt = mcpTimestamp(); }
+      if (listTools) { target.syncStatus = 'error'; target.syncResult = `同步失败：${message} 已保留原工具列表。`; }
+      return false;
+    } finally {
+      const target = current();
+      if (target) { target.activity = 'idle'; mcpOperations.delete(id); }
+    }
+  }
+  const testMcpConnection = (id: string, inspect?: McpInspector) => runMcpOperation(id, false, inspect);
+  const syncMcpTools = (id: string, inspect?: McpInspector) => runMcpOperation(id, true, inspect);
   function mcpUsage(id: string) {
     return { skills: skillsForTool(id), agents: customerAgentsForTool(id), defaults: agentsUsingToolByDefault(id) };
   }
   function deleteMcp(id: string) {
-    if (!mcpServices.value.some((tool) => tool.id === id)) throw new Error('MCP 服务不存在，代码工具不能在页面中删除。');
+    if (!mcpServices.value.some((tool) => tool.id === id)) throw new Error('MCP 服务不存在，内置API工具不能在页面中删除。');
+    mcpOperations.get(id)?.abort();
+    mcpOperations.delete(id);
     mcpServices.value = mcpServices.value.filter((tool) => tool.id !== id);
     skills.value.forEach((skill) => { skill.privateToolIds = skill.privateToolIds.filter((toolId) => toolId !== id); });
     dataEmployeeSkills.value.forEach((skill) => { skill.privateToolIds = skill.privateToolIds.filter((toolId) => toolId !== id); });
@@ -445,5 +503,5 @@ export const useAgentOpsStore = defineStore('agentOps', () => {
   return { skills, dataEmployeeSkills, agentCallableSkills, availableSkillsForAgent, saveDataEmployeeSkill, tools, agents,
     agentDefaultConfig, customerAgentBindings, resolveAgentCapabilities, resolveAgentSystemPrompt, defaultFollowers, agentsUsingToolByDefault,
     customers, customerReports, saveCustomerAgents, resolveCustomerAgent, detectCustomerAgentConflicts,
-    saveAgent, skillsForTool, customerAgentsForTool, getToolLoading, agentSync, codeToolSync, syncAgents, syncCodeTools, saveMcp, deleteMcp, mcpUsage };
+    saveAgent, skillsForTool, customerAgentsForTool, getToolLoading, agentSync, codeToolSync, syncAgents, syncCodeTools, saveMcp, deleteMcp, mcpUsage, testMcpConnection, syncMcpTools };
 });

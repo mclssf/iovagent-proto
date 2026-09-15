@@ -7,17 +7,20 @@ import type { AgentCallableSkill, ManagedTool, ToolKind } from '@/pinia/agentOps
 import type { CustomerAgentTarget } from '@/pinia/customerAgents';
 import { strokeIconPaths } from '../AgentWork/strokeIconPaths';
 import McpServiceForm from './McpServiceForm.vue';
+import McpServiceStatus from './McpServiceStatus.vue';
+import McpToolsDialog from './McpToolsDialog.vue';
 import { sensitiveHeader } from './mcpConfig';
 
-type LoadingFilter = 'all' | 'direct' | 'private' | 'unloaded';
 const emit = defineEmits<{ editSkill: [skill: AgentCallableSkill]; editCustomerAgent: [target: CustomerAgentTarget] }>();
 const store = useAgentOpsStore();
 const tab = ref<ToolKind>('mcp');
 const search = ref('');
-const loadingFilter = ref<LoadingFilter>('all');
 const selectedToolId = ref('');
 const selectedTool = computed(() => store.tools.find((tool) => tool.id === selectedToolId.value));
 const detailOpen = ref(false);
+const toolsDialogOpen = ref(false);
+const toolsServiceId = ref('');
+const toolsService = computed(() => { const tool = store.tools.find(item => item.id === toolsServiceId.value); return tool?.kind === 'mcp' ? tool : undefined; });
 const serviceFormOpen = ref(false);
 const editingServiceId = ref('');
 const deleteOpen = ref(false);
@@ -25,15 +28,19 @@ const deletingServiceId = ref('');
 const deletingService = computed(() => store.tools.find((tool) => tool.id === deletingServiceId.value));
 const deleteUsage = computed(() => store.mcpUsage(deletingServiceId.value));
 const deleteError = ref('');
-const kinds: { id: ToolKind; label: string }[] = [{ id: 'mcp', label: 'MCP 服务' }, { id: 'code', label: '代码工具' }];
+const kinds: { id: ToolKind; label: string }[] = [{ id: 'mcp', label: 'MCP 服务' }, { id: 'code', label: '内置API工具' }];
 const filteredTools = computed(() => store.tools.filter((tool) => {
   const query = search.value.trim().toLowerCase();
-  const skills = store.skillsForTool(tool.id).map((skill) => skill.name).join(' ');
-  const customers = [...store.customerAgentsForTool(tool.id), ...store.agentsUsingToolByDefault(tool.id)].map(item => item.name).join(' ');
-  const loading = store.getToolLoading(tool.id);
-  return tool.kind === tab.value && (loadingFilter.value === 'all' || loading[loadingFilter.value])
-    && (!query || `${tool.name} ${tool.id} ${tool.description} ${skills} ${customers}`.toLowerCase().includes(query));
+  return tool.kind === tab.value
+    && (!query || `${tool.name} ${tool.id} ${tool.description}`.toLowerCase().includes(query));
 }));
+const filteredMcps = computed(() => filteredTools.value.filter(tool => tool.kind === 'mcp'));
+const filteredCodeTools = computed(() => filteredTools.value.filter(tool => tool.kind === 'code'));
+function viewMcpTools(id: string) {
+  toolsServiceId.value = id;
+  detailOpen.value = false;
+  toolsDialogOpen.value = true;
+}
 function showTool(tool: ManagedTool) {
   selectedToolId.value = tool.id;
   detailOpen.value = true;
@@ -74,7 +81,7 @@ async function syncCodeTools() {
 <template>
   <section class="tool-management flex h-full min-h-0 flex-col overflow-hidden rounded-md border border-[#deded9] bg-white">
     <div class="flex shrink-0 flex-wrap items-center justify-between gap-3 border-b border-[#e2e2dc] px-5 py-4">
-      <div><h2 class="text-base font-semibold">Tool 管理</h2><p class="mt-1 text-xs leading-5 text-slate-500">{{ tab === 'mcp' ? '管理 MCP 服务连接，查看客户 Agent 和 Skill 加载关系。' : '同步工程中定义的代码工具，查看属性和加载关系。工具定义只读。' }}</p></div>
+      <div><h2 class="text-base font-semibold">Tool 管理</h2><p class="mt-1 text-xs leading-5 text-slate-500">{{ tab === 'mcp' ? '管理 MCP 服务连接，测试连接并同步工具定义。' : '同步工程中定义的内置API工具，工具定义只读。' }}</p></div>
       <button v-if="tab === 'mcp'" type="button" class="ops-primary" @click="editService()"><Icon :svg="strokeIconPaths.plus" :size="15" />新增 MCP 服务</button>
       <button v-else type="button" class="ops-primary" :disabled="store.codeToolSync.busy" @click="syncCodeTools"><Icon :svg="strokeIconPaths.refresh" :size="15" />{{ store.codeToolSync.busy ? '同步中…' : '现在同步' }}</button>
     </div>
@@ -83,43 +90,30 @@ async function syncCodeTools() {
         {{ kind.label }}<span class="ml-2 text-xs tabular-nums text-slate-500">{{ store.tools.filter((tool) => tool.kind === kind.id).length }}</span>
       </button>
     </div>
-    <div v-if="tab === 'code'" class="ops-sync-status" :class="{ 'is-error': store.codeToolSync.error }" :role="store.codeToolSync.error ? 'alert' : 'status'" aria-live="polite"><span>{{ store.codeToolSync.error || store.codeToolSync.summary || '同步读取演示工程中的最新代码工具，保留加载配置。' }}</span><span v-if="store.codeToolSync.lastSyncedAt">上次成功同步：{{ store.codeToolSync.lastSyncedAt }}</span></div>
+    <div v-if="tab === 'code'" class="ops-sync-status" :class="{ 'is-error': store.codeToolSync.error }" :role="store.codeToolSync.error ? 'alert' : 'status'" aria-live="polite"><span>{{ store.codeToolSync.error || store.codeToolSync.summary || '同步读取演示工程中的最新内置API工具，保留加载配置。' }}</span><span v-if="store.codeToolSync.lastSyncedAt">上次成功同步：{{ store.codeToolSync.lastSyncedAt }}</span></div>
     <div class="flex shrink-0 flex-wrap items-center gap-3 border-b border-[#e2e2dc] px-5 py-3">
-      <label class="relative w-full min-w-0 sm:max-w-[360px] sm:flex-1"><Icon :svg="strokeIconPaths.search" :size="15" svg-class="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" /><input v-model="search" class="ops-input ops-search" aria-label="搜索 Tool" placeholder="搜索工具、客户、Agent 或 Skill" /></label>
-      <select v-model="loadingFilter" class="ops-input !w-auto" aria-label="筛选加载方式"><option value="all">全部加载方式</option><option value="direct">Agent 直接加载</option><option value="private">私有化加载</option><option value="unloaded">未配置加载</option></select>
+      <label class="relative w-full min-w-0 sm:max-w-[360px] sm:flex-1"><Icon :svg="strokeIconPaths.search" :size="15" svg-class="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" /><input v-model="search" class="ops-input ops-search" aria-label="搜索 Tool" placeholder="搜索名称、ID 或描述" /></label>
       <span class="text-xs text-slate-500">{{ filteredTools.length }} 个{{ tab === 'mcp' ? '服务' : '工具' }}</span>
     </div>
     <div class="min-h-0 flex-1 overflow-auto">
-      <table class="tool-table min-w-[850px]">
-        <thead><tr><th class="w-[27%]">{{ tab === 'mcp' ? 'MCP 服务 / Description' : '工具名称 / Description' }}</th><th class="w-[25%]">{{ tab === 'mcp' ? '服务属性' : '输入 / 输出参数' }}</th><th class="w-[14%]">加载方式</th><th class="w-[25%]">关联的客户 Agent / Skill</th><th>操作</th></tr></thead>
+      <div v-if="tab === 'mcp'" class="mcp-service-grid">
+        <article v-for="service in filteredMcps" :key="service.id" class="mcp-service-card" :aria-label="service.name">
+          <header class="mcp-card-header"><div><h3><button type="button" @click="showTool(service)">{{ service.name }}</button></h3><p>{{ service.description || '暂无描述' }}</p></div><div class="mcp-card-edit"><button type="button" :aria-label="`查看 ${service.name}`" @click="showTool(service)">详情</button><button type="button" :aria-label="`编辑 ${service.name}`" @click="editService(service.id)">编辑</button><button type="button" class="mcp-delete" :aria-label="`删除 ${service.name}`" @click="requestDelete(service.id)">删除</button></div></header>
+          <p class="mcp-card-endpoint">{{ service.endpoint }}</p>
+          <McpServiceStatus :service="service" @view-tools="viewMcpTools(service.id)" />
+        </article>
+      </div>
+      <table v-else class="tool-table">
+        <thead><tr><th>工具名称 / Description</th><th class="w-20 whitespace-nowrap">操作</th></tr></thead>
         <tbody>
-          <tr v-for="tool in filteredTools" :key="tool.id">
+          <tr v-for="tool in filteredCodeTools" :key="tool.id">
             <td><button type="button" class="font-medium text-slate-950 hover:underline" @click="showTool(tool)">{{ tool.name }}</button><div class="mt-1 break-all font-mono text-xs text-slate-500">{{ tool.id }}</div><p class="mt-2 text-xs leading-5 text-slate-600">{{ tool.description }}</p></td>
-            <td>
-              <template v-if="tool.kind === 'mcp'"><div class="text-xs text-slate-700">{{ tool.transport }}<span v-if="tool.version"> · v{{ tool.version }}</span></div><p class="mt-1 break-all font-mono text-xs leading-5 text-slate-500">{{ tool.endpoint }}</p><p class="mt-1 text-xs text-slate-500">{{ tool.discovery === 'pending' ? '尚未发现方法' : `${tool.methods.length} 个演示方法` }}</p></template>
-              <template v-else><div class="text-xs leading-5"><span class="text-slate-500">输入 {{ tool.inputs.length }}</span><p class="break-all font-mono text-slate-700">{{ tool.inputs.map((item) => item.name).join(', ') || '无输入参数' }}</p></div><div class="mt-2 text-xs leading-5"><span class="text-slate-500">输出 {{ tool.outputs.length }}</span><p class="break-all font-mono text-slate-700">{{ tool.outputs.map((item) => item.name).join(', ') || '无输出参数' }}</p></div></template>
-            </td>
-            <td>
-              <div class="flex flex-wrap gap-1.5">
-                <span v-if="store.getToolLoading(tool.id).direct" class="loading-badge direct">Agent 直接加载</span>
-                <span v-if="store.getToolLoading(tool.id).private" class="loading-badge private">私有化加载</span>
-                <span v-if="store.getToolLoading(tool.id).unloaded" class="loading-badge unloaded">未配置</span>
-              </div>
-
-            </td>
-            <td>
-<div v-if="store.agentsUsingToolByDefault(tool.id).length" class="mb-3"><p class="mb-2 text-xs text-slate-500">Agent 默认配置</p><div class="flex flex-wrap gap-1.5"><span v-for="agent in store.agentsUsingToolByDefault(tool.id)" :key="agent.id" class="skill-link">{{ agent.name }}</span></div></div>
-              <div v-if="store.customerAgentsForTool(tool.id).length"><p class="mb-2 text-xs text-slate-500">直接加载的客户 Agent</p><div class="flex flex-wrap gap-1.5"><button v-for="agent in store.customerAgentsForTool(tool.id)" :key="agent.id" type="button" class="skill-link" @click="configureAgent(agent)">{{ agent.name }} · {{ agent.mode === 'default' ? '遵循默认' : '自定义' }}</button></div></div>
-              <div v-if="store.skillsForTool(tool.id).length" :class="{ 'mt-3': store.customerAgentsForTool(tool.id).length }"><p class="mb-2 text-xs text-slate-500">私有加载的 Skill</p><div class="flex flex-wrap gap-1.5"><button v-for="skill in store.skillsForTool(tool.id)" :key="skill.id" type="button" class="skill-link" @click="configureSkill(skill)">{{ skill.name }}<span v-if="!skill.enabled" class="text-slate-500">（已禁用）</span></button></div></div>
-              <p v-if="store.getToolLoading(tool.id).unloaded" class="text-xs text-slate-500">未关联 Agent 或 Skill</p>
-            </td>
-            <td><div class="flex flex-col items-start gap-2 whitespace-nowrap text-xs"><button type="button" class="text-slate-700 hover:underline" :aria-label="`查看 ${tool.name}`" @click="showTool(tool)">详情</button><button v-if="tool.kind === 'mcp'" type="button" class="text-slate-700 hover:underline" :aria-label="`编辑 ${tool.name}`" @click="editService(tool.id)">编辑</button><button v-if="tool.kind === 'mcp'" type="button" class="text-red-700 hover:underline" :aria-label="`删除 ${tool.name}`" @click="requestDelete(tool.id)">删除</button></div></td>
+            <td><div class="flex flex-col items-start gap-2 whitespace-nowrap text-xs"><button type="button" class="text-slate-700 hover:underline" :aria-label="`查看 ${tool.name}`" @click="showTool(tool)">详情</button></div></td>
           </tr>
         </tbody>
       </table>
-      <div v-if="!filteredTools.length" class="px-5 py-16 text-center"><p class="text-sm text-slate-600">未找到符合条件的 Tool</p><button class="mt-3 text-xs underline" type="button" @click="search = ''; loadingFilter = 'all'">清空筛选</button></div>
+      <div v-if="!filteredTools.length" class="px-5 py-16 text-center"><p class="text-sm text-slate-600">未找到符合条件的 Tool</p><button class="mt-3 text-xs underline" type="button" @click="search = ''">清空筛选</button></div>
     </div>
-    <footer class="border-t border-[#e2e2dc] bg-[#fbfbfa] px-5 py-3 text-xs leading-5 text-slate-500">Tool 按 Agent 默认配置或客户自定义配置直接加载，也可随 Skill 私有加载。点击客户 Agent 或 Skill 名称进入对应配置；同一客户下 Agent 的重复调用路径可通过冲突检测查看。</footer>
 
     <ElDialog v-model="detailOpen" :title="selectedTool?.name" width="960px" top="5vh" class="ops-tool-dialog" :close-on-click-modal="false">
       <div v-if="selectedTool" class="space-y-6 text-slate-700">
@@ -131,13 +125,13 @@ async function syncCodeTools() {
             <span v-if="store.getToolLoading(selectedTool.id).unloaded" class="loading-badge unloaded">未配置加载</span>
             <span class="text-xs text-slate-500">{{ selectedTool.kind === 'code' ? '工程更新于' : '更新于' }} {{ selectedTool.updatedAt }}</span>
           </div>
-          <p class="mt-3 text-xs leading-5 text-slate-500">{{ selectedTool.kind === 'code' ? '以下属性由研发在工程中维护，页面只读展示。' : '连接属性可编辑。当前为本地演示配置，未连接真实服务。' }}</p>
+          <p class="mt-3 text-xs leading-5 text-slate-500">{{ selectedTool.kind === 'code' ? '以下属性由研发在工程中维护，页面只读展示。' : '连接属性可编辑，工具定义从 MCP 服务同步。' }}</p>
           <h3 class="mt-4 text-xs font-semibold">Description</h3><p class="mt-1 text-sm leading-6">{{ selectedTool.description }}</p>
         </div>
         <template v-if="selectedTool.kind === 'mcp'">
-          <section><h3 class="mb-3 font-semibold">MCP 服务属性</h3><dl class="tool-properties"><dt>连接类型</dt><dd>{{ selectedTool.transport }}</dd><dt>服务版本</dt><dd>{{ selectedTool.version || '尚未发现' }}</dd><dt>服务地址</dt><dd class="font-mono">{{ selectedTool.endpoint }}</dd><dt>提供方</dt><dd>{{ selectedTool.provider }}</dd><dt>超时时间</dt><dd>{{ selectedTool.timeout }} 秒</dd><dt>Bearer Token 环境变量</dt><dd class="font-mono">{{ selectedTool.bearerTokenEnvVar || '未配置' }}</dd></dl></section>
-          <section v-for="group in (['headers', 'envHeaders'] as const)" :key="group"><h3 class="mb-3 font-semibold">{{ group === 'headers' ? '请求头' : '环境变量请求头' }}</h3><dl v-if="selectedTool[group].length" class="tool-properties"><template v-for="row in selectedTool[group]" :key="row.key"><dt class="break-all">{{ row.key }}</dt><dd class="font-mono">{{ group === 'headers' && sensitiveHeader(row.key) ? '••••••••' : row.value }}</dd></template></dl><p v-else class="text-xs text-slate-500">未配置</p></section>
-          <section><h3 class="mb-3 font-semibold">可调用方法（{{ selectedTool.methods.length }}）</h3><table v-if="selectedTool.methods.length" class="tool-table"><thead><tr><th>方法名称</th><th>Description</th></tr></thead><tbody><tr v-for="method in selectedTool.methods" :key="method.name"><td class="font-mono text-xs">{{ method.name }}</td><td>{{ method.description }}</td></tr></tbody></table><p class="mt-3 text-xs leading-5 text-slate-500">{{ selectedTool.discovery === 'pending' ? '尚未发现方法。当前演示未连接服务，实际可调用方法及 Schema 待服务连接后读取。' : '以上为演示方法定义，未连接真实 MCP 服务。' }}</p></section>
+          <McpServiceStatus :service="selectedTool" @view-tools="viewMcpTools(selectedTool.id)" />
+          <section><h3 class="mb-3 font-semibold">连接信息</h3><dl class="tool-properties"><dt>服务地址</dt><dd class="font-mono">{{ selectedTool.endpoint }}</dd><dt>服务名称</dt><dd>{{ selectedTool.provider || '尚未协商' }}</dd><dt>服务版本</dt><dd>{{ selectedTool.version || '尚未协商' }}</dd><dt>超时时间</dt><dd>{{ selectedTool.timeout }} 秒</dd></dl></section>
+          <section><h3 class="mb-3 font-semibold">请求头</h3><dl v-if="selectedTool.headers.length" class="tool-properties"><template v-for="row in selectedTool.headers" :key="row.key"><dt class="break-all">{{ row.key }}</dt><dd class="font-mono">{{ sensitiveHeader(row.key) ? '••••••••' : row.value }}</dd></template></dl><p v-else class="text-xs text-slate-500">未配置</p></section>
         </template>
         <template v-else>
           <dl class="tool-properties"><dt>运行环境</dt><dd>{{ selectedTool.runtime }}</dd><dt>代码入口</dt><dd class="font-mono">{{ selectedTool.entrypoint }}</dd></dl>
@@ -150,6 +144,7 @@ async function syncCodeTools() {
       <template #footer><div class="flex flex-wrap justify-end gap-2"><button class="ops-secondary" type="button" @click="detailOpen = false">关闭</button><button v-if="selectedTool?.kind === 'mcp'" class="ops-secondary" type="button" @click="editService(selectedTool.id)">编辑服务</button></div></template>
     </ElDialog>
 
+    <McpToolsDialog v-model="toolsDialogOpen" :service="toolsService" />
     <McpServiceForm v-model="serviceFormOpen" :service-id="editingServiceId" @remove="requestDelete" />
     <ElDialog v-model="deleteOpen" title="删除 MCP 服务" width="620px" class="ops-tool-dialog" :close-on-click-modal="false" append-to-body>
       <div v-if="deletingService" class="space-y-4 text-sm leading-6 text-slate-700">
@@ -164,6 +159,20 @@ async function syncCodeTools() {
 </template>
 
 <style scoped>
+.mcp-service-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: start; gap: 16px; padding: 20px; }
+.mcp-service-card { min-width: 0; padding: 20px; border: 1px solid #deded9; border-radius: 6px; }
+.mcp-card-header { display: flex; align-items: start; justify-content: space-between; gap: 16px; }
+.mcp-card-header > div:first-child { min-width: 0; }
+.mcp-card-header h3 { font-size: 15px; font-weight: 600; color: #0f172a; overflow-wrap: anywhere; }
+.mcp-card-header h3 button { text-align: left; }
+.mcp-card-header p { font-size: 12px; line-height: 1.8; margin-top: 8px; color: #64748b; }
+.mcp-card-edit { display: flex; flex-shrink: 0; gap: 12px; font-size: 12px; color: #475569; }
+.mcp-card-edit button { min-height: 24px; }
+.mcp-card-edit .mcp-delete { color: #b42318; }
+.mcp-card-endpoint { font-size: 12px; color: #64748b; overflow-wrap: anywhere; line-height: 1.7; margin: 10px 0 18px; }
+@media (max-width: 1100px) { .mcp-service-grid { grid-template-columns: 1fr; } }
+@media (max-width: 640px) { .mcp-service-grid { padding: 12px; } .mcp-service-card { padding: 16px; } }
+
 .tool-tab { padding: 14px 0; border-bottom: 2px solid transparent; color: #64748b; font-size: 14px; }
 .tool-tab.active { border-color: #0f172a; color: #0f172a; font-weight: 600; }
 .tool-table { width: 100%; border-collapse: collapse; text-align: left; font-size: 13px; }

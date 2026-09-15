@@ -70,7 +70,7 @@ watch(() => [props.agentId, props.readOnly], () => { pickerOpen.value = false; }
         <ul class="customer-selected-tags" aria-label="已选 Tool 加载列表">
           <li v-for="{ id, tool } in selectedTools" :key="id" class="customer-capability-tag" :class="{ 'is-warning': !tool || overlaps.some(usage => usage.id === id) }">
             <ElTooltip placement="top" :show-after="250" :hide-after="0">
-              <template #content><div class="customer-tag-details"><strong>{{ !tool ? 'Tool 已失效' : tool.kind === 'mcp' ? 'MCP 服务' : '代码工具' }}</strong><p>{{ tool?.description ?? '该 Tool 已失效，请移除后保存。' }}</p><p v-if="overlaps.some(usage => usage.id === id)">与所选 Skill 的私有 Tool 重叠，建议通过冲突检测检查调用边界。</p></div></template>
+              <template #content><div class="customer-tag-details"><strong>{{ !tool ? 'Tool 已失效' : tool.kind === 'mcp' ? 'MCP 服务' : '内置API工具' }}</strong><p>{{ tool?.description ?? '该 Tool 已失效，请移除后保存。' }}</p><p v-if="overlaps.some(usage => usage.id === id)">与所选 Skill 的私有 Tool 重叠，建议通过冲突检测检查调用边界。</p></div></template>
               <span class="customer-tag-label" tabindex="0">{{ tool?.name ?? id }}<span v-if="!tool" class="customer-tag-state">已失效</span><span v-else-if="overlaps.some(usage => usage.id === id)" class="customer-tag-state">多路径</span></span>
             </ElTooltip>
             <button v-if="!readOnly" type="button" class="customer-tag-remove" :aria-label="`移除 Tool ${toolName(id)}`" @click="removeCapability('toolIds', id)"><Icon :svg="strokeIconPaths.x" :size="13" /></button>

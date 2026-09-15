@@ -205,7 +205,7 @@ try {
   assert.equal(synced.agents.length, 3, 'only the engineering catalog may remove Agents');
   assert.equal(synced.agentSync.error, '');
 
-  const httpConfig = { name: '测试 HTTP 服务', description: '连接配置验证', transport: 'Streamable HTTP', endpoint: 'https://mcp.example.com/mcp', bearerTokenEnvVar: 'MCP_TEST_TOKEN', headers: [{ key: 'X-Region', value: 'east' }], envHeaders: [{ key: 'X-Api-Key', value: 'MCP_TEST_KEY' }], timeout: 30 };
+  const httpConfig = { name: '测试 HTTP 服务', description: '连接配置验证', transport: 'Streamable HTTP', endpoint: 'https://mcp.example.com/mcp', auth: 'Bearer Token', bearerToken: 'test-token', headers: [{ key: 'X-Region', value: 'east' }], timeout: 30 };
   const created = synced.saveMcp(httpConfig);
   assert.equal(created.discovery, 'pending');
   assert(synced.tools.filter(tool => tool.kind === 'mcp').every(tool => tool.transport === 'Streamable HTTP' && !('args' in tool) && !('envVars' in tool)));
@@ -233,21 +233,23 @@ try {
   assert.throws(() => synced.saveMcp({ ...httpConfig, endpoint: 'file:///etc/hosts' }), /HTTP/);
   assert.throws(() => synced.saveMcp({ ...httpConfig, endpoint: 'https://user:pass@example.com' }), /认证信息/);
   assert.throws(() => synced.saveMcp({ ...httpConfig, headers: [{ key: 'X-Region', value: '' }] }), /必须填写/);
-  assert.throws(() => synced.saveMcp({ ...httpConfig, bearerTokenEnvVar: 'bad-variable' }), /变量名称/);
-  assert.throws(() => synced.saveMcp({ ...httpConfig, envHeaders: [{ key: 'X-Test', value: 'not a name' }] }), /变量名称/);
-  assert.throws(() => synced.saveMcp({ ...httpConfig, headers: [{ key: 'X-Api-Key', value: 'value' }] }), /只能配置一次/);
+  assert.throws(() => synced.saveMcp({ ...httpConfig, bearerToken: 'bad token' }), /Bearer Token/);
+  assert.throws(() => synced.saveMcp({ ...httpConfig, headers: [{ key: 'X-Test', value: 'line\nvalue' }] }), /换行/);
+  assert.throws(() => synced.saveMcp({ ...httpConfig, headers: [{ key: 'X-Region', value: 'east' }, { key: 'x-region', value: 'west' }] }), /只能配置一次/);
   assert.throws(() => synced.saveMcp({ ...httpConfig, headers: [{ key: 'Authorization', value: 'value' }] }), /重复配置/);
   assert.throws(() => synced.saveMcp({ ...httpConfig, timeout: 0 }), /超时/);
   assert.throws(() => synced.saveMcp({ ...httpConfig, name: changed.name }), /已存在/);
+  const legacy = synced.saveMcp({ ...httpConfig, name: '旧版 SSE', transport: 'SSE Legacy Transport' });
+  assert.equal(legacy.transport, 'SSE Legacy Transport');
   const beforeUnsupportedTransport = JSON.stringify(synced.tools);
-  for (const transport of ['stdio', 'SSE']) {
-    assert.throws(() => synced.saveMcp({ ...httpConfig, transport }), /仅支持 Streamable HTTP/);
-    assert.throws(() => synced.saveMcp({ ...httpConfig, transport }, created.id), /仅支持 Streamable HTTP/);
+  for (const transport of ['stdio', 'unsupported']) {
+    assert.throws(() => synced.saveMcp({ ...httpConfig, transport }), /请选择 Streamable HTTP/);
+    assert.throws(() => synced.saveMcp({ ...httpConfig, transport }, created.id), /请选择 Streamable HTTP/);
     assert.equal(JSON.stringify(synced.tools), beforeUnsupportedTransport, 'unsupported create/edit leaves all service definitions intact');
   }
-  assert.throws(() => synced.saveMcp(httpConfig, 'risk-evaluate'), /代码工具不能/);
-  assert.throws(() => synced.deleteMcp('risk-evaluate'), /代码工具不能/);
-  const secondHttp = synced.saveMcp({ ...httpConfig, name: '另一项 HTTP 服务', bearerTokenEnvVar: '', headers: [], envHeaders: [] });
+  assert.throws(() => synced.saveMcp(httpConfig, 'risk-evaluate'), /内置API工具不能/);
+  assert.throws(() => synced.deleteMcp('risk-evaluate'), /内置API工具不能/);
+  const secondHttp = synced.saveMcp({ ...httpConfig, name: '另一项 HTTP 服务', auth: '无需认证', bearerToken: '', headers: [] });
   assert.equal(secondHttp.auth, '无需认证');
 
   const codeDefinitions = structuredClone(codeSource);
@@ -282,7 +284,7 @@ try {
   await synced.syncAgents(async () => agentsSource);
   assert(!synced.resolveCustomerAgent(otherCustomerId, generalAgent.id).toolIds.includes(created.id));
   assert(synced.tools.some((tool) => tool.id === secondHttp.id), 'deletion does not affect another service');
-  console.log('Passed: Customer-Agent isolation, group snapshot selection, private Tool independence, shared prompts and scoped conflict detection; engineering sync and failure rollback; MCP Streamable HTTP-only CRUD, validation and reference cleanup.');
+  console.log('Passed: Customer-Agent isolation, group snapshot selection, private Tool independence, shared prompts and scoped conflict detection; engineering sync and failure rollback; MCP HTTP transport CRUD, validation and reference cleanup.');
 } finally {
   await server.close();
 }

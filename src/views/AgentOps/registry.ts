@@ -20,7 +20,7 @@ export function parseCodeToolRegistry(value: unknown): CodeTool[] {
     typeof item.name === 'string' && item.name.trim() && typeof item.description === 'string' &&
     ['Python 3', 'Node.js'].includes(String(item.runtime)) && typeof item.entrypoint === 'string' && item.entrypoint.trim() &&
     typeof item.updatedAt === 'string' && parameters(item.inputs) && parameters(item.outputs)
-  )) throw new Error('代码工具目录格式不正确，未更新当前配置。');
+  )) throw new Error('内置API工具目录格式不正确，未更新当前配置。');
   return JSON.parse(JSON.stringify(value)) as CodeTool[];
 }
 

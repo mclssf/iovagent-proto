@@ -5,7 +5,7 @@ import { sensitiveHeader } from './mcpConfig';
 import type { McpKeyValue } from './mcpConfig';
 
 const rows = defineModel<McpKeyValue[]>({ required: true });
-const props = defineProps<{ title: string; addLabel: string; environment?: boolean; secret?: boolean }>();
+const props = defineProps<{ title: string; addLabel: string }>();
 function update(index: number, field: keyof McpKeyValue, event: Event) {
   rows.value = rows.value.map((row, i) => i === index ? { ...row, [field]: (event.target as HTMLInputElement).value } : row);
 }
@@ -14,10 +14,9 @@ function update(index: number, field: keyof McpKeyValue, event: Event) {
 <template>
   <fieldset class="mcp-pairs">
     <legend>{{ title }} <span>{{ rows.length }}</span></legend>
-    <p v-if="environment">填写请求头名称和环境变量名，连接时从环境变量读取值。</p>
     <div v-for="(row, index) in rows" :key="index" class="mcp-pair-row">
       <input :value="row.key" class="ops-input" :aria-label="`${title} ${index + 1} 名称`" placeholder="名称" autocomplete="off" @input="update(index, 'key', $event)" />
-      <input :value="row.value" class="ops-input" :type="secret || (!environment && sensitiveHeader(row.key)) ? 'password' : 'text'" :aria-label="`${title} ${index + 1} ${environment ? '环境变量名' : '值'}`" :placeholder="environment ? '环境变量名，如 MCP_API_KEY' : '值'" autocomplete="off" @input="update(index, 'value', $event)" />
+      <input :value="row.value" class="ops-input" :type="sensitiveHeader(row.key) ? 'password' : 'text'" :aria-label="`${title} ${index + 1} 值`" placeholder="值" autocomplete="off" @input="update(index, 'value', $event)" />
       <button type="button" class="ops-secondary" :aria-label="`删除${title}第 ${index + 1} 行`" @click="rows = rows.filter((_, i) => i !== index)"><Icon :svg="strokeIconPaths.trash" :size="15" /></button>
     </div>
     <button type="button" class="ops-secondary mcp-add-row" @click="rows = [...rows, { key: '', value: '' }]"><Icon :svg="strokeIconPaths.plus" :size="14" />{{ props.addLabel }}</button>

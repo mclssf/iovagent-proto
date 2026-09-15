@@ -48,7 +48,7 @@ watch(() => [props.open, props.kind, props.context], () => { clearFilters(); pen
   <ElDialog :model-value="open" :title="`添加 ${noun}`" width="960px" top="5vh" class="ops-tool-dialog capability-picker-dialog" append-to-body :close-on-click-modal="false" @update:model-value="emit('close')">
     <div class="capability-picker">
       <p class="picker-context">{{ context }}</p>
-      <p class="picker-help">{{ kind === 'skill' ? '按组筛选后可批量勾选，也可搜索并逐项选择。已加载的 Skill 不会重复添加。' : '搜索并勾选 MCP 服务或代码工具，一次添加多个。Skill 私有加载的工具仍可独立选择。' }}</p>
+      <p class="picker-help">{{ kind === 'skill' ? '按组筛选后可批量勾选，也可搜索并逐项选择。已加载的 Skill 不会重复添加。' : '搜索并勾选 MCP 服务或内置API工具，一次添加多个。Skill 私有加载的工具仍可独立选择。' }}</p>
       <div v-if="kind === 'skill'" class="picker-groups" aria-label="筛选 Skill 分组">
         <span>Skill 分组</span>
         <button type="button" :aria-pressed="!groups.length" @click="groups = []">全部</button>
@@ -57,7 +57,7 @@ watch(() => [props.open, props.kind, props.context], () => { clearFilters(); pen
       </div>
       <div class="picker-search-row">
         <label class="picker-search"><Icon :svg="strokeIconPaths.search" :size="15" /><input v-model="search" class="ops-input ops-search" :aria-label="`搜索待添加 ${noun}`" :placeholder="`搜索 ${noun} 名称、描述或标识`" /></label>
-        <select v-if="kind === 'tool'" v-model="toolKind" class="ops-input picker-type" aria-label="筛选 Tool 类型"><option value="all">全部类型</option><option value="mcp">MCP 服务</option><option value="code">代码工具</option></select>
+        <select v-if="kind === 'tool'" v-model="toolKind" class="ops-input picker-type" aria-label="筛选 Tool 类型"><option value="all">全部类型</option><option value="mcp">MCP 服务</option><option value="code">内置API工具</option></select>
       </div>
       <div class="picker-selection-bar">
         <label><input type="checkbox" :checked="allChecked" :indeterminate="someChecked" :disabled="!selectable.length" aria-label="全选当前筛选结果" @change="toggleResults(($event.target as HTMLInputElement).checked)" />全选当前结果 <span>（可添加 {{ selectable.length }} 项）</span></label>
@@ -66,7 +66,7 @@ watch(() => [props.open, props.kind, props.context], () => { clearFilters(); pen
       <ul class="picker-results" :aria-label="`待添加 ${noun} 列表`">
         <li v-for="item in filtered" :key="item.id" :class="{ 'is-unavailable': isLoaded(item.id) || item.disabled }">
           <label class="picker-option"><input type="checkbox" :checked="isLoaded(item.id) || pending.some(selected => selected.id === item.id)" :disabled="isLoaded(item.id) || item.disabled" :aria-label="`勾选 ${noun} ${item.name}`" @change="toggleItem(item.id, ($event.target as HTMLInputElement).checked)" />
-            <span class="picker-option-content"><span class="picker-option-title"><strong>{{ item.name }}</strong><span class="picker-badge">{{ item.group ?? (item.kind === 'mcp' ? 'MCP 服务' : '代码工具') }}</span><span v-if="isLoaded(item.id)" class="picker-state">已在加载列表</span><span v-else-if="item.disabled" class="picker-state">已停用</span></span>
+            <span class="picker-option-content"><span class="picker-option-title"><strong>{{ item.name }}</strong><span class="picker-badge">{{ item.group ?? (item.kind === 'mcp' ? 'MCP 服务' : '内置API工具') }}</span><span v-if="isLoaded(item.id)" class="picker-state">已在加载列表</span><span v-else-if="item.disabled" class="picker-state">已停用</span></span>
               <span class="picker-description">{{ item.description }}</span><span v-if="item.detail" class="picker-detail">{{ item.detail }}</span><span v-if="item.warning" class="picker-warning">{{ item.warning }}</span>
             </span>
           </label>

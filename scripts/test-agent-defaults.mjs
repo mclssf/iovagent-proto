@@ -113,7 +113,7 @@ try {
   assert(inheritedConflict.findings.some(item => item.id === 'duplicate-risk-evaluate'), 'inherited direct tools still conflict with the independent private path');
   assert(resolveAgentTools(resolve(follower, projectId), catalog(projectId)).some(item => item.id === 'vehicle-mcp'));
 
-  const mcp = store.saveMcp({ name: '默认加载验证 MCP', description: '', transport: 'Streamable HTTP', endpoint: 'https://mcp.example.com/mcp', bearerTokenEnvVar: '', headers: [], envHeaders: [], timeout: 30 });
+  const mcp = store.saveMcp({ name: '默认加载验证 MCP', description: '', transport: 'Streamable HTTP', endpoint: 'https://mcp.example.com/mcp', auth: '无需认证', bearerToken: '', headers: [], timeout: 30 });
   store.saveAgent(definition(generalId), generalId, { skillIds: [], toolIds: [mcp.id] });
   store.saveCustomerAgents(custom, [{ agentId: generalId, mode: 'custom', skillIds: [], toolIds: [mcp.id] }]);
   assert(store.mcpUsage(mcp.id).defaults.some(agent => agent.id === generalId));
