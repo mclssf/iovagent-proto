@@ -6,11 +6,9 @@ export interface McpConfig {
   description: string;
   transport: McpTool['transport'];
   endpoint: string;
-  args: string[];
   bearerTokenEnvVar: string;
   headers: McpKeyValue[];
   envHeaders: McpKeyValue[];
-  envVars: McpKeyValue[];
   timeout: number;
 }
 export const sensitiveHeader = (key: string) => /authorization|cookie|token|secret|password|api[-_]?key/i.test(key);
@@ -26,15 +24,8 @@ function pairs(rows: McpKeyValue[], label: string, environmentValues = false): M
 export function normalizeMcpConfig(config: McpConfig): McpConfig {
   const name = config.name.trim(), endpoint = config.endpoint.trim();
   if (!name || name.length > 60) throw new Error('请填写 MCP 名称，最多 60 个字符。');
-  if (!['Streamable HTTP', 'SSE', 'stdio'].includes(config.transport)) throw new Error('请选择有效的连接类型。');
+  if (config.transport !== 'Streamable HTTP') throw new Error('MCP 服务仅支持 Streamable HTTP 连接。');
   if (!Number.isInteger(config.timeout) || config.timeout < 1 || config.timeout > 300) throw new Error('超时时间须为 1–300 秒的整数。');
-  if (config.transport === 'stdio') {
-    if (!endpoint || /[\r\n]/.test(endpoint)) throw new Error('请填写有效的启动命令。');
-    const envVars = pairs(config.envVars, '环境变量');
-    if (envVars.some((row) => !envName.test(row.key))) throw new Error('环境变量名称格式不正确。');
-    return { name, description: config.description.trim(), endpoint, transport: config.transport, timeout: config.timeout,
-      args: config.args.map((arg) => arg.trim()).filter(Boolean), envVars, headers: [], envHeaders: [], bearerTokenEnvVar: '' };
-  }
   try {
     const url = new URL(endpoint);
     if (!['http:', 'https:'].includes(url.protocol) || !url.hostname || url.username || url.password) throw new Error();
@@ -46,5 +37,5 @@ export function normalizeMcpConfig(config: McpConfig): McpConfig {
   if ([...headers, ...envHeaders].some((row) => !/^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/.test(row.key))) throw new Error('请求头名称包含不支持的字符。');
   if (new Set(keys).size !== keys.length || (bearerTokenEnvVar && keys.includes('authorization'))) throw new Error('同一个请求头只能配置一次，Authorization 不能与 Bearer Token 环境变量重复配置。');
   return { name, description: config.description.trim(), transport: config.transport, endpoint, timeout: config.timeout,
-    bearerTokenEnvVar, headers, envHeaders, args: [], envVars: [] };
+    bearerTokenEnvVar, headers, envHeaders };
 }

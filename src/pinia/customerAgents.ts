@@ -1,6 +1,8 @@
 import type { AgentCallableSkill, SkillGroup } from './agentOps';
 
-export interface CustomerAgentBinding { agentId: string; skillIds: string[]; toolIds: string[]; }
+export type AgentConfigurationMode = 'default' | 'custom';
+export interface CustomerAgentBinding { agentId: string; mode: AgentConfigurationMode; systemPrompt?: string; skillIds: string[]; toolIds: string[]; }
+export const defaultAgentBinding = (agentId: string): CustomerAgentBinding => ({ agentId, mode: 'default', skillIds: [], toolIds: [] });
 export interface CustomerAgentTarget { customerId: string; agentId: string; }
 export interface ActivatedCustomer {
   id: string;
@@ -24,9 +26,9 @@ export function selectSkillGroup(ids: readonly string[], group: SkillGroup, cata
 
 // Activation records are local demo data; contract properties are display-only here.
 export function createActivatedCustomers(): ActivatedCustomer[] {
-  const general = (): CustomerAgentBinding => ({ agentId: 'general-chat-agent', skillIds: ['operations-logistics-sheet', 'operations-license-recognition'], toolIds: ['datetime-format'] });
-  const project = (): CustomerAgentBinding => ({ agentId: 'project-chat-agent', skillIds: ['route-risk-expert', 'gps-trace-expert', 'delivery-sla-expert'], toolIds: [] });
-  const employee = (id?: string): CustomerAgentBinding => ({ agentId: 'data-employee-agent', skillIds: ['spreadsheet-waybill', ...(id ? [id] : [])], toolIds: [] });
+  const general = (): CustomerAgentBinding => ({ mode: 'custom', agentId: 'general-chat-agent', skillIds: ['operations-logistics-sheet', 'operations-license-recognition'], toolIds: ['datetime-format'] });
+  const project = (): CustomerAgentBinding => ({ mode: 'custom', agentId: 'project-chat-agent', skillIds: ['route-risk-expert', 'gps-trace-expert', 'delivery-sla-expert'], toolIds: [] });
+  const employee = (id?: string): CustomerAgentBinding => ({ mode: 'custom', agentId: 'data-employee-agent', skillIds: ['spreadsheet-waybill', ...(id ? [id] : [])], toolIds: [] });
   const rows: Array<[string, string, string, string, string, '试用' | '正式', CustomerAgentBinding[]]> = [
     ['ent-jinyu', '金隅水泥', 'CID00000201', '2026-01-01', '2026-12-31', '正式', [employee('jinyu-cement-tms'), general(), project()]],
     ['ent-tsingtao', '青岛啤酒', 'CID00000202', '2026-04-01', '2027-03-31', '正式', [employee(), general(), project()]],

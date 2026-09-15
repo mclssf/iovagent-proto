@@ -73,10 +73,10 @@ watch(() => [props.open, props.kind, props.context], () => { clearFilters(); pen
         </li>
       </ul>
       <div v-if="!filtered.length" class="picker-empty"><p>{{ onlyPending ? '当前筛选下没有本次勾选项。' : '没有匹配的能力，请调整搜索或筛选条件。' }}</p><button type="button" @click="clearFilters">清除筛选</button></div>
-      <p v-if="kind === 'skill'" class="picker-footnote">按组添加当前所选 Skill，后续新增或调整分组不会自动改变客户配置。</p>
+      <p v-if="kind === 'skill'" class="picker-footnote">按组添加当前所选 Skill，后续新增 Skill 或调整分组不会自动改变已保存的加载列表。</p>
     </div>
     <template #footer>
-      <div class="picker-footer"><div><span role="status">本次勾选 {{ pending.length }} 个 {{ noun }}</span><button v-if="pending.length" type="button" class="picker-clear" @click="pendingIds = []">清空勾选</button><p>勾选跨搜索和筛选保留；添加后请保存客户配置。</p></div><div class="picker-actions"><button type="button" class="ops-secondary" @click="emit('close')">取消</button><button type="button" class="ops-primary" :disabled="!pending.length" @click="emit('add', pending.map(item => item.id))">添加已勾选（{{ pending.length }}）</button></div></div>
+      <div class="picker-footer"><div><span role="status">本次勾选 {{ pending.length }} 个 {{ noun }}</span><button v-if="pending.length" type="button" class="picker-clear" @click="pendingIds = []">清空勾选</button><p>勾选跨搜索和筛选保留；添加后请保存配置。</p></div><div class="picker-actions"><button type="button" class="ops-secondary" @click="emit('close')">取消</button><button type="button" class="ops-primary" :disabled="!pending.length" @click="emit('add', pending.map(item => item.id))">添加已勾选（{{ pending.length }}）</button></div></div>
     </template>
   </ElDialog>
 </template>

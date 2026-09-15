@@ -480,7 +480,7 @@ function submitLoginVerificationCode() {
   loginAgentStatus.value = 'running';
   scheduleLoginAgentStep(500, () => appendLoginAgentMessage('agent', '验证码已回填并提交，正在校验登录状态。'));
   scheduleLoginAgentStep(1200, () => appendLoginAgentMessage('agent', '登录成功，已进入运单列表页面。'));
-  scheduleLoginAgentStep(1900, () => appendLoginAgentMessage('agent', '执行数据获取映射 skill，检查运单字段与标准数据集语义。'));
+  scheduleLoginAgentStep(1900, () => appendLoginAgentMessage('agent', '执行数据获取映射 Skill，检查运单字段映射结果。'));
   scheduleLoginAgentStep(2600, () => {
     appendLoginAgentMessage('system', '数据员工验证完成，登录授权已就绪。');
     loginAgentStatus.value = 'complete';

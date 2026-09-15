@@ -3,13 +3,13 @@ import { computed, readonly, ref } from 'vue';
 import type { DeepReadonly } from 'vue';
 import { analyzeAgentConflicts } from '@/views/AgentOps/agentConflicts';
 import type { AgentConflictReport } from '@/views/AgentOps/agentConflicts';
-import { createDataEmployeeSkills } from './dataEmployeeSkills';
+import { createDataEmployeeSkills, dataEmployeeSkillGroup } from './dataEmployeeSkills';
 import type { DataEmployeeSkill } from './dataEmployeeSkills';
 import agentRegistry from '@/data/agentOpsAgents.json';
 import codeRegistry from '@/data/agentOpsCodeTools.json';
 import { loadAgentRegistry, loadCodeToolRegistry, parseAgentRegistry, parseCodeToolRegistry } from '@/views/AgentOps/registry';
 import { normalizeMcpConfig } from '@/views/AgentOps/mcpConfig';
-import { createActivatedCustomers } from './customerAgents';
+import { createActivatedCustomers, defaultAgentBinding } from './customerAgents';
 import type { CustomerAgentBinding } from './customerAgents';
 import type { McpConfig, McpKeyValue } from '@/views/AgentOps/mcpConfig';
 
@@ -25,10 +25,11 @@ export interface AgentConfig {
   name: string;
   systemPrompt: string;
 }
-export interface AgentLoadConfig extends AgentConfig {
+export interface AgentCapabilities {
   skillIds: string[];
   toolIds: string[];
 }
+export interface AgentLoadConfig extends AgentConfig, AgentCapabilities {}
 export interface ManagedAgent extends AgentConfig {
   id: string;
   role: AgentRole;
@@ -37,7 +38,9 @@ export interface ManagedAgent extends AgentConfig {
 }
 
 export type SkillCategory = '在途专家' | '经营分析参谋' | '运营助手' | '运力与货源';
-export const skillGroups = ['基础 Skill 组', '扩展 Skill 组', '定制 Skill 组'] as const;
+export const commonSkillGroups = ['基础 Skill 组', '扩展 Skill 组', '定制 Skill 组'] as const;
+export const skillGroups = [...commonSkillGroups, dataEmployeeSkillGroup] as const;
+export type CommonSkillGroup = typeof commonSkillGroups[number];
 export type SkillGroup = typeof skillGroups[number];
 export type ToolKind = 'mcp' | 'code';
 export interface ManagedSkill {
@@ -49,11 +52,12 @@ export interface ManagedSkill {
   fileName: string;
   enabled: boolean;
   privateToolIds: string[];
-  group: SkillGroup;
+  group: CommonSkillGroup;
   updatedAt: string;
   updatedBy: string;
 }
-export interface AgentCallableSkill extends Omit<ManagedSkill, 'category'> {
+export interface AgentCallableSkill extends Omit<ManagedSkill, 'category' | 'group'> {
+  group: SkillGroup;
   category: SkillCategory | '数据员工';
   source?: 'data-employee' | 'common';
   sourceConfig?: { loginUrl: string; loginType: string; version: string };
@@ -79,17 +83,15 @@ export interface CodeTool extends ToolBase {
 }
 export interface McpTool extends ToolBase {
   kind: 'mcp';
-  transport: 'Streamable HTTP' | 'SSE' | 'stdio';
+  transport: 'Streamable HTTP';
   endpoint: string;
   version: string;
   provider: string;
   auth: '无需认证' | 'Bearer Token' | 'OAuth 2.0' | '自定义请求头';
   timeout: number;
-  args: string[];
   bearerTokenEnvVar: string;
   headers: McpKeyValue[];
   envHeaders: McpKeyValue[];
-  envVars: McpKeyValue[];
   discovery: 'demo' | 'pending';
   methods: { name: string; description: string }[];
 }
@@ -188,7 +190,7 @@ function createMcpTools(): McpTool[] {
     id, name, description, methods, kind: 'mcp', updatedAt,
     transport: 'Streamable HTTP', endpoint: `https://${id}.example.com/mcp`,
     version: '1.0.0', provider: '大卡物流平台', auth: 'Bearer Token', timeout: 30,
-    args: [], bearerTokenEnvVar: 'MCP_BEARER_TOKEN', headers: [], envHeaders: [], envVars: [], discovery: 'demo',
+    bearerTokenEnvVar: 'MCP_BEARER_TOKEN', headers: [], envHeaders: [], discovery: 'demo',
   });
   return [
     mcp('vehicle-mcp', '车辆与轨迹服务', '提供车辆最新定位、历史轨迹、停靠事件与线路查询能力。', [
@@ -237,7 +239,17 @@ export const useAgentOpsStore = defineStore('agentOps', () => {
   const tools = readonly(computed<ManagedTool[]>(() => [...mcpServices.value, ...codeTools.value]));
   const agents = ref<ManagedAgent[]>(parseAgentRegistry(agentRegistry));
   const configuredAgentIds = ref<string[]>([]);
-  const customers = ref(createActivatedCustomers());
+  const agentDefaults = ref<Record<string, AgentCapabilities>>({
+    'data-employee-agent': { skillIds: ['spreadsheet-waybill'], toolIds: [] },
+    'general-chat-agent': { skillIds: ['operations-logistics-sheet', 'operations-license-recognition'], toolIds: ['datetime-format'] },
+    'project-chat-agent': { skillIds: ['route-risk-expert', 'gps-trace-expert', 'delivery-sla-expert'], toolIds: [] },
+  });
+  const customers = ref(createActivatedCustomers().map(customer => ({ ...customer,
+    agentConfigs: agents.value.map(agent => {
+      const binding = customer.agentConfigs.find(binding => binding.agentId === agent.id);
+      return binding?.mode === 'custom' ? { ...binding, systemPrompt: binding.systemPrompt ?? agent.systemPrompt } : defaultAgentBinding(agent.id);
+    }),
+  })));
   const customerReports = ref<Record<string, Record<string, AgentConflictReport>>>({});
   const agentSync = ref({ busy: false, lastSyncedAt: '', error: '', summary: '' });
   const codeToolSync = ref({ busy: false, lastSyncedAt: '', error: '', summary: '' });
@@ -289,9 +301,8 @@ export const useAgentOpsStore = defineStore('agentOps', () => {
     const value = normalizeMcpConfig(config);
     const current = mcpServices.value.find((tool) => tool.id === id);
     if (id && !current) throw new Error('MCP 服务不存在，代码工具不能在页面中编辑。');
-    if (current && current.transport !== value.transport) throw new Error('编辑时不能切换连接类型，请删除后重新添加。');
     if (mcpServices.value.some((tool) => tool.id !== id && tool.name === value.name)) throw new Error('MCP 名称已存在，请使用其他名称。');
-    const connection = (tool: McpConfig) => JSON.stringify([tool.transport, tool.endpoint, tool.args, tool.bearerTokenEnvVar, tool.headers, tool.envHeaders, tool.envVars]);
+    const connection = (tool: McpConfig) => JSON.stringify([tool.transport, tool.endpoint, tool.bearerTokenEnvVar, tool.headers, tool.envHeaders]);
     const connectionChanged = !current || connection(current) !== connection(value);
     const record: McpTool = {
       ...value, id: current?.id ?? `mcp-${crypto.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(16).slice(2)}`}`, kind: 'mcp',
@@ -306,13 +317,14 @@ export const useAgentOpsStore = defineStore('agentOps', () => {
     return record;
   }
   function mcpUsage(id: string) {
-    return { skills: skillsForTool(id), agents: customerAgentsForTool(id) };
+    return { skills: skillsForTool(id), agents: customerAgentsForTool(id), defaults: agentsUsingToolByDefault(id) };
   }
   function deleteMcp(id: string) {
     if (!mcpServices.value.some((tool) => tool.id === id)) throw new Error('MCP 服务不存在，代码工具不能在页面中删除。');
     mcpServices.value = mcpServices.value.filter((tool) => tool.id !== id);
     skills.value.forEach((skill) => { skill.privateToolIds = skill.privateToolIds.filter((toolId) => toolId !== id); });
     dataEmployeeSkills.value.forEach((skill) => { skill.privateToolIds = skill.privateToolIds.filter((toolId) => toolId !== id); });
+    Object.values(agentDefaults.value).forEach(config => { config.toolIds = config.toolIds.filter(toolId => toolId !== id); });
     customers.value.forEach((customer) => {
       customer.agentConfigs.forEach((binding) => { binding.toolIds = binding.toolIds.filter((toolId) => toolId !== id); });
     });
@@ -324,18 +336,48 @@ export const useAgentOpsStore = defineStore('agentOps', () => {
   }
   function saveDataEmployeeSkill(skill: DataEmployeeSkill) {
     const index = dataEmployeeSkills.value.findIndex((item) => item.id === skill.id);
-    if (!skillGroups.includes(skill.group)) throw new Error('请选择有效的 Skill 分组。');
-    const record = { ...skill, privateToolIds: [...new Set(skill.privateToolIds)] };
+    const record = { ...skill, group: dataEmployeeSkillGroup, privateToolIds: [...new Set(skill.privateToolIds)] };
     if (index >= 0) dataEmployeeSkills.value[index] = record;
     else dataEmployeeSkills.value.unshift(record);
   }
 
-  function saveAgent(config: AgentConfig, agentId: string) {
+  function agentDefaultConfig(agentId: string): AgentCapabilities {
+    const config = agentDefaults.value[agentId];
+    return { skillIds: [...(config?.skillIds ?? [])], toolIds: [...(config?.toolIds ?? [])] };
+  }
+  function customerAgentBindings(customerId: string): CustomerAgentBinding[] {
+    const customer = customers.value.find(item => item.id === customerId);
+    if (!customer) throw new Error('客户不存在。');
+    const existing = customer.agentConfigs;
+    return [...agents.value.map(agent => existing.find(binding => binding.agentId === agent.id) ?? defaultAgentBinding(agent.id)),
+      ...existing.filter(binding => !agents.value.some(agent => agent.id === binding.agentId))]
+      .map(binding => ({ ...binding, ...(binding.mode === 'custom' ? { systemPrompt: resolveAgentSystemPrompt(binding.agentId, binding) } : {}), skillIds: [...binding.skillIds], toolIds: [...binding.toolIds] }));
+  }
+  function resolveAgentCapabilities(agentId: string, binding?: CustomerAgentBinding): AgentCapabilities {
+    if (!binding || binding.mode === 'default') return agentDefaultConfig(agentId);
+    return { skillIds: [...binding.skillIds], toolIds: [...binding.toolIds] };
+  }
+  function resolveAgentSystemPrompt(agentId: string, binding?: CustomerAgentBinding): string {
+    if (binding?.mode === 'custom' && binding.systemPrompt !== undefined) return binding.systemPrompt;
+    return agents.value.find(agent => agent.id === agentId)?.systemPrompt ?? '';
+  }
+  function validateCapabilities(agentId: string, config: AgentCapabilities, previous: AgentCapabilities): AgentCapabilities {
+    const eligible = availableSkillsForAgent(agentId);
+    if (config.skillIds.some(id => !eligible.some(skill => skill.id === id))) throw new Error('存在失效或不适用于此 Agent 的 Skill，请移除后保存。');
+    if (config.skillIds.some(id => eligible.some(skill => skill.id === id && !skill.enabled) && !previous.skillIds.includes(id))) throw new Error('已停用的 Skill 不能新增加载。');
+    if (config.toolIds.some(id => !tools.value.some(tool => tool.id === id))) throw new Error('存在失效的 Tool，请移除后保存。');
+    return { skillIds: [...new Set(config.skillIds)], toolIds: [...new Set(config.toolIds)] };
+  }
+  function defaultFollowers(agentId: string) {
+    return customers.value.filter(customer => !customer.agentConfigs.some(binding => binding.agentId === agentId && binding.mode === 'custom'));
+  }
+  function saveAgent(config: AgentConfig, agentId: string, defaults?: AgentCapabilities) {
     if (!agentId || !agents.value.some((agent) => agent.id === agentId)) throw new Error('Agent 只能编辑，请先同步工程中已注册的 Agent。');
     const name = config.name.trim();
     if (!name || !config.systemPrompt.trim()) throw new Error('请填写 Agent 名称和 System Prompt。');
     if (name.length > 60) throw new Error('Agent 名称不能超过 60 个字符。');
     if (agents.value.some((agent) => agent.id !== agentId && agent.name === name)) throw new Error('Agent 名称已存在，请使用其他名称。');
+    const nextDefaults = defaults ? validateCapabilities(agentId, defaults, agentDefaultConfig(agentId)) : undefined;
     const record: ManagedAgent = {
       id: agentId,
       role: agents.value.find((agent) => agent.id === agentId)?.role ?? 'custom',
@@ -344,6 +386,7 @@ export const useAgentOpsStore = defineStore('agentOps', () => {
     };
     const index = agents.value.findIndex((agent) => agent.id === record.id);
     agents.value[index] = record;
+    if (nextDefaults) agentDefaults.value[agentId] = nextDefaults;
     configuredAgentIds.value = [...new Set([...configuredAgentIds.value, agentId])];
     return record;
   }
@@ -351,23 +394,25 @@ export const useAgentOpsStore = defineStore('agentOps', () => {
     const customer = customers.value.find((item) => item.id === customerId);
     const binding = customer?.agentConfigs.find((item) => item.agentId === agentId);
     const agent = agents.value.find((item) => item.id === agentId);
-    if (!binding || !agent) throw new Error('客户尚未配置此 Agent，或 Agent 已不在目录中。');
-    return { name: agent.name, systemPrompt: agent.systemPrompt, skillIds: [...binding.skillIds], toolIds: [...binding.toolIds] };
+    if (!customer || !agent) throw new Error('客户不存在，或 Agent 已不在目录中。');
+    return { name: agent.name, systemPrompt: resolveAgentSystemPrompt(agentId, binding), ...resolveAgentCapabilities(agentId, binding) };
   }
   function saveCustomerAgents(customerId: string, configs: CustomerAgentBinding[]) {
     const customer = customers.value.find((item) => item.id === customerId);
     if (!customer) throw new Error('客户不存在。');
     if (new Set(configs.map((item) => item.agentId)).size !== configs.length) throw new Error('同一客户不能重复配置 Agent。');
-    // Validate the complete draft before applying anything; group selections are concrete IDs.
-    const next = configs.map((config) => {
-      if (!agents.value.some((agent) => agent.id === config.agentId)) throw new Error('请移除已失效的 Agent。');
-      const eligible = availableSkillsForAgent(config.agentId);
-      const previous = customer.agentConfigs.find((item) => item.agentId === config.agentId);
-      if (config.skillIds.some((id) => !eligible.some((skill) => skill.id === id))) throw new Error('存在失效或不适用于此 Agent 的 Skill，请移除后保存。');
-      if (config.skillIds.some((id) => eligible.some((skill) => skill.id === id && !skill.enabled) && !previous?.skillIds.includes(id))) throw new Error('已停用的 Skill 不能新增加载。');
-      if (config.toolIds.some((id) => !tools.value.some((tool) => tool.id === id))) throw new Error('存在失效的 Tool，请移除后保存。');
-      return { agentId: config.agentId, skillIds: [...new Set(config.skillIds)], toolIds: [...new Set(config.toolIds)] };
-    });
+    // Validate all submitted overrides before applying anything. Registered Agents cannot be revoked.
+    const submitted = new Map(configs.map(config => {
+      if (!agents.value.some(agent => agent.id === config.agentId)) throw new Error('请移除已失效的 Agent。');
+      if (!['default', 'custom'].includes(config.mode)) throw new Error('请选择遵循默认配置或自定义配置。');
+      if (config.mode === 'default') return [config.agentId, defaultAgentBinding(config.agentId)] as const;
+      const previous = resolveCustomerAgent(customerId, config.agentId);
+      const systemPrompt = (config.systemPrompt ?? previous.systemPrompt).trim();
+      if (!systemPrompt) throw new Error(`请填写${previous.name}的 System Prompt。`);
+      return [config.agentId, { agentId: config.agentId, mode: 'custom' as const, systemPrompt, ...validateCapabilities(config.agentId, config, previous) }] as const;
+    }));
+    const next = agents.value.map(agent => submitted.get(agent.id)
+      ?? customerAgentBindings(customerId).find(binding => binding.agentId === agent.id)!);
     customer.agentConfigs = next;
     customer.updatedAt = new Date().toLocaleString('zh-CN', { hour12: false });
     customer.updatedBy = '当前运营用户';
@@ -382,18 +427,23 @@ export const useAgentOpsStore = defineStore('agentOps', () => {
   function skillsForTool(toolId: string) {
     return agentCallableSkills.value.filter((skill) => skill.privateToolIds.includes(toolId));
   }
+  function agentsUsingToolByDefault(toolId: string) {
+    return agents.value.filter(agent => agentDefaultConfig(agent.id).toolIds.includes(toolId));
+  }
   function customerAgentsForTool(toolId: string) {
-    return customers.value.flatMap((customer) => customer.agentConfigs.filter((binding) => binding.toolIds.includes(toolId)).map((binding) => ({
-      id: `${customer.id}:${binding.agentId}`, customerId: customer.id, agentId: binding.agentId,
-      name: `${customer.name} · ${agents.value.find((agent) => agent.id === binding.agentId)?.name ?? '已失效 Agent'}`,
+    return customers.value.flatMap(customer => agents.value.filter(agent => resolveCustomerAgent(customer.id, agent.id).toolIds.includes(toolId)).map(agent => ({
+      id: `${customer.id}:${agent.id}`, customerId: customer.id, agentId: agent.id,
+      mode: customer.agentConfigs.find(binding => binding.agentId === agent.id)?.mode ?? 'default',
+      name: `${customer.name} · ${agent.name}`,
     })));
   }
   function getToolLoading(toolId: string) {
-    const direct = customerAgentsForTool(toolId).length > 0;
+    const direct = customerAgentsForTool(toolId).length > 0 || agentsUsingToolByDefault(toolId).length > 0;
     const privateLoading = skillsForTool(toolId).length > 0;
     return { direct, private: privateLoading, unloaded: !direct && !privateLoading };
   }
   return { skills, dataEmployeeSkills, agentCallableSkills, availableSkillsForAgent, saveDataEmployeeSkill, tools, agents,
+    agentDefaultConfig, customerAgentBindings, resolveAgentCapabilities, resolveAgentSystemPrompt, defaultFollowers, agentsUsingToolByDefault,
     customers, customerReports, saveCustomerAgents, resolveCustomerAgent, detectCustomerAgentConflicts,
     saveAgent, skillsForTool, customerAgentsForTool, getToolLoading, agentSync, codeToolSync, syncAgents, syncCodeTools, saveMcp, deleteMcp, mcpUsage };
 });

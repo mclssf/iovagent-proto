@@ -1,4 +1,4 @@
-import type { SkillGroup } from './agentOps';
+export const dataEmployeeSkillGroup = '数据员工 Skill' as const;
 
 export type LoginType = '短信验证码' | '手机扫码' | '图形验证码' | '无验证';
 export interface DataEmployeeSkill {
@@ -12,14 +12,14 @@ export interface DataEmployeeSkill {
   skillFileName: string;
   skillUpdated: string;
   skillVersion: string;
-  group: SkillGroup;
+  group: typeof dataEmployeeSkillGroup;
 }
 
 export function createDataEmployeeSkills(): DataEmployeeSkill[] {
   return [
     {
       id: 'jinyu-cement-tms',
-      group: '定制 Skill 组',
+      group: dataEmployeeSkillGroup,
       privateToolIds: [],
       name: '金隅水泥TMS',
       description: '面向金隅水泥运输业务的 TMS 数据采集与运单映射 Skill。',
@@ -47,7 +47,7 @@ export function createDataEmployeeSkills(): DataEmployeeSkill[] {
     },
     {
       id: 'zhilian-shunda-tms',
-      group: '定制 Skill 组',
+      group: dataEmployeeSkillGroup,
       privateToolIds: [],
       name: '智链顺达TMS',
       description: '负责从智链顺达调度中心抓取执行中运输任务。',
@@ -75,7 +75,7 @@ export function createDataEmployeeSkills(): DataEmployeeSkill[] {
     },
     {
       id: 'jinmailang-logistics',
-      group: '定制 Skill 组',
+      group: dataEmployeeSkillGroup,
       privateToolIds: [],
       name: '今麦郎物流管理',
       description: '面向今麦郎发运看板和运单列表的数据采集 Skill。',
@@ -102,7 +102,7 @@ export function createDataEmployeeSkills(): DataEmployeeSkill[] {
     },
     {
       id: 'spreadsheet-waybill',
-      group: '基础 Skill 组',
+      group: dataEmployeeSkillGroup,
       privateToolIds: [],
       name: '表格运单',
       description: '用于上传表格运单并映射为标准运单数据集。',
@@ -128,7 +128,7 @@ export function createDataEmployeeSkills(): DataEmployeeSkill[] {
     },
     {
       id: 'scan-login-tms',
-      group: '扩展 Skill 组',
+      group: dataEmployeeSkillGroup,
       privateToolIds: [],
       name: '扫码登录TMS',
       description: '通过手机扫码登录 TMS，抓取并映射在途运单列表的 Skill。',

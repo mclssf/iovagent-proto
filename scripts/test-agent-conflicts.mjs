@@ -18,14 +18,16 @@ try {
   const projectAgent = store.agents.find((agent) => agent.role === 'project-chat');
   const { selectSkillGroup } = await server.ssrLoadModule('/src/pinia/customerAgents.ts');
   const customerId = 'ent-jinyu', otherCustomerId = 'ent-tsingtao';
-  const config = (agentId, skillIds = [], toolIds = []) => ({ agentId, skillIds, toolIds });
+  const config = (agentId, skillIds = [], toolIds = []) => ({ agentId, mode: 'custom', skillIds, toolIds });
   const scope = (id, agentId) => store.resolveCustomerAgent(id, agentId);
   const detect = (id, agentId) => store.detectCustomerAgentConflicts(id, agentId);
   assert(store.agents.every(agent => !('skillIds' in agent) && !('toolIds' in agent)), 'base Agents cannot own loading assignments');
   assert.equal(store.customers.length, 8);
   assert(store.customers.every(customer => customer.contractStart < customer.contractEnd && ['试用', '正式'].includes(customer.activationType)));
-  assert(store.agentCallableSkills.every(skill => ['基础 Skill 组', '扩展 Skill 组', '定制 Skill 组'].includes(skill.group) && !('visibility' in skill) && !('enterpriseIds' in skill)));
-  assert(store.availableSkillsForAgent(dataAgent.id).every(skill => skill.source === 'data-employee'));
+  assert(store.agentCallableSkills.every(skill => ['基础 Skill 组', '扩展 Skill 组', '定制 Skill 组', '数据员工 Skill'].includes(skill.group) && !('visibility' in skill) && !('enterpriseIds' in skill)));
+  assert(store.availableSkillsForAgent(dataAgent.id).every(skill => skill.source === 'data-employee' && skill.group === '数据员工 Skill'));
+  assert(store.dataEmployeeSkills.every(skill => skill.group === '数据员工 Skill'));
+  assert(store.skills.every(skill => skill.group !== '数据员工 Skill'), 'data employee Skills stay in their source directory');
   assert(store.availableSkillsForAgent(generalAgent.id).every(skill => skill.source === 'common'));
   assert(store.availableSkillsForAgent(projectAgent.id).every(skill => skill.source === 'common'));
   const otherBefore = JSON.stringify(store.customers.find(customer => customer.id === otherCustomerId));
@@ -37,7 +39,8 @@ try {
   assert.equal(JSON.stringify(store.customers.find(customer => customer.id === otherCustomerId)), otherBefore, 'saving one customer cannot affect another');
   assert.equal(JSON.stringify(store.skills), originalSkills, 'customer assignment preserves private definitions');
   assert.equal(JSON.stringify(store.tools), originalTools);
-  assert.throws(() => scope(customerId, generalAgent.id), /尚未配置/);
+  assert.equal(store.customerAgentBindings(customerId).length, 3, 'all registered Agents stay enabled');
+  assert.equal(scope(customerId, generalAgent.id).name, generalAgent.name);
   assert.throws(() => store.saveCustomerAgents('missing', []), /不存在/);
   const beforeInvalid = JSON.stringify(store.customers);
   for (const invalid of [[config('missing')], [config(dataAgent.id, ['route-risk-expert'])], [config(generalAgent.id, ['jinyu-cement-tms'])], [config(generalAgent.id, [], ['missing'])], [config(generalAgent.id), config(generalAgent.id)], [config(generalAgent.id, ['capacity-cargo-search'])]]) {
@@ -48,14 +51,15 @@ try {
   assert.equal(dataReport.skillCount, 1);
   const employee = store.dataEmployeeSkills[0];
   const allCustomerBindings = JSON.stringify(store.customers);
-  store.saveDataEmployeeSkill({ ...employee, name: '金隅水泥采集 Skill', loginUrl: 'https://jinyu.example.com/login', skillContent: '# 新版采集指引', skillVersion: 'v2.0', privateToolIds: ['spreadsheet-export'] });
+  store.saveDataEmployeeSkill({ ...employee, name: '金隅水泥采集 Skill', group: '定制 Skill 组', loginUrl: 'https://jinyu.example.com/login', skillContent: '# 新版采集指引', skillVersion: 'v2.0', privateToolIds: ['spreadsheet-export'] });
   const mappedSkill = store.agentCallableSkills.find(skill => skill.id === employee.id);
   assert.equal(mappedSkill.content, '# 新版采集指引');
+  assert.equal(mappedSkill.group, '数据员工 Skill', 'editing a data employee Skill keeps its source-defined group');
   assert.equal(mappedSkill.sourceConfig.loginUrl, 'https://jinyu.example.com/login');
   assert.notEqual(dataReport.fingerprint, agentConfigurationFingerprint(scope(customerId, dataAgent.id), catalog()));
   assert(resolveAgentTools(scope(customerId, dataAgent.id), catalog()).some(usage => usage.id === 'spreadsheet-export'));
   assert(store.skillsForTool('spreadsheet-export').some(skill => skill.id === employee.id), 'private usage includes data employee Skills');
-  const added = { ...employee, id: 'new-data-source', privateToolIds: ['datetime-format'] };
+  const added = { ...employee, id: 'new-data-source', group: '基础 Skill 组', privateToolIds: ['datetime-format'] };
   store.saveDataEmployeeSkill(added);
   added.privateToolIds.push('vehicle-mcp');
   assert.deepEqual(store.dataEmployeeSkills.find(skill => skill.id === added.id).privateToolIds, ['datetime-format']);
@@ -63,6 +67,15 @@ try {
 
   const groupCatalog = store.availableSkillsForAgent(generalAgent.id);
   const { filterCapabilityOptions, mergeCapabilitySelection } = await server.ssrLoadModule('/src/views/AgentOps/capabilitySelection.ts');
+  const employeeCatalog = store.availableSkillsForAgent(dataAgent.id);
+  const employeeOptions = filterCapabilityOptions(employeeCatalog, '', ['数据员工 Skill'], 'all');
+  assert.equal(employeeOptions.length, store.dataEmployeeSkills.length, 'new and existing data employee Skills share one group');
+  assert(employeeOptions.every(skill => skill.group === '数据员工 Skill'));
+  assert.deepEqual(filterCapabilityOptions(employeeCatalog, '', ['基础 Skill 组', '定制 Skill 组'], 'all'), [], 'data employee Skills no longer appear under their former groups');
+  const employeeIds = mergeCapabilitySelection([], employeeOptions.map(skill => skill.id), employeeOptions);
+  store.saveCustomerAgents('ent-demo', [config(dataAgent.id, employeeIds)]);
+  assert.deepEqual(scope('ent-demo', dataAgent.id).skillIds, store.dataEmployeeSkills.map(skill => skill.id), 'customer can batch load the complete data employee group');
+  assert.deepEqual(selectSkillGroup(employeeIds, '数据员工 Skill', employeeCatalog, false), [], 'group removal uses the same membership');
   const pickerSkills = groupCatalog.map(skill => ({ ...skill, disabled: !skill.enabled }));
   const multiGroup = filterCapabilityOptions(pickerSkills, '', ['基础 Skill 组', '扩展 Skill 组'], 'all');
   assert(multiGroup.length > 0 && multiGroup.every(skill => skill.group !== '定制 Skill 组'), 'group filters combine with OR');
@@ -95,7 +108,7 @@ try {
   store.skills.push({ ...regrouped, id: 'new-base-skill', group: '基础 Skill 组' });
   assert.equal(JSON.stringify(store.customers), beforeRegroup, 'group membership changes cannot mutate saved grants');
   store.saveCustomerAgents('ent-demo', []);
-  assert.equal(store.customers.find(customer => customer.id === 'ent-demo').agentConfigs.length, 0, 'all Agents can be revoked');
+  assert.equal(store.customers.find(customer => customer.id === 'ent-demo').agentConfigs.length, 3, 'registered Agents cannot be revoked');
 
   const transit = { name: '在途测试', systemPrompt: '测试在途能力', skillIds: ['route-risk-expert', 'vehicle-location-query', 'vehicle-trace-query'], toolIds: ['vehicle-mcp', 'risk-evaluate'] };
   const operations = { name: '运营测试', systemPrompt: '测试运营能力', skillIds: ['operations-logistics-sheet', 'operations-sms-notification'], toolIds: ['datetime-format'] };
@@ -133,10 +146,11 @@ try {
   assert(!resolveAgentTools(scope(customerId, projectAgent.id), catalog()).some(usage => usage.id === 'vehicle-mcp'));
   assert(resolveAgentTools(scope(customerId, projectAgent.id), catalog()).some(usage => usage.id === 'risk-evaluate'));
   const customerBeforePrompt = JSON.stringify(store.customers);
+  const customPromptBefore = scope(otherCustomerId, projectAgent.id).systemPrompt;
   const saved = store.saveAgent({ name: '新版项目 Agent', systemPrompt: '更新共享指令', skillIds: ['ignored'], toolIds: ['ignored'] }, projectAgent.id);
   assert(!('skillIds' in saved) && !('toolIds' in saved), 'base save cannot reintroduce loading');
   assert.equal(JSON.stringify(store.customers), customerBeforePrompt);
-  assert.equal(scope(otherCustomerId, projectAgent.id).systemPrompt, '更新共享指令');
+  assert.equal(scope(otherCustomerId, projectAgent.id).systemPrompt, customPromptBefore, 'custom customer prompts stay independent of shared definition updates');
   assert.notEqual(otherReport.fingerprint, agentConfigurationFingerprint(scope(otherCustomerId, projectAgent.id), catalog()));
   const parameter = (name, type) => ({ name, type, required: true, description: name });
   const code = (id, description, inputs, outputs) => ({ id, name: id, description, kind: 'code', inputs, outputs, runtime: 'Python 3', entrypoint: 'tools/test.py:run', updatedAt: '' });
@@ -191,9 +205,10 @@ try {
   assert.equal(synced.agents.length, 3, 'only the engineering catalog may remove Agents');
   assert.equal(synced.agentSync.error, '');
 
-  const httpConfig = { name: '测试 HTTP 服务', description: '连接配置验证', transport: 'Streamable HTTP', endpoint: 'https://mcp.example.com/mcp', bearerTokenEnvVar: 'MCP_TEST_TOKEN', headers: [{ key: 'X-Region', value: 'east' }], envHeaders: [{ key: 'X-Api-Key', value: 'MCP_TEST_KEY' }], args: [], envVars: [], timeout: 30 };
+  const httpConfig = { name: '测试 HTTP 服务', description: '连接配置验证', transport: 'Streamable HTTP', endpoint: 'https://mcp.example.com/mcp', bearerTokenEnvVar: 'MCP_TEST_TOKEN', headers: [{ key: 'X-Region', value: 'east' }], envHeaders: [{ key: 'X-Api-Key', value: 'MCP_TEST_KEY' }], timeout: 30 };
   const created = synced.saveMcp(httpConfig);
   assert.equal(created.discovery, 'pending');
+  assert(synced.tools.filter(tool => tool.kind === 'mcp').every(tool => tool.transport === 'Streamable HTTP' && !('args' in tool) && !('envVars' in tool)));
   assert.deepEqual(created.methods, []);
   assert(synced.getToolLoading(created.id).unloaded);
   httpConfig.headers[0].value = 'west';
@@ -224,14 +239,16 @@ try {
   assert.throws(() => synced.saveMcp({ ...httpConfig, headers: [{ key: 'Authorization', value: 'value' }] }), /重复配置/);
   assert.throws(() => synced.saveMcp({ ...httpConfig, timeout: 0 }), /超时/);
   assert.throws(() => synced.saveMcp({ ...httpConfig, name: changed.name }), /已存在/);
-  assert.throws(() => synced.saveMcp({ ...httpConfig, transport: 'stdio', endpoint: 'npx' }, created.id), /不能切换/);
+  const beforeUnsupportedTransport = JSON.stringify(synced.tools);
+  for (const transport of ['stdio', 'SSE']) {
+    assert.throws(() => synced.saveMcp({ ...httpConfig, transport }), /仅支持 Streamable HTTP/);
+    assert.throws(() => synced.saveMcp({ ...httpConfig, transport }, created.id), /仅支持 Streamable HTTP/);
+    assert.equal(JSON.stringify(synced.tools), beforeUnsupportedTransport, 'unsupported create/edit leaves all service definitions intact');
+  }
   assert.throws(() => synced.saveMcp(httpConfig, 'risk-evaluate'), /代码工具不能/);
   assert.throws(() => synced.deleteMcp('risk-evaluate'), /代码工具不能/);
-  const stdio = synced.saveMcp({ ...httpConfig, name: '测试 STDIO 服务', transport: 'stdio', endpoint: 'npx', args: ['-y', '@example/mcp', '--name=two words'], envVars: [{ key: 'MCP_MODE', value: 'demo' }] });
-  assert.equal(stdio.args[2], '--name=two words');
-  assert.deepEqual(stdio.headers, []);
-  assert.equal(stdio.bearerTokenEnvVar, '');
-  assert.deepEqual(stdio.envVars, [{ key: 'MCP_MODE', value: 'demo' }]);
+  const secondHttp = synced.saveMcp({ ...httpConfig, name: '另一项 HTTP 服务', bearerTokenEnvVar: '', headers: [], envHeaders: [] });
+  assert.equal(secondHttp.auth, '无需认证');
 
   const codeDefinitions = structuredClone(codeSource);
   codeDefinitions.find((tool) => tool.id === 'risk-evaluate').description = '工程新版风险说明';
@@ -264,8 +281,8 @@ try {
   assert(synced.dataEmployeeSkills.every(skill => !skill.privateToolIds.includes(created.id)));
   await synced.syncAgents(async () => agentsSource);
   assert(!synced.resolveCustomerAgent(otherCustomerId, generalAgent.id).toolIds.includes(created.id));
-  assert(synced.tools.some((tool) => tool.id === stdio.id), 'deletion does not affect another service');
-  console.log('Passed: Customer-Agent isolation, group snapshot selection, private Tool independence, shared prompts and scoped conflict detection; engineering sync and failure rollback; MCP HTTP/STDIO CRUD, validation and reference cleanup.');
+  assert(synced.tools.some((tool) => tool.id === secondHttp.id), 'deletion does not affect another service');
+  console.log('Passed: Customer-Agent isolation, group snapshot selection, private Tool independence, shared prompts and scoped conflict detection; engineering sync and failure rollback; MCP Streamable HTTP-only CRUD, validation and reference cleanup.');
 } finally {
   await server.close();
 }
