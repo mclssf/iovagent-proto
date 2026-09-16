@@ -36,7 +36,7 @@ export interface TmsSyncCustomer {
   userPhone: string;
 }
 
-export type PageId = 'agent' | 'analytics' | 'detail' | 'downloads' | 'knowledgeBase' | 'knowledgeBaseEmpty' | 'longTasks' | 'orders' | 'projectCreate' | 'projects' | 'risk';
+export type PageId = 'agent' | 'analytics' | 'dailyTasks' | 'detail' | 'downloads' | 'knowledgeBase' | 'knowledgeBaseEmpty' | 'longTasks' | 'orders' | 'projectCreate' | 'projects' | 'risk';
 export type Tone = 'blue' | 'gray' | 'green' | 'orange' | 'purple' | 'red';
 
 export interface Order {
@@ -98,6 +98,7 @@ export interface AgentResultLink {
 }
 
 export interface AgentResultFile {
+  description?: string;
   name: string;
   url: string;
 }

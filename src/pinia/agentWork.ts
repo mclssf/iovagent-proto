@@ -16,6 +16,7 @@ import { defineStore } from 'pinia';
 
 import { extractMcpPrompt, runMcpPrompt } from '@/views/AgentWork/mcpClient';
 import { getRiskOrders, summarizeOrders } from '@/views/AgentWork/utils';
+import { ensureRequiredMonitorSkills } from '@/views/AgentWork/dailyTasks';
 
 const defaultOrdersDateRange = {
   start: '2026-05-09',
@@ -149,6 +150,7 @@ function cloneChatMessages(messages: ChatMessage[]) {
     file: message.file ? { ...message.file } : undefined,
     link: message.link ? { ...message.link } : undefined,
     steps: message.steps?.map((step) => ({ ...step })),
+    sources: message.sources?.map(source => ({ ...source })),
   }));
 }
 
@@ -346,6 +348,7 @@ export const rightPanelTabs: [string, string][] = [
 const processStepInitialDelay = 360;
 const processStepInterval = 680;
 const spreadsheetProcessStepInterval = 1200;
+const regionVisitStepDelayRange: [number, number] = [4400, 5600];
 let agentProcessTimers: ReturnType<typeof setTimeout>[] = [];
 
 const warningProcessSteps = [
@@ -500,6 +503,83 @@ function extractSpreadsheetRequest(raw: string) {
     .find(Boolean);
   if (!prompt || !sourceFileName) return null;
   return { prompt, sourceFileName };
+}
+
+interface RegionVisitRequest {
+  region: string;
+  sourceFileName: string;
+}
+
+const regionVisitQueryPattern =
+  /(?:是否|有没有|有无)(?:曾经)?(?:到过|到达过|去过|经过|途经|路过|驶入过|进入过)([\u4e00-\u9fa5]{2,12}(?:省|市|区|县|自治州|地区))/;
+
+function extractRegionVisitRegion(raw: string) {
+  return raw.match(regionVisitQueryPattern)?.[1] ?? '';
+}
+
+function extractRegionVisitRequest(raw: string): RegionVisitRequest | null {
+  const region = extractRegionVisitRegion(raw);
+  const spreadsheetRequest = extractSpreadsheetRequest(raw);
+  if (!region || !spreadsheetRequest || !/\.(?:csv|xls|xlsx)$/i.test(spreadsheetRequest.sourceFileName)) return null;
+  return { region, sourceFileName: spreadsheetRequest.sourceFileName };
+}
+
+function createRegionVisitSteps(request: RegionVisitRequest): NonNullable<ChatMessage['steps']> {
+  return [
+    {
+      title: '理解查询意图',
+      text: `识别任务为“批量核验车辆历史到访”，目标行政区域为“${request.region}”。`,
+    },
+    {
+      title: '解析待处理表格',
+      text: `读取“${request.sourceFileName}”，识别车牌号、司机手机号、运单开始时间，共 14 条有效记录。`,
+    },
+    {
+      title: '建立查询时间窗',
+      text: '按每条记录的运单开始时间至当前查询时刻，生成 14 个独立历史轨迹检索窗口。',
+    },
+    {
+      title: '解析地区边界',
+      text: `调用行政区划服务，将“${request.region}”转换为可用于轨迹匹配的地理围栏。`,
+      skill: '行政区划解析',
+    },
+    {
+      title: '批量查询历史轨迹',
+      text: '按车牌和时间窗调取车辆历史定位点、轨迹连续性及有效定位时间。',
+      skill: '轨迹查询',
+    },
+    {
+      title: '判定地区到访',
+      text: `将有效轨迹点与“${request.region}”围栏进行空间匹配，提取首次经过时间并复核边界附近定位。`,
+      skill: '电子围栏核验',
+    },
+    {
+      title: '生成查询结果',
+      text: '在原表追加到访结论和经过时间，完成 14 条记录的字段、时间与统计一致性检查。',
+    },
+  ];
+}
+
+function createRegionVisitResultFile(sourceFileName: string, region: string): AgentResultFile {
+  const sourceBaseName = sourceFileName.replace(/\.[^.]+$/, '').replace(/[\\/:*?"<>|]/g, '_') || '车辆历史到访清单';
+  return {
+    description: 'Excel 工作簿 · 14 条车辆地区到访核验结果',
+    name: `${sourceBaseName}_${region}到访查询_${formatFileTimestamp(new Date())}.xlsx`,
+    url: '/demo/vehicle-region-visit-result.xlsx',
+  };
+}
+
+function createRegionVisitResultText(region: string) {
+  return [
+    `查询完成：已核验 14 条车辆记录在各自运单周期内是否到过${region}。`,
+    '',
+    `到过${region}：8 条`,
+    `未到过${region}：6 条`,
+    '到访占比：57.1%',
+    '有效轨迹覆盖：14 条（100%）',
+    '',
+    '判定口径：以每条记录的运单开始时间为起点、当前查询时刻为终点；存在有效定位点落入目标行政区围栏即判定为“是”，并记录首次经过时间。',
+  ].join('\n');
 }
 
 interface TransportStatusRequest {
@@ -931,7 +1011,7 @@ function createAnalysisReportProcessMessage(request: AnalysisReportRequest): Cha
   };
 }
 
-const knowledgeBaseIntentTerms = ['知识库', '制度', 'SOP', '规范', '办法', '标准', '赔付', '理赔', '考核', '合同', '案例', '怎么处理', '如何处理', '怎么判定', '规则'];
+const knowledgeBaseIntentTerms = ['知识库', '制度', 'sop', '规范', '办法', '赔付', '理赔', '考核', '合同', '案例'];
 const knowledgeBaseScopeTerms: Record<string, string> = {
   案例库: '案例库',
   案例: '案例库',
@@ -970,7 +1050,7 @@ const knowledgeBaseAnswers: KnowledgeBaseAnswer[] = [
     ],
   },
   {
-    question: '非目的地物流园长停',
+    question: '非目的地物流园长停 异常停车',
     answer:
       '参考《在途异常处理SOP》第 5 条，当系统识别到车辆在非目的地物流园或货场长时间停靠，且停靠时长超过阈值（默认 60 分钟）时，会自动标记为高风险异常停车。运营人员需在 30 分钟内联系司机核实原因，要求司机提供现场照片、货物封签状态及停靠点 POI 信息，并同步承运商调度进行复核。[1] 处置动作分为三步：第一步，通过智能体或 TMS 确认该停靠点是否为客户授权的中转仓、临时卸货点或维修点；第二步，若未经授权，要求司机说明原因并保留通话录音、微信记录等证据；第三步，根据风险等级决定是否升级至安全部门或客户侧进行人工介入。[2] 典型案例方面，《皖K55821第三方中转仓经停案例》详细复盘了合肥仓→南京仓线路中，车辆在第三方中转仓非合同经停 73 分钟的处置过程。[3]',
     sources: [
@@ -984,7 +1064,7 @@ const knowledgeBaseAnswers: KnowledgeBaseAnswer[] = [
     ],
   },
   {
-    question: '承运商考核',
+    question: '承运商考核 月度考核',
     answer:
       '依据《承运商履约考核办法》第 2 章，承运商月度考核采用百分制，核心指标包括五大类：一是到货准时率，权重 30%；二是异常率，权重 25%；三是轨迹完整率，权重 20%；四是客户投诉率，权重 15%；五是回单及时率，权重 10%。[1] 评分规则上，每个指标设置目标值、警戒值和红线值。达到目标值得满分，介于警戒值与目标值之间按比例扣分，低于警戒值不得分，触及红线值则当月考核直接降级。[2] 考核结果与奖惩直接挂钩：月度评分 90 分以上为 A 级，可获得优先派单权和奖励系数；80–89 分为 B 级，正常结算；70–79 分为 C 级，触发整改通知并限制新线路分配；70 分以下为 D 级，暂停合作并启动清退评估。[3]',
     sources: [
@@ -1013,8 +1093,8 @@ const knowledgeBaseAnswers: KnowledgeBaseAnswer[] = [
   },
 ];
 
-function hasKnowledgeBaseIntent(raw: string) {
-  return knowledgeBaseIntentTerms.some((term) => raw.includes(term));
+export function hasKnowledgeBaseIntent(raw: string) {
+  return knowledgeBaseIntentTerms.some((term) => raw.toLowerCase().includes(term));
 }
 
 function resolveKnowledgeBaseScope(raw: string) {
@@ -1046,14 +1126,14 @@ function createKnowledgeBaseProcessMessage(raw: string): ChatMessage {
     role: 'agent',
     title: '知识库检索',
     status: '已完成',
-    text: `正在${scope === '全部知识库' ? '检索全部知识库' : `在“${scope}”中检索`}，并基于检索结果生成引用回答。`,
+    text: `演示知识库示例：正在${scope === '全部知识库' ? '检索全部知识库' : `检索“${scope}”`}，并基于检索结果生成引用回答。`,
     progressMode: true,
     steps: [
       { title: '解析检索范围', text: scope === '全部知识库' ? '未限定文件夹，默认检索全部知识库。' : `识别到限定范围：${scope}。` },
-      { title: '向量召回相关片段', text: '基于 Embedding 召回 Top-K 相关文本片段，并过滤低相关度结果。', skill: '知识库检索' },
+      { title: '查找相关内容', text: '查找与当前问题相关的制度和案例，筛选可引用的内容。', skill: '知识库检索' },
       { title: '生成引用回答', text: '结合召回片段生成回答，并标注来源文件名与 80 字摘要。' },
     ],
-    result: matched.answer,
+    result: `以下为演示知识库内容。\n\n${matched.answer}`,
     sources: matched.sources,
   };
 }
@@ -1104,7 +1184,7 @@ export const agentWorkData = defineStore('agentWork', {
     return {
       ordersStartDate: defaultOrdersDateRange.start,
       ordersEndDate: defaultOrdersDateRange.end,
-      projects: [...projectsSeed] as Project[],
+      projects: projectsSeed.map((project) => ({ ...project, skillIds: ensureRequiredMonitorSkills(project.skillIds) })) as Project[],
       recentConversations: conversationSeeds.map((conversation) => ({
         ...conversation,
         messages: conversation.messages.map((message) => ({ ...message })),
@@ -1232,6 +1312,13 @@ export const agentWorkData = defineStore('agentWork', {
         conversation.id === conversationId ? { ...conversation, title: normalizedTitle } : conversation,
       );
     },
+    startExampleConversation(title: string, messages: ChatMessage[]) {
+      this.startNewConversation();
+      this.ensureConversationStarted();
+      this.renameConversation(this.currentConversationId, title);
+      this.agentMessages = cloneChatMessages(messages).map(message => message.role === 'agent' ? { ...message, text: `演示案例：${message.text ?? ''}` } : message);
+      this.persistActiveConversationMessages();
+    },
     ensureConversationStarted() {
       if (this.workspaceMode !== 'conversation' || this.currentConversationId) return;
       const conversationId = `C${Date.now()}`;
@@ -1328,7 +1415,7 @@ export const agentWorkData = defineStore('agentWork', {
           tmsUser: 'demo_user',
           keyword: '演示',
           statusFilter: '在途',
-          skillIds: ['spreadsheet-waybill', 'route-risk-expert', 'gps-trace-expert', 'parking-event-expert'],
+          skillIds: ensureRequiredMonitorSkills(['spreadsheet-waybill', 'route-risk-expert', 'gps-trace-expert', 'parking-event-expert']),
         },
         ...this.projects,
       ];
@@ -1350,7 +1437,7 @@ export const agentWorkData = defineStore('agentWork', {
           tmsUser: '文件导入',
           keyword: '导入运单',
           statusFilter: '在途',
-          skillIds: ['spreadsheet-waybill', 'route-risk-expert', 'gps-trace-expert', 'parking-event-expert'],
+          skillIds: ensureRequiredMonitorSkills(['spreadsheet-waybill', 'route-risk-expert', 'gps-trace-expert', 'parking-event-expert']),
         },
         ...this.projects,
       ];
@@ -1377,7 +1464,7 @@ export const agentWorkData = defineStore('agentWork', {
       ElMessage.success(`已将 ${importedCount} 条运单合并到“${targetProject.name}”`);
     },
     addSkillProject(name: string, skillNames: string[], skillIds: string[]) {
-      const projectId = `P${String(this.projects.length + 1).padStart(3, '0')}`;
+      const projectId = `P${crypto.randomUUID()}`;
       const skillSummary = skillNames.length > 0 ? skillNames.join(' / ') : '内置技能';
       this.workspaceMode = 'project';
       this.currentConversationId = '';
@@ -1393,7 +1480,7 @@ export const agentWorkData = defineStore('agentWork', {
           tmsUser: 'skill_agent',
           keyword: skillNames.slice(0, 2).join('、') || name,
           statusFilter: '在途',
-          skillIds,
+          skillIds: ensureRequiredMonitorSkills(skillIds),
         },
         ...this.projects,
       ];
@@ -1412,7 +1499,7 @@ export const agentWorkData = defineStore('agentWork', {
               tmsUrl: skillSummary,
               tmsUser: project.tmsUser || 'skill_agent',
               keyword: skillNames.slice(0, 2).join('、') || name,
-              skillIds,
+              skillIds: ensureRequiredMonitorSkills(skillIds),
             }
           : project,
       );
@@ -1456,13 +1543,31 @@ export const agentWorkData = defineStore('agentWork', {
       if (!raw.trim()) return;
       this.ensureConversationStarted();
       const next: ChatMessage[] = [...this.agentMessages, { role: 'user', text: raw }];
-      const spreadsheetRequest = extractSpreadsheetRequest(raw);
+      const regionVisitRegion = extractRegionVisitRegion(raw);
+      const regionVisitRequest = extractRegionVisitRequest(raw);
+      const spreadsheetRequest = regionVisitRequest ? null : extractSpreadsheetRequest(raw);
       const mcpPrompt = extractMcpPrompt(raw);
       const emailDeliveryRequest = extractEmailDeliveryRequest(raw, this.agentMessages);
       const analysisReportRequest = extractAnalysisReportRequest(raw);
       const transportStatusRequest = extractTransportStatusRequest(raw);
       const vehiclePositionRequest = transportStatusRequest ? null : extractVehiclePositionRequest(raw);
       let replyMessage: ChatMessage = { role: 'agent', text: '已处理你的请求。你可以继续补充需要关注的范围。' };
+      if (regionVisitRequest) {
+        this.startRegionVisitProcess(next, regionVisitRequest);
+        this.agentInput = '';
+        return;
+      }
+      if (regionVisitRegion) {
+        this.agentMessages = [
+          ...next,
+          {
+            role: 'agent',
+            text: `已识别查询地区“${regionVisitRegion}”。请上传包含车牌号、司机手机号、运单开始时间的 Excel 或 CSV 表格，我会按每条运单的时间范围批量核验车辆是否到过该地区。`,
+          },
+        ];
+        this.agentInput = '';
+        return;
+      }
       if (spreadsheetRequest) {
         this.startSpreadsheetFillProcess(next, spreadsheetRequest.sourceFileName);
         this.agentInput = '';
@@ -1574,6 +1679,50 @@ export const agentWorkData = defineStore('agentWork', {
       }
       this.agentMessages = [...next, replyMessage];
       this.agentInput = '';
+    },
+    startRegionVisitProcess(next: ChatMessage[], request: RegionVisitRequest) {
+      const steps = createRegionVisitSteps(request);
+      const resultFile = createRegionVisitResultFile(request.sourceFileName, request.region);
+      const messageIndex = next.length;
+      let cumulativeDelay = 0;
+
+      this.agentMessages = [
+        ...next,
+        {
+          role: 'agent',
+          title: '车辆历史到访核验',
+          status: '处理中',
+          text: `已接收“${request.sourceFileName}”，正在核验表内车辆是否到过${request.region}。`,
+          steps,
+          result: '',
+          progressMode: true,
+          activeStepIndex: 0,
+        },
+      ];
+
+      steps.forEach((_, stepIndex) => {
+        cumulativeDelay += Math.round(randomBetween(...regionVisitStepDelayRange));
+        const timer = setTimeout(() => {
+          const completedStepCount = stepIndex + 1;
+          const isComplete = completedStepCount === steps.length;
+          this.agentMessages = this.agentMessages.map((message, index) => {
+            if (index !== messageIndex) return message;
+            return {
+              ...message,
+              activeStepIndex: completedStepCount,
+              status: isComplete ? '已完成' : '处理中',
+              result: isComplete ? createRegionVisitResultText(request.region) : '',
+              file: isComplete ? resultFile : undefined,
+            };
+          });
+
+          if (isComplete) {
+            ElMessage.success('车辆历史到访核验完成');
+            clearAgentProcessTimers();
+          }
+        }, cumulativeDelay);
+        agentProcessTimers.push(timer);
+      });
     },
     startSpreadsheetFillProcess(next: ChatMessage[], sourceFileName: string) {
       const steps = createSpreadsheetFillSteps(sourceFileName);

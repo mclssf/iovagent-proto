@@ -30,8 +30,6 @@ const currentUserName = computed(
 
 const publicNavs: { icon: string; id: PageId; label: string }[] = [
   { id: 'knowledgeBase', label: '我的知识库', icon: strokeIconPaths.book },
-  { id: 'knowledgeBaseEmpty', label: '我的知识库', icon: strokeIconPaths.book },
-  { id: 'longTasks', label: '长期任务', icon: strokeIconPaths.alarmClock },
   { id: 'downloads', label: '下载', icon: strokeIconPaths.download },
 ];
 
@@ -283,6 +281,7 @@ const kbConversationCases: KnowledgeBaseConversationCase[] = [
 
 const projectNavs: { icon: string; id: PageId; label: string }[] = [
   { id: 'agent', label: '智能体工作台', icon: strokeIconPaths.bot },
+  { id: 'dailyTasks', label: '日常任务', icon: strokeIconPaths.alarmClock },
   { id: 'orders', label: '运单列表', icon: strokeIconPaths.list },
   { id: 'risk', label: '异常运单列表', icon: strokeIconPaths.shield },
   { id: 'detail', label: '运单详情与地图', icon: strokeIconPaths.map },
@@ -314,9 +313,7 @@ function openConversation(conversationId: string) {
 }
 
 function openKnowledgeBaseConversation(item: KnowledgeBaseConversationCase) {
-  store.startNewConversation();
-  store.agentMessages = item.messages.map((message) => ({ ...message }));
-  store.currentConversationId = item.id;
+  store.startExampleConversation(item.title, item.messages);
   expandedProjectId.value = '';
   goNav('agent');
 }

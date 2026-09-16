@@ -122,6 +122,11 @@ const cityPool: Array<{ name: string; lat: number; lng: number }> = [
 ];
 
 // 生成 100 条随机线路，取运单量 TOP 20
+function demoRandom() {
+  demoSeed = (Math.imul(demoSeed, 1664525) + 1013904223) >>> 0;
+  return demoSeed / 4294967296;
+}
+let demoSeed = 20260917;
 function generateRandomLines(count: number): PlatformLine[] {
   const lines: PlatformLine[] = [];
   const usedPairs = new Set<string>();
@@ -159,8 +164,8 @@ function generateRandomLines(count: number): PlatformLine[] {
     let fromCity, toCity, pairKey;
     let attempts = 0;
     do {
-      fromCity = cityPool[Math.floor(Math.random() * cityPool.length)]!;
-      toCity = cityPool[Math.floor(Math.random() * cityPool.length)]!;
+      fromCity = cityPool[Math.floor(demoRandom() * cityPool.length)]!;
+      toCity = cityPool[Math.floor(demoRandom() * cityPool.length)]!;
       pairKey = `${fromCity.name}-${toCity.name}`;
       attempts++;
     } while ((fromCity.name === toCity.name || usedPairs.has(pairKey)) && attempts < 50);
@@ -169,11 +174,11 @@ function generateRandomLines(count: number): PlatformLine[] {
     usedPairs.add(pairKey);
 
     // 运单量：大部分低频，少数中频，极少高频（模拟真实分布）
-    const rand = Math.random();
+    const rand = demoRandom();
     let waybillCount: number;
-    if (rand < 0.6) waybillCount = 50 + Math.floor(Math.random() * 150);      // 低频 50-200
-    else if (rand < 0.9) waybillCount = 200 + Math.floor(Math.random() * 150); // 中频 200-350
-    else waybillCount = 350 + Math.floor(Math.random() * 200);                 // 高频 350-550
+    if (rand < 0.6) waybillCount = 50 + Math.floor(demoRandom() * 150);      // 低频 50-200
+    else if (rand < 0.9) waybillCount = 200 + Math.floor(demoRandom() * 150); // 中频 200-350
+    else waybillCount = 350 + Math.floor(demoRandom() * 200);                 // 高频 350-550
 
     lines.push({
       id: `L${String(i + 1).padStart(3, '0')}`,
@@ -221,6 +226,8 @@ function selectAssetTab(tab: 'vehicle' | 'line' | 'poi') {
   assetDetailTab.value = tab;
 }
 
+let mapRefreshTimer: ReturnType<typeof setTimeout> | undefined;
+const mapTileError = ref(false);
 const platformMapRef = ref<HTMLDivElement | null>(null);
 let platformMapInstance: L.Map | null = null;
 
@@ -428,7 +435,7 @@ function drawPlatformMapLayers() {
 }
 
 function initPlatformMap() {
-  if (!platformMapRef.value || platformMapInstance) return;
+  if (props.emptyMode || !platformMapRef.value || platformMapInstance) return;
   platformMapInstance = L.map(platformMapRef.value, {
     attributionControl: false,
     center: [32.5, 118.8],
@@ -448,16 +455,19 @@ function initPlatformMap() {
     subdomains: '1234',
     className: 'platform-map-tiles',
   }).addTo(platformMapInstance);
+  baseLayer.on('tileerror', () => { mapTileError.value = true; });
+  baseLayer.on('tileload', () => { baseLayer.getContainer()?.classList.add('tiles-loaded'); });
   baseLayer.on('load', () => baseLayer.getContainer()?.classList.add('tiles-loaded'));
 
   drawPlatformMapLayers();
-  setTimeout(() => {
+  mapRefreshTimer = setTimeout(() => {
     platformMapInstance?.invalidateSize();
     fitBoundsToLines();
   }, 80);
 }
 
 function clearPlatformMap() {
+  clearTimeout(mapRefreshTimer);
   clearAssetLayers();
   platformMapInstance?.remove();
   platformMapInstance = null;
@@ -469,7 +479,7 @@ watch(
     if (folderId === 'platformAssets') {
       nextTick(() => {
         if (!platformMapInstance) initPlatformMap();
-        else setTimeout(() => {
+        else mapRefreshTimer = setTimeout(() => {
           platformMapInstance?.invalidateSize();
           fitBoundsToLines();
         }, 80);
@@ -535,7 +545,7 @@ onBeforeUnmount(() => {
 
     <div class="flex min-h-0 flex-1">
 
-      <main class="flex min-h-0 flex-1 flex-col overflow-hidden bg-[#fcfcfc]">
+      <main class="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-[#fcfcfc]">
         <div class="flex min-h-0 flex-1 flex-col overflow-y-auto p-4">
           <!-- 平台数据资产 -->
           <template v-if="activeFolderId === 'platformAssets'">
@@ -548,12 +558,12 @@ onBeforeUnmount(() => {
                 <h2 class="text-base font-semibold text-slate-900">平台数据资产</h2>
               </div>
               <p class="mt-1 pl-9 text-xs text-slate-500">
-                来自你在大卡数字人中的业务调用，已自动沉淀为可检索知识
+                演示数据：展示业务调用沉淀的车辆、路线与起终点企业
               </p>
             </div>
 
             <!-- KPI 卡片（位于地图上方） -->
-            <div class="grid grid-cols-3 gap-4" :class="props.emptyMode ? 'mb-6' : 'mb-4'">
+            <div class="grid grid-cols-1 gap-4 sm:grid-cols-3" :class="props.emptyMode ? 'mb-6' : 'mb-4'">
               <div class="rounded-xl border border-[#e3e3df] bg-white p-4">
                 <div class="flex items-center gap-2">
                   <span class="flex h-8 w-8 items-center justify-center rounded-lg bg-blue-50 text-blue-600">
@@ -588,13 +598,14 @@ onBeforeUnmount(() => {
 
             <!-- 地图（放大展示） -->
             <div v-if="!props.emptyMode" class="mb-5">
-              <div class="mb-2 flex items-center justify-between">
+              <div class="mb-2 flex flex-wrap items-center justify-between gap-2">
                 <p class="text-xs text-slate-500">地市间运输路线分布</p>
                 <p class="text-[11px] text-slate-400">仅展示运单量 Top 20 的地市间路线，箭头方向为运输流向</p>
               </div>
               <div class="relative">
                 <div ref="platformMapRef" class="platform-map h-[420px] w-full overflow-hidden rounded-xl border border-[#e4e4e0] bg-[#f3f3ef]"></div>
                 <div class="platform-map-frame pointer-events-none absolute inset-0 rounded-xl"></div>
+                <p v-if="mapTileError" role="status" class="absolute bottom-3 left-3 z-[500] rounded border bg-white px-3 py-2 text-xs text-slate-600">底图暂不可用，可继续查看路线与下方明细。</p>
                 <!-- 图例 -->
                 <div class="pointer-events-none absolute left-3 top-3 z-[500] flex flex-col gap-1.5 rounded-lg border border-white/60 bg-white/85 px-3 py-2 shadow-sm backdrop-blur-md">
                   <p class="text-[10px] font-semibold uppercase tracking-wider text-slate-400">线路量级</p>
@@ -623,7 +634,7 @@ onBeforeUnmount(() => {
 
             <!-- 在途运营分析 -->
             <div v-if="!props.emptyMode" class="mb-5 rounded-xl border border-[#e3e3df] bg-white p-5">
-              <div class="mb-4 flex items-center justify-between">
+              <div class="mb-4 flex flex-wrap items-center justify-between gap-2">
                 <div>
                   <h3 class="text-sm font-semibold text-slate-900">在途运营分析</h3>
                   <p class="mt-0.5 text-xs text-slate-500">基于已采购服务生成的在途监控与运营指标</p>
@@ -637,7 +648,7 @@ onBeforeUnmount(() => {
                   在对话中分析
                 </button>
               </div>
-              <div class="grid grid-cols-3 gap-4">
+              <div class="grid grid-cols-1 gap-4 sm:grid-cols-3">
                 <div class="rounded-lg border border-[#e3e3df] bg-[#f7f7f5] p-4">
                   <p class="text-xs text-slate-500">高风险运单数</p>
                   <p class="mt-1 text-xl font-semibold text-red-500">{{ operationAnalysis.highRiskWaybillCount }}</p>
@@ -657,10 +668,10 @@ onBeforeUnmount(() => {
 
 
             <!-- 客户常用资产明细 -->
-            <div class="mb-3 flex items-center justify-between">
+            <div class="mb-3 flex flex-wrap items-center justify-between gap-2">
               <div>
                 <h3 class="text-sm font-semibold text-slate-900">
-                  {{ assetDetailTab === 'vehicle' ? '车辆使用 · Top 10' : assetDetailTab === 'line' ? '路线覆盖 · Top 10' : '运单起终点企业' }}
+                  {{ assetDetailTab === 'vehicle' ? '车辆使用 · Top 10' : assetDetailTab === 'line' ? '路线覆盖 · Top 20' : '运单起终点企业' }}
                 </h3>
                 <p class="mt-0.5 text-xs text-slate-500">{{ props.emptyMode ? '数据沉淀后将按运单覆盖排序' : '按运单覆盖排序' }}</p>
               </div>
