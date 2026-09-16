@@ -1,3 +1,4 @@
+import { migrateCapacitySkillIds } from './capacitySkills';
 import { defineStore } from 'pinia';
 import { computed, readonly, ref } from 'vue';
 import type { DeepReadonly } from 'vue';
@@ -118,9 +119,9 @@ const privateToolSeeds: Record<string, string[]> = {
   'operations-wecom-suite': ['collaboration-mcp'],
   'operations-feishu-suite': ['collaboration-mcp'],
   'operations-dingtalk-suite': ['collaboration-mcp'],
-  'capacity-find-carrier': ['capacity-mcp'],
-  'capacity-quote-query': ['capacity-mcp'],
-  'capacity-cargo-search': ['capacity-mcp'],
+  'capacity-cargo-publish': ['capacity-mcp'],
+  'capacity-quote-collection': ['capacity-mcp'],
+  'capacity-cargo-normalization': ['capacity-mcp'],
   'capacity-private-fleet': ['capacity-mcp'],
 };
 
@@ -145,9 +146,9 @@ const skillSeed: Array<{
   { id: 'operations-wecom-suite', name: '企业微信套件', category: '运营助手' },
   { id: 'operations-feishu-suite', name: '飞书套件', category: '运营助手' },
   { id: 'operations-dingtalk-suite', name: '钉钉套件', category: '运营助手' },
-  { id: 'capacity-find-carrier', name: '找运力', category: '运力与货源' },
-  { id: 'capacity-quote-query', name: '报价查询', category: '运力与货源' },
-  { id: 'capacity-cargo-search', name: '搜索货源', category: '运力与货源' },
+  { id: 'capacity-cargo-publish', name: '货源发布', category: '运力与货源' },
+  { id: 'capacity-quote-collection', name: '报价抢单', category: '运力与货源' },
+  { id: 'capacity-cargo-normalization', name: '货源解析', category: '运力与货源' },
   { id: 'capacity-private-fleet', name: '私有运力池', category: '运力与货源' },
 ];
 
@@ -168,10 +169,10 @@ const skillDescriptions: Record<string, string> = {
   'operations-wecom-suite': '连接企业微信，将在途风险、协同待办和处置结果同步到群聊、消息与工作台。',
   'operations-feishu-suite': '连接飞书，将运单异常、协同任务和处置进展同步到消息、群组与多维表格。',
   'operations-dingtalk-suite': '连接钉钉，将在途预警、审批待办和运营结果推送到群聊与工作通知。',
-  'capacity-find-carrier': '将货源信息发布至运力生态，供司机或承运方接单。',
-  'capacity-quote-query': '查询司机或承运方的抢单及报价信息。',
-  'capacity-cargo-search': '搜索平台已发布的货源信息。',
-  'capacity-private-fleet': '管理企业自有及长期合作的司机、车辆和承运商资源，支持定向询价与派单。',
+  'capacity-cargo-publish': '将标准货源发布到大卡和已配置的满帮账号，并统一处理跨平台修改与下架。',
+  'capacity-quote-collection': '采集大卡与满帮的司机抢单、报价和电话联系反馈，形成统一候选运力列表。',
+  'capacity-cargo-normalization': '解析 Excel 或连接器采集的货源并映射标准字段，缺失必填项时通过多轮对话补齐。',
+  'capacity-private-fleet': '通过 Excel 维护企业熟车，叠加车辆位置、目的地预测和当前装卸状态，支持筛选与定向询价。',
 };
 
 function createSkills(): ManagedSkill[] {
@@ -179,7 +180,7 @@ function createSkills(): ManagedSkill[] {
     ...skill,
     content: `# ${skill.name}\n\n## 适用范围\n${skill.category}\n\n## 执行指引\n根据用户任务识别所需数据和业务约束，调用 ${skill.name} 完成处理，并返回结构化结果与必要的执行说明。`,
     description: skillDescriptions[skill.id] ?? '',
-    enabled: index !== 18,
+    enabled: true,
     fileName: `${skill.id}.skill.md`,
     privateToolIds: [...(privateToolSeeds[skill.id] ?? [])],
     updatedAt: index < 9 ? '2026-07-25 11:20' : '2026-07-23 09:15',
@@ -401,7 +402,7 @@ export const useAgentOpsStore = defineStore('agentOps', () => {
 
   function agentDefaultConfig(agentId: string): AgentCapabilities {
     const config = agentDefaults.value[agentId];
-    return { skillIds: [...(config?.skillIds ?? [])], toolIds: [...(config?.toolIds ?? [])] };
+    return { skillIds: migrateCapacitySkillIds(config?.skillIds ?? []), toolIds: [...(config?.toolIds ?? [])] };
   }
   function customerAgentBindings(customerId: string): CustomerAgentBinding[] {
     const customer = customers.value.find(item => item.id === customerId);
@@ -409,17 +410,18 @@ export const useAgentOpsStore = defineStore('agentOps', () => {
     const existing = customer.agentConfigs;
     return [...agents.value.map(agent => existing.find(binding => binding.agentId === agent.id) ?? defaultAgentBinding(agent.id)),
       ...existing.filter(binding => !agents.value.some(agent => agent.id === binding.agentId))]
-      .map(binding => ({ ...binding, ...(binding.mode === 'custom' ? { systemPrompt: resolveAgentSystemPrompt(binding.agentId, binding) } : {}), skillIds: [...binding.skillIds], toolIds: [...binding.toolIds] }));
+      .map(binding => ({ ...binding, ...(binding.mode === 'custom' ? { systemPrompt: resolveAgentSystemPrompt(binding.agentId, binding) } : {}), skillIds: migrateCapacitySkillIds(binding.skillIds), toolIds: [...binding.toolIds] }));
   }
   function resolveAgentCapabilities(agentId: string, binding?: CustomerAgentBinding): AgentCapabilities {
     if (!binding || binding.mode === 'default') return agentDefaultConfig(agentId);
-    return { skillIds: [...binding.skillIds], toolIds: [...binding.toolIds] };
+    return { skillIds: migrateCapacitySkillIds(binding.skillIds), toolIds: [...binding.toolIds] };
   }
   function resolveAgentSystemPrompt(agentId: string, binding?: CustomerAgentBinding): string {
     if (binding?.mode === 'custom' && binding.systemPrompt !== undefined) return binding.systemPrompt;
     return agents.value.find(agent => agent.id === agentId)?.systemPrompt ?? '';
   }
   function validateCapabilities(agentId: string, config: AgentCapabilities, previous: AgentCapabilities): AgentCapabilities {
+    config = { ...config, skillIds: migrateCapacitySkillIds(config.skillIds) };
     const eligible = availableSkillsForAgent(agentId);
     if (config.skillIds.some(id => !eligible.some(skill => skill.id === id))) throw new Error('存在失效或不适用于此 Agent 的 Skill，请移除后保存。');
     if (config.skillIds.some(id => eligible.some(skill => skill.id === id && !skill.enabled) && !previous.skillIds.includes(id))) throw new Error('已停用的 Skill 不能新增加载。');

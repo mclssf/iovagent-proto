@@ -155,5 +155,47 @@ export function createDataEmployeeSkills(): DataEmployeeSkill[] {
 - 当前位置 -> current_location
 - 运单状态 -> order_status`,
     },
+    {
+      group: dataEmployeeSkillGroup,
+      privateToolIds: [],
+      id: 'huadong-dispatch-writeback',
+      name: '华东派车回写员工',
+      description: '将确认合作的司机、车辆和报价回写客户业务系统，完成指派并触发平台货源下架。',
+      loginUrl: 'https://tms.huadong.example.com',
+      loginType: '短信验证码',
+      skillVersion: 'v1.0',
+      skillUpdated: '今天 11:32',
+      skillFileName: 'huadong-dispatch-writeback.skill.md',
+      skillContent: `# 华东派车回写员工
+
+目标：将数字人确认的司机和车辆写回客户业务系统。
+
+执行规则：
+1. 校验货源仍可派车且司机、车辆字段完整。
+2. 回写司机、手机号、车牌、车型、车长、成交价和来源平台。
+3. 记录外部指派结果；成功后将标准货源置为已派车。
+4. 触发大卡与满帮货源同步下架；失败时保留重试状态，不得重复指派。`,
+    },
+    {
+      group: dataEmployeeSkillGroup,
+      privateToolIds: [],
+      id: 'huadong-cargo-connector',
+      name: '华东货源对接员工',
+      description: '从客户业务系统抓取待外调货源，映射标准字段，并持续监听修改、取消和派车状态。',
+      loginUrl: 'https://tms.huadong.example.com',
+      loginType: '短信验证码',
+      skillVersion: 'v1.0',
+      skillUpdated: '今天 11:30',
+      skillFileName: 'huadong-cargo-connector.skill.md',
+      skillContent: `# 华东货源对接员工
+
+目标：从客户发运系统识别需要外调运力的货源，映射到标准货源模型。
+
+同步规则：
+1. 首次抓取货物、装卸地、时效、车型车长、价格策略和调度员。
+2. 监听源货源修改、取消、派车完成等状态。
+3. 已发布货源发生变化时，触发统一发布能力执行修改或下架。
+4. 保留源系统货源号与原始数据引用，支持幂等同步和问题追溯。`,
+    },
   ];
 }

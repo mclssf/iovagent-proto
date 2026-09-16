@@ -11,6 +11,8 @@ try {
   const { analyzeAgentConflicts, agentConfigurationFingerprint, resolveAgentTools } = await server.ssrLoadModule('/src/views/AgentOps/agentConflicts.ts');
   setActivePinia(createPinia());
   const store = useAgentOpsStore();
+  // Explicit disabled fixture keeps this test independent of demo catalog defaults.
+  store.skills.find(skill => skill.id === 'capacity-cargo-normalization').enabled = false;
   const catalog = () => ({ skills: store.agentCallableSkills, tools: store.tools });
   assert.deepEqual(store.agents.map((agent) => agent.name), ['数据员工 Agent', '通用对话 Agent', '项目对话 Agent']);
   const dataAgent = store.agents.find((agent) => agent.role === 'data-employee');
@@ -43,7 +45,7 @@ try {
   assert.equal(scope(customerId, generalAgent.id).name, generalAgent.name);
   assert.throws(() => store.saveCustomerAgents('missing', []), /不存在/);
   const beforeInvalid = JSON.stringify(store.customers);
-  for (const invalid of [[config('missing')], [config(dataAgent.id, ['route-risk-expert'])], [config(generalAgent.id, ['jinyu-cement-tms'])], [config(generalAgent.id, [], ['missing'])], [config(generalAgent.id), config(generalAgent.id)], [config(generalAgent.id, ['capacity-cargo-search'])]]) {
+  for (const invalid of [[config('missing')], [config(dataAgent.id, ['route-risk-expert'])], [config(generalAgent.id, ['jinyu-cement-tms'])], [config(generalAgent.id, [], ['missing'])], [config(generalAgent.id), config(generalAgent.id)], [config(generalAgent.id, ['capacity-cargo-normalization'])]]) {
     assert.throws(() => store.saveCustomerAgents(customerId, [config(projectAgent.id), ...invalid]));
     assert.equal(JSON.stringify(store.customers), beforeInvalid, 'invalid draft applies no partial assignments');
   }
@@ -86,7 +88,7 @@ try {
   const selectedBefore = ['existing-disabled-or-invalid'];
   const addedGroup = mergeCapabilitySelection(selectedBefore, [...multiGroup.map(skill => skill.id), 'missing'], pickerSkills);
   assert.deepEqual(selectedBefore, ['existing-disabled-or-invalid'], 'picker does not mutate current grants before confirmation');
-  assert(addedGroup.includes(selectedBefore[0]) && !addedGroup.includes('missing') && !addedGroup.includes('capacity-cargo-search'), 'preserve existing grants, reject invalid or disabled additions');
+  assert(addedGroup.includes(selectedBefore[0]) && !addedGroup.includes('missing') && !addedGroup.includes('capacity-cargo-normalization'), 'preserve existing grants, reject invalid or disabled additions');
   const customIds = filterCapabilityOptions(pickerSkills, '', ['定制 Skill 组'], 'all').map(skill => skill.id);
   const addedAcrossFilters = mergeCapabilitySelection(addedGroup, customIds, pickerSkills);
   assert(addedGroup.every(id => addedAcrossFilters.includes(id)), 'changing filters and adding another group preserves earlier selections');
@@ -100,7 +102,7 @@ try {
   assert(baseIds.length > 1 && baseIds.every(id => groupCatalog.find(skill => skill.id === id).group === '基础 Skill 组'));
   assert.deepEqual(selectSkillGroup(baseIds, '基础 Skill 组', groupCatalog, true), baseIds, 'bulk selection is idempotent');
   assert.deepEqual(selectSkillGroup([...baseIds, 'route-risk-expert'], '基础 Skill 组', groupCatalog, false), ['route-risk-expert']);
-  assert(!selectSkillGroup([], '扩展 Skill 组', groupCatalog, true).includes('capacity-cargo-search'), 'batch excludes disabled Skills');
+  assert(!selectSkillGroup([], '扩展 Skill 组', groupCatalog, true).includes('capacity-cargo-normalization'), 'batch excludes disabled Skills');
   store.saveCustomerAgents('ent-demo', [config(generalAgent.id, baseIds)]);
   const beforeRegroup = JSON.stringify(store.customers);
   const regrouped = store.skills.find(skill => skill.id === baseIds[0]);
@@ -112,7 +114,7 @@ try {
 
   const transit = { name: '在途测试', systemPrompt: '测试在途能力', skillIds: ['route-risk-expert', 'vehicle-location-query', 'vehicle-trace-query'], toolIds: ['vehicle-mcp', 'risk-evaluate'] };
   const operations = { name: '运营测试', systemPrompt: '测试运营能力', skillIds: ['operations-logistics-sheet', 'operations-sms-notification'], toolIds: ['datetime-format'] };
-  const capacity = { name: '运力测试', systemPrompt: '测试运力能力', skillIds: ['capacity-find-carrier', 'capacity-quote-query', 'capacity-private-fleet'], toolIds: [] };
+  const capacity = { name: '运力测试', systemPrompt: '测试运力能力', skillIds: ['capacity-cargo-publish', 'capacity-quote-collection', 'capacity-private-fleet'], toolIds: [] };
   assert.equal(store.globalToolIds, undefined);
   assert.equal(store.setToolGlobalLoading, undefined);
   const transitReport = analyzeAgentConflicts(transit, catalog());

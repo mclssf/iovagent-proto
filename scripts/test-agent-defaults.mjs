@@ -13,6 +13,8 @@ try {
   const { agentConfigurationFingerprint, resolveAgentTools } = await server.ssrLoadModule('/src/views/AgentOps/agentConflicts.ts');
   setActivePinia(createPinia());
   const store = useAgentOpsStore();
+  // Explicit disabled fixture keeps this test independent of demo catalog defaults.
+  store.skills.find(skill => skill.id === 'capacity-cargo-normalization').enabled = false;
   const dataId = 'data-employee-agent', generalId = 'general-chat-agent', projectId = 'project-chat-agent';
   const follower = 'ent-demo', custom = 'ent-jinyu';
   const definition = id => store.agents.find(agent => agent.id === id);
@@ -103,7 +105,7 @@ try {
 
   const beforeInvalid = JSON.stringify([store.agents, store.agentDefaultConfig(generalId), store.customers]);
   assert.throws(() => store.saveAgent({ name: '不应保存', systemPrompt: '不应保存' }, generalId, { skillIds: ['jinyu-cement-tms'], toolIds: [] }), /不适用/);
-  assert.throws(() => store.saveAgent(definition(generalId), generalId, { skillIds: ['capacity-cargo-search'], toolIds: [] }), /停用/);
+  assert.throws(() => store.saveAgent(definition(generalId), generalId, { skillIds: ['capacity-cargo-normalization'], toolIds: [] }), /停用/);
   assert.throws(() => store.saveAgent(definition(generalId), generalId, { skillIds: [], toolIds: ['missing'] }), /失效/);
   assert.throws(() => store.saveCustomerAgents(follower, [{ ...defaultAgentBinding(generalId), mode: 'invalid' }]), /请选择/);
   assert.equal(JSON.stringify([store.agents, store.agentDefaultConfig(generalId), store.customers]), beforeInvalid, 'invalid changes have no partial effects');
