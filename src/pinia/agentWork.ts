@@ -1,3 +1,4 @@
+import { migrateCapacitySkillIds } from './capacitySkills';
 import type {
   AgentConversation,
   AgentResultFile,
@@ -20,6 +21,7 @@ import { defineStore } from 'pinia';
 import { cargoQuoteSeedData, cargoSeedData, privateCapacitySeedData } from '@/views/AgentWork/capacityData';
 import { extractMcpPrompt, runMcpPrompt } from '@/views/AgentWork/mcpClient';
 import { getRiskOrders, summarizeOrders } from '@/views/AgentWork/utils';
+import { ensureRequiredMonitorSkills } from '@/views/AgentWork/dailyTasks';
 
 const defaultOrdersDateRange = {
   start: '2026-05-09',
@@ -372,6 +374,7 @@ export const rightPanelTabs: [string, string][] = [
 const processStepInitialDelay = 360;
 const processStepInterval = 680;
 const spreadsheetProcessStepInterval = 1200;
+const regionVisitStepDelayRange: [number, number] = [4400, 5600];
 let agentProcessTimers: ReturnType<typeof setTimeout>[] = [];
 
 const warningProcessSteps = [
@@ -526,6 +529,83 @@ function extractSpreadsheetRequest(raw: string) {
     .find(Boolean);
   if (!prompt || !sourceFileName) return null;
   return { prompt, sourceFileName };
+}
+
+interface RegionVisitRequest {
+  region: string;
+  sourceFileName: string;
+}
+
+const regionVisitQueryPattern =
+  /(?:是否|有没有|有无)(?:曾经)?(?:到过|到达过|去过|经过|途经|路过|驶入过|进入过)([\u4e00-\u9fa5]{2,12}(?:省|市|区|县|自治州|地区))/;
+
+function extractRegionVisitRegion(raw: string) {
+  return raw.match(regionVisitQueryPattern)?.[1] ?? '';
+}
+
+function extractRegionVisitRequest(raw: string): RegionVisitRequest | null {
+  const region = extractRegionVisitRegion(raw);
+  const spreadsheetRequest = extractSpreadsheetRequest(raw);
+  if (!region || !spreadsheetRequest || !/\.(?:csv|xls|xlsx)$/i.test(spreadsheetRequest.sourceFileName)) return null;
+  return { region, sourceFileName: spreadsheetRequest.sourceFileName };
+}
+
+function createRegionVisitSteps(request: RegionVisitRequest): NonNullable<ChatMessage['steps']> {
+  return [
+    {
+      title: '理解查询意图',
+      text: `识别任务为“批量核验车辆历史到访”，目标行政区域为“${request.region}”。`,
+    },
+    {
+      title: '解析待处理表格',
+      text: `读取“${request.sourceFileName}”，识别车牌号、司机手机号、运单开始时间，共 14 条有效记录。`,
+    },
+    {
+      title: '建立查询时间窗',
+      text: '按每条记录的运单开始时间至当前查询时刻，生成 14 个独立历史轨迹检索窗口。',
+    },
+    {
+      title: '解析地区边界',
+      text: `调用行政区划服务，将“${request.region}”转换为可用于轨迹匹配的地理围栏。`,
+      skill: '行政区划解析',
+    },
+    {
+      title: '批量查询历史轨迹',
+      text: '按车牌和时间窗调取车辆历史定位点、轨迹连续性及有效定位时间。',
+      skill: '轨迹查询',
+    },
+    {
+      title: '判定地区到访',
+      text: `将有效轨迹点与“${request.region}”围栏进行空间匹配，提取首次经过时间并复核边界附近定位。`,
+      skill: '电子围栏核验',
+    },
+    {
+      title: '生成查询结果',
+      text: '在原表追加到访结论和经过时间，完成 14 条记录的字段、时间与统计一致性检查。',
+    },
+  ];
+}
+
+function createRegionVisitResultFile(sourceFileName: string, region: string): AgentResultFile {
+  const sourceBaseName = sourceFileName.replace(/\.[^.]+$/, '').replace(/[\\/:*?"<>|]/g, '_') || '车辆历史到访清单';
+  return {
+    description: 'Excel 工作簿 · 14 条车辆地区到访核验结果',
+    name: `${sourceBaseName}_${region}到访查询_${formatFileTimestamp(new Date())}.xlsx`,
+    url: '/demo/vehicle-region-visit-result.xlsx',
+  };
+}
+
+function createRegionVisitResultText(region: string) {
+  return [
+    `查询完成：已核验 14 条车辆记录在各自运单周期内是否到过${region}。`,
+    '',
+    `到过${region}：8 条`,
+    `未到过${region}：6 条`,
+    '到访占比：57.1%',
+    '有效轨迹覆盖：14 条（100%）',
+    '',
+    '判定口径：以每条记录的运单开始时间为起点、当前查询时刻为终点；存在有效定位点落入目标行政区围栏即判定为“是”，并记录首次经过时间。',
+  ].join('\n');
 }
 
 interface TransportStatusRequest {
@@ -1004,7 +1084,7 @@ export const agentWorkData = defineStore('agentWork', {
     return {
       ordersStartDate: defaultOrdersDateRange.start,
       ordersEndDate: defaultOrdersDateRange.end,
-      projects: [...projectsSeed] as Project[],
+      projects: projectsSeed.map((project) => ({ ...project, skillIds: ensureRequiredMonitorSkills(migrateCapacitySkillIds(project.skillIds ?? [])) })) as Project[],
       recentConversations: conversationSeeds.map((conversation) => ({
         ...conversation,
         messages: conversation.messages.map((message) => ({ ...message })),
@@ -1195,13 +1275,12 @@ export const agentWorkData = defineStore('agentWork', {
   },
   actions: {
     focusCargoQuotes(cargoId: string) {
-      const defaultQuoteDateRange = createDefaultRecentWeekDateRange();
       this.quoteKeyword = cargoId;
       this.quoteTypeFilter = '全部';
       this.quotePlatformFilter = '全部';
       this.quoteStatusFilter = '全部';
-      this.quoteStartDate = defaultQuoteDateRange.start;
-      this.quoteEndDate = defaultQuoteDateRange.end;
+      this.quoteStartDate = '';
+      this.quoteEndDate = '';
       this.quotePage = 1;
     },
     resetQuoteFilters() {
@@ -1220,13 +1299,14 @@ export const agentWorkData = defineStore('agentWork', {
       if (!this.cargoEndDate) this.cargoEndDate = defaultCargoDateRange.end;
     },
     publishCargo(cargoId: string) {
-      const cargo = this.cargoSources.find((item) => item.id === cargoId);
+      const cargo = this.cargoSources.find((item) => item.id === cargoId && item.projectId === this.currentProjectId);
       if (!cargo) return;
+      if (cargo.status === '已派车') return;
       if (cargo.status === '待完善') {
         ElMessage.warning('货源必填字段尚未完善，请先通过对话确认缺失信息');
         return;
       }
-      const updatedAt = '2026-08-19 11:48';
+      const updatedAt = new Date().toLocaleString('sv-SE').slice(0, 16);
       cargo.status = '发布中';
       cargo.updatedAt = updatedAt;
       cargo.platformPublications = cargo.platformPublications.map((publication) => ({
@@ -1236,47 +1316,49 @@ export const agentWorkData = defineStore('agentWork', {
         status: '发布中',
         updatedAt,
       }));
-      ElMessage.success('已发布到大卡，并同步到已配置的满帮运掌柜账号');
+      ElMessage.success('演示：已发布到大卡，并同步到已配置的满帮运掌柜账号');
     },
     offlineCargo(cargoId: string) {
-      const cargo = this.cargoSources.find((item) => item.id === cargoId);
+      const cargo = this.cargoSources.find((item) => item.id === cargoId && item.projectId === this.currentProjectId);
       if (!cargo) return;
+      if (cargo.status === '已派车') return;
       cargo.status = '已下架';
-      cargo.updatedAt = '2026-08-19 11:49';
+      cargo.updatedAt = new Date().toLocaleString('sv-SE').slice(0, 16);
       cargo.platformPublications = cargo.platformPublications.map((publication) => ({
         ...publication,
         status: publication.status === '未发布' ? publication.status : '已下架',
-        updatedAt: '2026-08-19 11:49',
+        updatedAt: new Date().toLocaleString('sv-SE').slice(0, 16),
       }));
-      ElMessage.success('大卡与满帮货源已同步下架');
+      ElMessage.success('演示：大卡与满帮货源已同步下架');
     },
     refreshCargoSources() {
       this.cargoSources = this.cargoSources.map((cargo) =>
-        cargo.sourceType === '客户系统'
+        cargo.projectId === this.currentProjectId && cargo.sourceType === '客户系统'
           ? {
               ...cargo,
-              sourceUpdatedAt: '2026-08-19 11:50',
+              sourceUpdatedAt: new Date().toLocaleString('sv-SE').slice(0, 16),
               syncMessage: cargo.status === '已派车' ? '源系统已派车，平台货源保持下架' : '已监听源系统，未发现待同步变更',
             }
           : cargo,
       );
-      ElMessage.success('客户系统货源状态同步完成');
+      ElMessage.success('演示：客户系统货源状态同步完成');
     },
     importCargoFile(fileName: string) {
       const template = cargoSeedData[2]!;
-      const id = `CG20260819${String(this.cargoSources.length + 1).padStart(4, '0')}`;
+      const id = `CG${Date.now()}`;
       this.cargoSources = [
         {
           ...template,
           id,
+          projectId: this.currentProjectId,
           externalCargoNo: `IMPORT-${Date.now()}`,
           sourceSystem: fileName,
-          sourceUpdatedAt: '2026-08-19 11:51',
-          createdAt: '2026-08-19 11:51',
-          updatedAt: '2026-08-19 11:51',
+          sourceUpdatedAt: new Date().toLocaleString('sv-SE').slice(0, 16),
+          createdAt: new Date().toLocaleString('sv-SE').slice(0, 16),
+          updatedAt: new Date().toLocaleString('sv-SE').slice(0, 16),
           loadAddresses: template.loadAddresses.map((address) => ({ ...address })),
           unloadAddresses: template.unloadAddresses.map((address) => ({ ...address })),
-          platformPublications: template.platformPublications.map((publication) => ({ ...publication, updatedAt: '2026-08-19 11:51' })),
+          platformPublications: template.platformPublications.map((publication) => ({ ...publication, updatedAt: new Date().toLocaleString('sv-SE').slice(0, 16) })),
           price: { ...template.price },
           tags: [...template.tags],
           truckLengths: [...template.truckLengths],
@@ -1284,7 +1366,7 @@ export const agentWorkData = defineStore('agentWork', {
         },
         ...this.cargoSources,
       ];
-      ElMessage.success(`已解析 ${fileName}，1 条货源需要补充卸货时间`);
+      ElMessage.success(`演示：已解析 ${fileName}，1 条货源需要补充卸货时间`);
     },
     updateImportedCargo(
       cargoId: string,
@@ -1307,12 +1389,12 @@ export const agentWorkData = defineStore('agentWork', {
         unloadTime: string;
       },
     ) {
-      const cargo = this.cargoSources.find((item) => item.id === cargoId && item.sourceType === 'Excel导入');
-      if (!cargo) {
-        ElMessage.warning('仅支持编辑 Excel 导入货源');
+      const cargo = this.cargoSources.find((item) => item.id === cargoId && item.projectId === this.currentProjectId && item.sourceType === 'Excel导入');
+      if (!cargo || cargo.status === '已派车') {
+        ElMessage.warning('仅支持编辑未派车的 Excel 导入货源');
         return;
       }
-      const updatedAt = '2026-08-20 10:30';
+      const updatedAt = new Date().toLocaleString('sv-SE').slice(0, 16);
       cargo.cargoName = updates.cargoName;
       cargo.packageType = updates.packageType;
       cargo.loadAddresses = cargo.loadAddresses.map((address, index) => (index === 0 ? { ...address, detail: updates.loadAddress } : address));
@@ -1346,29 +1428,32 @@ export const agentWorkData = defineStore('agentWork', {
         status: '发布中',
         updatedAt,
       }));
-      ElMessage.success('Excel 货源已保存，并重新发布到大卡及已配置的满帮账号');
+      ElMessage.success('演示：Excel 货源已保存，并重新发布到大卡及已配置的满帮账号');
     },
     updateQuoteStatus(quoteId: string, status: CargoQuote['status']) {
       const quote = this.cargoQuotes.find((item) => item.id === quoteId);
-      if (!quote) return;
+      if (!quote || quote.status === '已合作') return;
+      const cargo = this.cargoSources.find(item => item.id === quote.cargoId && item.projectId === this.currentProjectId);
+      if (!cargo || cargo.status === '已派车') return;
       quote.status = status;
       ElMessage.success(status === '已联系' ? '已记录联系状态' : '报价状态已更新');
     },
     dispatchQuote(quoteId: string) {
       const quote = this.cargoQuotes.find((item) => item.id === quoteId);
       if (!quote) return;
+      const cargo = this.cargoSources.find((item) => item.id === quote.cargoId && item.projectId === this.currentProjectId);
+      if (!cargo || cargo.status !== '发布中') return;
       quote.status = '已合作';
-      const cargo = this.cargoSources.find((item) => item.id === quote.cargoId);
       if (cargo) {
         cargo.status = '已派车';
-        cargo.updatedAt = '2026-08-19 11:53';
+        cargo.updatedAt = new Date().toLocaleString('sv-SE').slice(0, 16);
         cargo.platformPublications = cargo.platformPublications.map((publication) => ({
           ...publication,
           status: publication.status === '未发布' ? publication.status : '已下架',
-          updatedAt: '2026-08-19 11:53',
+          updatedAt: new Date().toLocaleString('sv-SE').slice(0, 16),
         }));
       }
-      ElMessage.success(`已确认 ${quote.driverName}，派车信息已回写客户业务系统并同步下架货源`);
+      ElMessage.success(`演示：已确认 ${quote.driverName}，派车信息已回写客户业务系统并同步下架货源`);
     },
     importPrivateCapacityFile(fileName: string) {
       const id = `PC202608${String(this.privateCapacity.length + 1).padStart(3, '0')}`;
@@ -1384,18 +1469,18 @@ export const agentWorkData = defineStore('agentWork', {
           baseCity: '河南·驻马店',
           routes: ['驻马店—北京', '驻马店—西安'],
           currentLocation: '驻马店市驿城区中原大道附近',
-          positionTime: '2026-08-19 11:52',
+          positionTime: new Date().toLocaleString('sv-SE').slice(0, 16),
           predictedDestination: '河南省驻马店市遂平县',
           destinationProbability: 58,
-          predictedArrivalTime: '2026-08-19 12:35',
+          predictedArrivalTime: new Date().toLocaleString('sv-SE').slice(0, 16),
           loadState: '空载',
-          loadStateUpdatedAt: '2026-08-19 11:20',
+          loadStateUpdatedAt: new Date().toLocaleString('sv-SE').slice(0, 16),
           source: 'Excel导入',
-          updatedAt: '2026-08-19 11:54',
+          updatedAt: new Date().toLocaleString('sv-SE').slice(0, 16),
         },
         ...this.privateCapacity,
       ];
-      ElMessage.success(`已从 ${fileName} 导入 1 条熟车运力`);
+      ElMessage.success(`演示：已从 ${fileName} 导入 1 条熟车运力`);
     },
     persistActiveConversationMessages() {
       if (this.workspaceMode !== 'conversation' || !this.currentConversationId) return;
@@ -1530,7 +1615,7 @@ export const agentWorkData = defineStore('agentWork', {
           tmsUser: 'demo_user',
           keyword: '演示',
           statusFilter: '在途',
-          skillIds: ['spreadsheet-waybill', 'route-risk-expert', 'gps-trace-expert', 'parking-event-expert'],
+          skillIds: ensureRequiredMonitorSkills(['spreadsheet-waybill', 'route-risk-expert', 'gps-trace-expert', 'parking-event-expert']),
         },
         ...this.projects,
       ];
@@ -1552,7 +1637,7 @@ export const agentWorkData = defineStore('agentWork', {
           tmsUser: '文件导入',
           keyword: '导入运单',
           statusFilter: '在途',
-          skillIds: ['spreadsheet-waybill', 'route-risk-expert', 'gps-trace-expert', 'parking-event-expert'],
+          skillIds: ensureRequiredMonitorSkills(['spreadsheet-waybill', 'route-risk-expert', 'gps-trace-expert', 'parking-event-expert']),
         },
         ...this.projects,
       ];
@@ -1579,7 +1664,7 @@ export const agentWorkData = defineStore('agentWork', {
       ElMessage.success(`已将 ${importedCount} 条运单合并到“${targetProject.name}”`);
     },
     addSkillProject(name: string, skillNames: string[], skillIds: string[]) {
-      const projectId = `P${String(this.projects.length + 1).padStart(3, '0')}`;
+      const projectId = `P${crypto.randomUUID()}`;
       const skillSummary = skillNames.length > 0 ? skillNames.join(' / ') : '内置技能';
       this.workspaceMode = 'project';
       this.currentConversationId = '';
@@ -1595,7 +1680,7 @@ export const agentWorkData = defineStore('agentWork', {
           tmsUser: 'skill_agent',
           keyword: skillNames.slice(0, 2).join('、') || name,
           statusFilter: '在途',
-          skillIds,
+          skillIds: ensureRequiredMonitorSkills(migrateCapacitySkillIds(skillIds)),
         },
         ...this.projects,
       ];
@@ -1614,7 +1699,7 @@ export const agentWorkData = defineStore('agentWork', {
               tmsUrl: skillSummary,
               tmsUser: project.tmsUser || 'skill_agent',
               keyword: skillNames.slice(0, 2).join('、') || name,
-              skillIds,
+              skillIds: ensureRequiredMonitorSkills(migrateCapacitySkillIds(skillIds)),
             }
           : project,
       );
@@ -1658,13 +1743,31 @@ export const agentWorkData = defineStore('agentWork', {
       if (!raw.trim()) return;
       this.ensureConversationStarted();
       const next: ChatMessage[] = [...this.agentMessages, { role: 'user', text: raw }];
-      const spreadsheetRequest = extractSpreadsheetRequest(raw);
+      const regionVisitRegion = extractRegionVisitRegion(raw);
+      const regionVisitRequest = extractRegionVisitRequest(raw);
+      const spreadsheetRequest = regionVisitRequest ? null : extractSpreadsheetRequest(raw);
       const mcpPrompt = extractMcpPrompt(raw);
       const emailDeliveryRequest = extractEmailDeliveryRequest(raw, this.agentMessages);
       const analysisReportRequest = extractAnalysisReportRequest(raw);
       const transportStatusRequest = extractTransportStatusRequest(raw);
       const vehiclePositionRequest = transportStatusRequest ? null : extractVehiclePositionRequest(raw);
       let replyMessage: ChatMessage = { role: 'agent', text: '已处理你的请求。你可以继续补充需要关注的范围。' };
+      if (regionVisitRequest) {
+        this.startRegionVisitProcess(next, regionVisitRequest);
+        this.agentInput = '';
+        return;
+      }
+      if (regionVisitRegion) {
+        this.agentMessages = [
+          ...next,
+          {
+            role: 'agent',
+            text: `已识别查询地区“${regionVisitRegion}”。请上传包含车牌号、司机手机号、运单开始时间的 Excel 或 CSV 表格，我会按每条运单的时间范围批量核验车辆是否到过该地区。`,
+          },
+        ];
+        this.agentInput = '';
+        return;
+      }
       if (spreadsheetRequest) {
         this.startSpreadsheetFillProcess(next, spreadsheetRequest.sourceFileName);
         this.agentInput = '';
@@ -1768,6 +1871,50 @@ export const agentWorkData = defineStore('agentWork', {
       }
       this.agentMessages = [...next, replyMessage];
       this.agentInput = '';
+    },
+    startRegionVisitProcess(next: ChatMessage[], request: RegionVisitRequest) {
+      const steps = createRegionVisitSteps(request);
+      const resultFile = createRegionVisitResultFile(request.sourceFileName, request.region);
+      const messageIndex = next.length;
+      let cumulativeDelay = 0;
+
+      this.agentMessages = [
+        ...next,
+        {
+          role: 'agent',
+          title: '车辆历史到访核验',
+          status: '处理中',
+          text: `已接收“${request.sourceFileName}”，正在核验表内车辆是否到过${request.region}。`,
+          steps,
+          result: '',
+          progressMode: true,
+          activeStepIndex: 0,
+        },
+      ];
+
+      steps.forEach((_, stepIndex) => {
+        cumulativeDelay += Math.round(randomBetween(...regionVisitStepDelayRange));
+        const timer = setTimeout(() => {
+          const completedStepCount = stepIndex + 1;
+          const isComplete = completedStepCount === steps.length;
+          this.agentMessages = this.agentMessages.map((message, index) => {
+            if (index !== messageIndex) return message;
+            return {
+              ...message,
+              activeStepIndex: completedStepCount,
+              status: isComplete ? '已完成' : '处理中',
+              result: isComplete ? createRegionVisitResultText(request.region) : '',
+              file: isComplete ? resultFile : undefined,
+            };
+          });
+
+          if (isComplete) {
+            ElMessage.success('车辆历史到访核验完成');
+            clearAgentProcessTimers();
+          }
+        }, cumulativeDelay);
+        agentProcessTimers.push(timer);
+      });
     },
     startSpreadsheetFillProcess(next: ChatMessage[], sourceFileName: string) {
       const steps = createSpreadsheetFillSteps(sourceFileName);

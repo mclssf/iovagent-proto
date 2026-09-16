@@ -1,39 +1,23 @@
 <script lang="ts" setup>
 import { computed, reactive, ref } from 'vue';
-import { useRouter } from 'vue-router';
+import { storeToRefs } from 'pinia';
 
 import { Icon } from '@packages/icon';
-import { ElMessage, ElMessageBox } from 'element-plus';
+import { ElDialog, ElMessage, ElMessageBox, ElOption, ElSelect } from 'element-plus';
 
 import { agentWorkData } from '@/pinia/agentWork';
+import { commonSkillGroups, useAgentOpsStore } from '@/pinia/agentOps';
+import type { AgentCallableSkill, CommonSkillGroup, ManagedSkill, SkillCategory } from '@/pinia/agentOps';
+import { dataEmployeeSkillGroup } from '@/pinia/dataEmployeeSkills';
+import type { DataEmployeeSkill as DataEmployee, LoginType } from '@/pinia/dataEmployeeSkills';
+import ToolManagement from './AgentOps/ToolManagement.vue';
+import AgentManagement from './AgentOps/AgentManagement.vue';
+import CustomerAgentManagement from './AgentOps/CustomerAgentManagement.vue';
+import type { CustomerAgentTarget } from '@/pinia/customerAgents';
 
 import { strokeIconPaths } from './AgentWork/strokeIconPaths';
 
-type ConfigTab = 'dataset' | 'employees' | 'skills' | 'tmsCustomers';
-type LoginType = '短信验证码' | '手机扫码' | '图形验证码' | '无验证';
-type SkillCategory = '在途专家' | '经营分析参谋' | '运营助手' | '运力与货源';
-type SkillManagementTab = 'skills' | 'systemPrompt';
-type SkillVisibility = '全部企业' | '指定企业';
-
-interface DataEmployee {
-  description: string;
-  enterpriseIds: string[];
-  id: string;
-  loginType: LoginType;
-  loginUrl: string;
-  name: string;
-  skillContent: string;
-  skillFileName: string;
-  skillUpdated: string;
-  skillVersion: string;
-  visibility: SkillVisibility;
-}
-
-interface WaybillField {
-  example: string;
-  name: string;
-  semantic: string;
-}
+type ConfigTab = 'employees' | 'skills' | 'tmsCustomers' | 'tools' | 'agents' | 'customers';
 
 interface ValidationResult {
   checkedAt: string;
@@ -43,36 +27,36 @@ interface ValidationResult {
   success: boolean;
 }
 
-interface EnterpriseOption {
-  id: string;
-  name: string;
-}
-
-interface ManagedSkill {
-  category: SkillCategory;
-  content: string;
-  description: string;
-  enabled: boolean;
-  enterpriseIds: string[];
-  fileName: string;
-  id: string;
-  name: string;
-  updatedAt: string;
-  updatedBy: string;
-  visibility: SkillVisibility;
-}
-
-interface SystemPromptConfig {
-  content: string;
-  fileName: string;
-  updatedAt: string;
-  updatedBy: string;
-}
-
-const router = useRouter();
 const store = agentWorkData();
-const activeTab = ref<ConfigTab>('employees');
-const activeSkillManagementTab = ref<SkillManagementTab>('skills');
+const opsStore = useAgentOpsStore();
+const { skills: managedSkills, tools: managedTools, dataEmployeeSkills: dataEmployees } = storeToRefs(opsStore);
+const activeTab = ref<ConfigTab>('customers');
+const agentConfigPageOpen = ref(false);
+const customerToEdit = ref<CustomerAgentTarget>();
+const agentToEdit = ref('');
+function editAgentDefault(agentId: string) {
+  agentToEdit.value = agentId;
+  activeTab.value = 'agents';
+}
+function updateAgentEditing(open: boolean) {
+  agentConfigPageOpen.value = open;
+  if (!open) customerToEdit.value = undefined;
+  else agentToEdit.value = '';
+}
+function editCustomerAgentFromTool(target: CustomerAgentTarget) {
+  customerToEdit.value = target;
+  activeTab.value = 'customers';
+}
+function editSkillFromTool(skill: AgentCallableSkill) {
+  if (skill.source === 'data-employee') {
+    const employee = dataEmployees.value.find(item => item.id === skill.id);
+    if (employee) { activeTab.value = 'employees'; openEditEmployeeModal(employee); }
+  } else {
+    const common = managedSkills.value.find(item => item.id === skill.id);
+    if (common) openEditSkillModal(common);
+  }
+}
+
 const isCreateEmployeeModalOpen = ref(false);
 const isValidationModalOpen = ref(false);
 const isSkillFormModalOpen = ref(false);
@@ -85,13 +69,12 @@ const visibleCustomerPasswordIds = ref<string[]>([]);
 const loginTypes: LoginType[] = ['无验证', '图形验证码', '短信验证码', '手机扫码'];
 const newEmployeeForm = reactive({
   description: '',
-  enterpriseIds: [] as string[],
   loginType: '无验证' as LoginType,
   loginUrl: '',
   name: '',
   skillContent: '',
   skillFileName: '',
-  visibility: '全部企业' as SkillVisibility,
+  privateToolIds: [] as string[],
 });
 const validationForm = reactive({
   graphicCode: '',
@@ -101,340 +84,36 @@ const validationForm = reactive({
 });
 const validationResult = ref<ValidationResult | null>(null);
 const skillSearch = ref('');
+const skillGroupFilter = ref<'全部' | CommonSkillGroup>('全部');
 const skillCategoryFilter = ref<'全部' | SkillCategory>('全部');
-const enterpriseSearch = ref('');
-const employeeEnterpriseSearch = ref('');
+const pendingPrivateToolId = ref('');
 const skillForm = reactive({
   category: '在途专家' as SkillCategory,
   description: '',
-  enterpriseIds: [] as string[],
+  privateToolIds: [] as string[],
   fileContent: '',
   fileName: '',
   name: '',
-  visibility: '全部企业' as SkillVisibility,
+  group: '基础 Skill 组' as CommonSkillGroup,
 });
-const dataEmployees = ref<DataEmployee[]>([
-  {
-    id: 'huadong-cargo-connector',
-    visibility: '指定企业',
-    enterpriseIds: ['ent-east'],
-    name: '华东货源对接员工',
-    description: '从客户业务系统抓取待外调货源，映射标准字段，并持续监听修改、取消和派车状态。',
-    loginUrl: 'https://tms.huadong.example.com',
-    loginType: '短信验证码',
-    skillVersion: 'v1.0',
-    skillUpdated: '今天 11:30',
-    skillFileName: 'huadong-cargo-connector.skill.md',
-    skillContent: `# 华东货源对接员工
 
-目标：从客户发运系统识别需要外调运力的货源，映射到标准货源模型。
-
-同步规则：
-1. 首次抓取货物、装卸地、时效、车型车长、价格策略和调度员。
-2. 监听源货源修改、取消、派车完成等状态。
-3. 已发布货源发生变化时，触发统一发布能力执行修改或下架。
-4. 保留源系统货源号与原始数据引用，支持幂等同步和问题追溯。`,
-  },
-  {
-    id: 'huadong-dispatch-writeback',
-    visibility: '指定企业',
-    enterpriseIds: ['ent-east'],
-    name: '华东派车回写员工',
-    description: '将确认合作的司机、车辆和报价回写客户业务系统，完成指派并触发平台货源下架。',
-    loginUrl: 'https://tms.huadong.example.com',
-    loginType: '短信验证码',
-    skillVersion: 'v1.0',
-    skillUpdated: '今天 11:32',
-    skillFileName: 'huadong-dispatch-writeback.skill.md',
-    skillContent: `# 华东派车回写员工
-
-目标：将数字人确认的司机和车辆写回客户业务系统。
-
-执行规则：
-1. 校验货源仍可派车且司机、车辆字段完整。
-2. 回写司机、手机号、车牌、车型、车长、成交价和来源平台。
-3. 记录外部指派结果；成功后将标准货源置为已派车。
-4. 触发大卡与满帮货源同步下架；失败时保留重试状态，不得重复指派。`,
-  },
-  {
-    id: 'jinyu-cement-tms',
-    visibility: '指定企业',
-    enterpriseIds: ['ent-jinyu'],
-    name: '金隅水泥TMS',
-    description: '面向金隅水泥运输业务的TMS抓取数据员工。',
-    loginUrl: 'https://tms.jinyu.demo/login',
-    loginType: '图形验证码',
-    skillVersion: 'v1.3',
-    skillUpdated: '今天 09:40',
-    skillFileName: 'jinyu-waybill-mapping.skill.md',
-    skillContent: `# 金隅水泥TMS 运单映射 Skill
-
-目标：进入“运输管理 / 在途运单”页面，抓取今日在途运单明细。
-
-页面导航：
-1. 登录后进入【运输管理】。
-2. 打开【运单查询】并筛选状态=在途。
-3. 展开列表字段：运单号、车牌、承运商、起运地、目的地、发车时间、预计到达时间。
-
-语义映射：
-- 运单编号 -> waybill_no
-- 车牌号码 -> vehicle_plate
-- 承运单位 -> carrier_name
-- 起运工厂 -> origin_name
-- 收货仓库 -> destination_name
-- 运输状态 -> order_status`,
-  },
-  {
-    id: 'zhilian-shunda-tms',
-    visibility: '指定企业',
-    enterpriseIds: ['ent-zhilian'],
-    name: '智链顺达TMS',
-    description: '负责从智链顺达调度中心抓取执行中运输任务。',
-    loginUrl: 'https://tms.zhilian-shunda.demo/login',
-    loginType: '短信验证码',
-    skillVersion: 'v1.1',
-    skillUpdated: '昨天 18:20',
-    skillFileName: 'zhilian-waybill-mapping.skill.md',
-    skillContent: `# 智链顺达TMS 运单映射 Skill
-
-目标：从“调度中心 / 执行中任务”抓取执行中运单。
-
-页面导航：
-1. 使用账号和短信验证码登录。
-2. 进入【调度中心】。
-3. 打开【执行中任务】，按更新时间倒序抓取。
-
-语义映射：
-- 任务单号 -> waybill_no
-- 司机车辆 -> vehicle_plate
-- 物流商 -> carrier_name
-- 装货点 -> origin_name
-- 卸货点 -> destination_name
-- 最新定位 -> current_location`,
-  },
-  {
-    id: 'jinmailang-logistics',
-    visibility: '指定企业',
-    enterpriseIds: ['ent-jinmailang'],
-    name: '今麦郎物流管理',
-    description: '面向今麦郎发运看板和运单列表的数据接入员工。',
-    loginUrl: 'https://logistics.jinmailang.demo/login',
-    loginType: '无验证',
-    skillVersion: 'v1.0',
-    skillUpdated: '06-24 15:12',
-    skillFileName: 'jinmailang-waybill-mapping.skill.md',
-    skillContent: `# 今麦郎物流管理 运单映射 Skill
-
-目标：从“发运看板 / 运单列表”抓取发运和在途数据。
-
-页面导航：
-1. 登录后进入【发运看板】。
-2. 切换到【运单列表】。
-3. 抓取列表和详情弹窗中的线路、货品、状态、异常标记。
-
-语义映射：
-- 发运单号 -> waybill_no
-- 线路名称 -> route_name
-- 货品名称 -> cargo_name
-- 当前节点 -> order_status
-- 异常标签 -> abnormal_type`,
-  },
-  {
-    id: 'spreadsheet-waybill',
-    visibility: '全部企业',
-    enterpriseIds: [],
-    name: '表格运单',
-    description: '用于上传表格运单并映射为标准运单数据集。',
-    loginUrl: '本地表格导入',
-    loginType: '无验证',
-    skillVersion: 'v1.2',
-    skillUpdated: '06-23 11:08',
-    skillFileName: 'spreadsheet-waybill-mapping.skill.md',
-    skillContent: `# 表格运单映射 Skill
-
-目标：将客户上传的 Excel / CSV 运单表映射为标准运单数据集。
-
-读取规则：
-1. 第一行默认为表头。
-2. 自动识别运单号、车牌、司机、承运商、线路、起止点、时间字段。
-3. 若存在多个候选字段，优先选择包含“运单”“车牌”“起运”“目的”“状态”的中文表头。
-
-语义映射：
-- 运单号 / 单号 / 任务号 -> waybill_no
-- 车牌 / 车辆 -> vehicle_plate
-- 司机 / 驾驶员 -> driver_name
-- 承运商 / 物流商 -> carrier_name`,
-  },
-  {
-    id: 'scan-login-tms',
-    visibility: '全部企业',
-    enterpriseIds: [],
-    name: '扫码登录TMS',
-    description: '用于演示手机扫码登录场景的数据员工，抓取在途运单列表。',
-    loginUrl: 'https://tms.scan-login.demo/login',
-    loginType: '手机扫码',
-    skillVersion: 'v1.0',
-    skillUpdated: '刚刚',
-    skillFileName: 'scan-login-waybill-mapping.skill.md',
-    skillContent: `# 扫码登录TMS 运单映射 Skill
-
-目标：使用手机扫码登录目标 TMS，进入在途运单页面并抓取运单明细。
-
-页面导航：
-1. 打开登录页，等待二维码渲染完成。
-2. 用户使用手机端扫码确认登录。
-3. 登录成功后进入【在途监控 / 运单列表】。
-4. 抓取第一屏运单字段并进入详情页补充轨迹和状态字段。
-
-语义映射：
-- 运单号 -> waybill_no
-- 车牌 -> vehicle_plate
-- 司机 -> driver_name
-- 承运商 -> carrier_name
-- 当前位置 -> current_location
-- 运单状态 -> order_status`,
-  },
-]);
-
-const enterpriseOptions: EnterpriseOption[] = [
-  { id: 'ent-jinyu', name: '金隅水泥' },
-  { id: 'ent-tsingtao', name: '青岛啤酒' },
-  { id: 'ent-jinmailang', name: '今麦郎' },
-  { id: 'ent-anjie', name: '安捷物流' },
-  { id: 'ent-zhilian', name: '智链顺达' },
-  { id: 'ent-east', name: '华东物流事业部' },
-  { id: 'ent-southwest', name: '西南供应链中心' },
-  { id: 'ent-demo', name: '演示企业' },
-];
-
-const skillSeed: Array<{
-  category: SkillCategory;
-  enterpriseIds?: string[];
-  id: string;
-  name: string;
-  visibility?: SkillVisibility;
-}> = [
-  { id: 'route-risk-expert', name: '在途风险专家', category: '在途专家' },
-  { id: 'gps-trace-expert', name: '轨迹真实性专家', category: '在途专家' },
-  { id: 'parking-event-expert', name: '异常停车专家', category: '在途专家' },
-  { id: 'delivery-sla-expert', name: '到货时效专家', category: '在途专家' },
-  { id: 'logistics-route-planning', name: '物流路线规划', category: '在途专家' },
-  { id: 'vehicle-location-query', name: '车辆定位查询', category: '在途专家' },
-  { id: 'vehicle-trace-query', name: '轨迹查询', category: '在途专家' },
-  { id: 'waybill-data-completion', name: '运单补充', category: '在途专家' },
-  { id: 'waybill-data-correction', name: '运单纠错', category: '在途专家' },
-  { id: 'operations-logistics-sheet', name: '物流表格', category: '运营助手' },
-  { id: 'operations-sms-notification', name: '短信通知', category: '运营助手' },
-  { id: 'operations-logistics-weather', name: '物流天气', category: '运营助手' },
-  { id: 'operations-license-recognition', name: '证照识别', category: '运营助手' },
-  { id: 'operations-wecom-suite', name: '企业微信套件', category: '运营助手' },
-  { id: 'operations-feishu-suite', name: '飞书套件', category: '运营助手' },
-  { id: 'operations-dingtalk-suite', name: '钉钉套件', category: '运营助手' },
-  { id: 'capacity-cargo-normalization', name: '货源解析', category: '运力与货源' },
-  { id: 'capacity-cargo-publish', name: '货源发布', category: '运力与货源' },
-  { id: 'capacity-quote-collection', name: '报价抢单', category: '运力与货源' },
-  { id: 'capacity-private-fleet', name: '私有运力池', category: '运力与货源', visibility: '指定企业', enterpriseIds: ['ent-anjie', 'ent-east'] },
-];
-
-const skillDescriptions: Record<string, string> = {
-  'route-risk-expert': '结合线路、时效和历史履约表现，识别高优先级在途风险。',
-  'gps-trace-expert': '分析轨迹断点、速度跳变和定位漂移，辅助判断GPS造假风险。',
-  'parking-event-expert': '识别服务区、物流园、中转仓等停靠点，区分合理休息和高风险长停。',
-  'delivery-sla-expert': '评估预计到达时间、晚点风险和卸货超时，输出时效处置建议。',
-  'logistics-route-planning': '结合起讫地、车型、限行和实时路况规划运输路线，输出里程、时效与备选方案。',
-  'vehicle-location-query': '查询车辆最新位置、定位时间、速度和方向，为运单补充实时车辆位置信息。',
-  'vehicle-trace-query': '查询车辆历史行驶轨迹、停靠点和里程，辅助核验线路、在途状态与异常事件。',
-  'waybill-data-completion': '识别运单缺失字段，补充车辆、司机、线路和运输节点等信息，提升运单数据完整性。',
-  'waybill-data-correction': '校验运单字段与业务规则，发现并修正地址、时间、车辆和状态等异常数据。',
-  'operations-logistics-sheet': '自动生成和维护运输台账、异常清单与对账表，支持运营助手处理和结果沉淀。',
-  'operations-sms-notification': '遇到在途异常可以短信通知货主、司机、物流负责人等。',
-  'operations-logistics-weather': '结合线路和车辆实时位置获取沿途天气预警，辅助提前安排绕行、时效与安全处置。',
-  'operations-license-recognition': '识别驾驶证、行驶证、运输证及回单等资料，自动提取字段并校验证照有效性。',
-  'operations-wecom-suite': '连接企业微信，将在途风险、协同待办和处置结果同步到群聊、消息与工作台。',
-  'operations-feishu-suite': '连接飞书，将运单异常、协同任务和处置进展同步到消息、群组与多维表格。',
-  'operations-dingtalk-suite': '连接钉钉，将在途预警、审批待办和运营结果推送到群聊与工作通知。',
-  'capacity-cargo-normalization': '解析 Excel 或连接器采集的货源，映射标准字段；必填项缺失时通过多轮对话补齐后入库。',
-  'capacity-cargo-publish': '基于标准货源统一执行大卡必发、满帮按账号配置选发，并支持跨平台修改与下架。',
-  'capacity-quote-collection': '采集大卡与满帮的司机抢单、报价和电话联系反馈，统一司机车辆画像与处理状态。',
-  'capacity-private-fleet': '通过 Excel 维护企业熟车资源，叠加中交车辆位置、目的地预测和当前装卸状态，支持筛选与定向询价。',
-};
-
-const managedSkills = ref<ManagedSkill[]>(
-  skillSeed.map((skill, index) => ({
-    ...skill,
-    content: `# ${skill.name}\n\n## 适用范围\n${skill.category}\n\n## 执行指引\n根据用户任务识别所需数据和业务约束，调用 ${skill.name} 完成处理，并返回结构化结果与必要的执行说明。`,
-    description: skillDescriptions[skill.id] ?? '',
-    enabled: index !== 18,
-    enterpriseIds: skill.enterpriseIds ?? [],
-    fileName: `${skill.id}.skill.md`,
-    updatedAt: index < 9 ? '2026-07-25 11:20' : '2026-07-23 09:15',
-    updatedBy: index % 3 === 0 ? '王运营' : index % 3 === 1 ? '李产品' : '系统管理员',
-    visibility: skill.visibility ?? '全部企业',
-  })),
-);
-
-const systemPrompt = ref<SystemPromptConfig>({
-  fileName: 'iovagent-system-prompt.md',
-  updatedAt: '2026-07-26 18:05',
-  updatedBy: '系统管理员',
-  content: `# 大卡数字人 System Prompt
-
-你是服务于企业物流运输场景的智能体。
-
-## 核心原则
-1. 先识别用户意图和当前项目上下文，再选择合适的 Skill。
-2. 涉及运单、车辆、轨迹和风险结论时，优先使用真实数据源并注明数据时间。
-3. 无项目上下文时，不得推测或引用任何企业私有数据。
-4. 涉及付费、短信或外部系统连接的 Skill，执行前应明确告知用户。
-5. 输出应简洁、可追溯，并给出下一步可执行建议。`,
-});
 const selectedEmployeeId = ref(dataEmployees.value[0]!.id);
 
 const menuItems = computed<Array<{ badge?: number; desc: string; icon: string; id: ConfigTab; label: string }>>(() => [
-  { id: 'employees', label: '数据员工配置', desc: '抓取账号、登录方式、映射 Skill', icon: strokeIconPaths.bot },
+  { id: 'customers', label: '客户 Agent 配置', desc: '默认继承、自定义能力、冲突检测', icon: strokeIconPaths.usersRound },
+  { id: 'employees', label: '数据员工配置', desc: '数据员工 Agent 的采集与映射 Skill', icon: strokeIconPaths.bot },
   { id: 'tmsCustomers', label: 'TMS同步客户', desc: '客户提交、连接处理', icon: strokeIconPaths.usersRound, badge: store.unprocessedTmsSyncCustomerCount },
-  { id: 'dataset', label: '标准数据集', desc: '运单字段、语义、数据示例', icon: strokeIconPaths.list },
-  { id: 'skills', label: 'Skill 管理', desc: '通用技能、可见范围、系统提示词', icon: strokeIconPaths.settings },
+  { id: 'agents', label: 'Agent 管理', desc: 'System Prompt、默认能力配置', icon: strokeIconPaths.bot },
+  { id: 'tools', label: 'Tool 管理', desc: 'MCP 服务、内置API工具、加载范围', icon: strokeIconPaths.waypoints },
+  { id: 'skills', label: 'Skill 管理', desc: '通用技能、分组、私有工具', icon: strokeIconPaths.settings },
 ]);
-const skillManagementTabs: { id: SkillManagementTab; label: string }[] = [
-  { id: 'skills', label: 'Skill 列表' },
-  { id: 'systemPrompt', label: 'System Prompt 管理' },
-];
 const skillCategoryOptions: Array<'全部' | SkillCategory> = ['全部', '在途专家', '经营分析参谋', '运营助手', '运力与货源'];
-const skillVisibilityOptions: SkillVisibility[] = ['全部企业', '指定企业'];
-
-const waybillFields: WaybillField[] = [
-  { name: 'waybill_no', semantic: '运单唯一编号，用于跨系统识别同一票运输任务。', example: 'WB202606250018' },
-  { name: 'source_system', semantic: '数据来源系统或导入渠道，便于追踪抓取来源。', example: '金隅水泥TMS' },
-  { name: 'project_name', semantic: '归属项目或客户项目名称。', example: '华东干线在途监控' },
-  { name: 'carrier_name', semantic: '承运商、物流商或实际运输服务商名称。', example: '安捷物流' },
-  { name: 'vehicle_plate', semantic: '执行运输任务的车辆车牌号。', example: '沪A12345' },
-  { name: 'driver_name', semantic: '当前运单绑定司机姓名。', example: '张师傅' },
-  { name: 'driver_phone', semantic: '司机联系方式，用于人工复核和异常联系。', example: '138****6821' },
-  { name: 'route_name', semantic: '线路名称或起止点组合后的标准线路。', example: '上海工厂 → 广州仓' },
-  { name: 'origin_name', semantic: '装货地、发货工厂或起运仓名称。', example: '上海一厂' },
-  { name: 'origin_address', semantic: '装货地详细地址或围栏地址。', example: '上海市嘉定区胜辛南路88号' },
-  { name: 'destination_name', semantic: '卸货地、收货仓或目的地名称。', example: '广州仓' },
-  { name: 'destination_address', semantic: '卸货地详细地址或目的地围栏地址。', example: '广州市黄埔区开创大道168号' },
-  { name: 'cargo_name', semantic: '货品、物料或运输品类名称。', example: '袋装水泥 P.O42.5' },
-  { name: 'cargo_weight', semantic: '货物重量，统一保留数值和单位。', example: '31.5 吨' },
-  { name: 'order_status', semantic: '运单当前执行状态。', example: '在途' },
-  { name: 'plan_depart_time', semantic: '计划发车或计划出库时间。', example: '2026-06-25 08:00' },
-  { name: 'actual_depart_time', semantic: '实际发车或离开发货地时间。', example: '2026-06-25 08:23' },
-  { name: 'plan_arrival_time', semantic: '计划到达目的地时间。', example: '2026-06-26 02:30' },
-  { name: 'actual_arrival_time', semantic: '实际到达目的地时间，未到达时为空。', example: '-' },
-  { name: 'current_location', semantic: '最近一次定位解析出的当前位置。', example: 'G60沪昆高速嘉兴段' },
-  { name: 'gps_time', semantic: '最近一次有效GPS定位时间。', example: '2026-06-25 14:16:32' },
-  { name: 'risk_level', semantic: '智能体归一后的风险等级。', example: '高风险' },
-  { name: 'abnormal_type', semantic: '异常类型，可承接规则预警、GPS疑似造假、长时间停车等。', example: '非目的地物流园长停' },
-  { name: 'raw_payload_ref', semantic: '原始抓取数据引用，用于问题追溯和重新映射。', example: 'crawl://20260625/jinyu/018' },
-];
 
 const selectedEmployee = computed(() => dataEmployees.value.find((employee) => employee.id === selectedEmployeeId.value) ?? dataEmployees.value[0]!);
 const currentValidationLoginType = computed(() => validatingEmployee.value?.loginType ?? '无验证');
 const isEditingEmployee = computed(() => editingEmployeeId.value.length > 0);
 const isEditingSkill = computed(() => editingSkillId.value.length > 0);
-const employeeFormTitle = computed(() => (isEditingEmployee.value ? '编辑数据员工（TMS）' : '增加数据员工（TMS）'));
+const employeeFormTitle = computed(() => (isEditingEmployee.value ? '编辑数据员工 Skill' : '新增数据员工 Skill'));
 const employeeFormConfirmText = computed(() => (isEditingEmployee.value ? '保存' : '确认'));
 const skillFormTitle = computed(() => (isEditingSkill.value ? '配置 Skill' : '添加 Skill'));
 const filteredManagedSkills = computed(() => {
@@ -442,17 +121,23 @@ const filteredManagedSkills = computed(() => {
   return managedSkills.value.filter((skill) => {
     const matchesCategory = skillCategoryFilter.value === '全部' || skill.category === skillCategoryFilter.value;
     const matchesSearch = !search || `${skill.name} ${skill.description} ${skill.fileName} ${skill.category}`.toLowerCase().includes(search);
-    return matchesCategory && matchesSearch;
+    return matchesCategory && matchesSearch && (skillGroupFilter.value === '全部' || skill.group === skillGroupFilter.value);
   });
 });
-const filteredEnterpriseOptions = computed(() => {
-  const search = enterpriseSearch.value.trim().toLowerCase();
-  return enterpriseOptions.filter((enterprise) => !search || enterprise.name.toLowerCase().includes(search));
-});
-const filteredEmployeeEnterpriseOptions = computed(() => {
-  const search = employeeEnterpriseSearch.value.trim().toLowerCase();
-  return enterpriseOptions.filter((enterprise) => !search || enterprise.name.toLowerCase().includes(search));
-});
+const skillListCount = computed(() => `${filteredManagedSkills.value.length} / ${managedSkills.value.length}`);
+const availablePrivateTools = computed(() => managedTools.value.filter((tool) => !skillForm.privateToolIds.includes(tool.id)));
+function toolName(id: string) {
+  return managedTools.value.find((tool) => tool.id === id)?.name ?? id;
+}
+function toolById(id: string) {
+  return managedTools.value.find((tool) => tool.id === id);
+}
+function addPrivateTool() {
+  if (!availablePrivateTools.value.some((tool) => tool.id === pendingPrivateToolId.value)) return;
+  skillForm.privateToolIds.push(pendingPrivateToolId.value);
+  pendingPrivateToolId.value = '';
+}
+
 
 function bumpVersion(version: string) {
   const versionNumber = Number(version.replace('v', ''));
@@ -466,13 +151,6 @@ function loginTypeClass(loginType: LoginType) {
   return 'border-emerald-200 bg-emerald-50 text-emerald-700';
 }
 
-function formatEmployeeVisibility(employee: DataEmployee) {
-  if (employee.visibility === '全部企业') return '全部企业';
-  const names = employee.enterpriseIds
-    .map((id) => enterpriseOptions.find((enterprise) => enterprise.id === id)?.name)
-    .filter(Boolean);
-  return names.length ? names.join('、') : '未指定企业';
-}
 
 function showSkill(employee: DataEmployee) {
   selectedEmployeeId.value = employee.id;
@@ -510,13 +188,11 @@ function sendSmsCode() {
 
 function resetNewEmployeeForm() {
   editingEmployeeId.value = '';
-  employeeEnterpriseSearch.value = '';
   newEmployeeForm.name = '';
   newEmployeeForm.description = '';
   newEmployeeForm.loginUrl = '';
   newEmployeeForm.loginType = '无验证';
-  newEmployeeForm.visibility = '全部企业';
-  newEmployeeForm.enterpriseIds = [];
+  newEmployeeForm.privateToolIds = [];
   newEmployeeForm.skillContent = '';
   newEmployeeForm.skillFileName = '';
 }
@@ -533,8 +209,7 @@ function openEditEmployeeModal(employee: DataEmployee) {
   newEmployeeForm.description = employee.description;
   newEmployeeForm.loginUrl = employee.loginUrl;
   newEmployeeForm.loginType = employee.loginType;
-  newEmployeeForm.visibility = employee.visibility;
-  newEmployeeForm.enterpriseIds = [...employee.enterpriseIds];
+  newEmployeeForm.privateToolIds = [...employee.privateToolIds];
   newEmployeeForm.skillContent = employee.skillContent;
   newEmployeeForm.skillFileName = employee.skillFileName;
   isCreateEmployeeModalOpen.value = true;
@@ -554,30 +229,21 @@ async function uploadNewEmployeeSkill(event: Event) {
   input.value = '';
 }
 
-function toggleEmployeeEnterprise(enterpriseId: string) {
-  newEmployeeForm.enterpriseIds = newEmployeeForm.enterpriseIds.includes(enterpriseId)
-    ? newEmployeeForm.enterpriseIds.filter((id) => id !== enterpriseId)
-    : [...newEmployeeForm.enterpriseIds, enterpriseId];
-}
 
 function confirmCreateEmployee() {
   const name = newEmployeeForm.name.trim();
   const description = newEmployeeForm.description.trim();
   const loginUrl = newEmployeeForm.loginUrl.trim();
   if (!name) {
-    ElMessage.warning('请输入数据员工名称');
+    ElMessage.warning('请输入数据员工 Skill 名称');
     return;
   }
   if (!description) {
-    ElMessage.warning('请输入数据员工描述');
+    ElMessage.warning('请输入数据员工 Skill 描述');
     return;
   }
   if (!loginUrl) {
     ElMessage.warning('请输入接入地址');
-    return;
-  }
-  if (newEmployeeForm.visibility === '指定企业' && newEmployeeForm.enterpriseIds.length === 0) {
-    ElMessage.warning('请至少选择一个可见企业');
     return;
   }
   if (!newEmployeeForm.skillFileName || !newEmployeeForm.skillContent) {
@@ -585,35 +251,23 @@ function confirmCreateEmployee() {
     return;
   }
 
-  const enterpriseIds = newEmployeeForm.visibility === '全部企业' ? [] : [...newEmployeeForm.enterpriseIds];
   if (isEditingEmployee.value) {
     const employee = dataEmployees.value.find((item) => item.id === editingEmployeeId.value);
     if (!employee) {
-      ElMessage.warning('未找到需要编辑的数据员工');
+      ElMessage.warning('未找到需要编辑的数据员工 Skill');
       return;
     }
     const isSkillChanged = newEmployeeForm.skillFileName !== employee.skillFileName || newEmployeeForm.skillContent !== employee.skillContent;
-    dataEmployees.value = dataEmployees.value.map((item) =>
-      item.id === employee.id
-        ? {
-            ...item,
-            name,
-            description,
-            loginUrl,
-            loginType: newEmployeeForm.loginType,
-            visibility: newEmployeeForm.visibility,
-            enterpriseIds,
-            skillContent: newEmployeeForm.skillContent,
-            skillFileName: newEmployeeForm.skillFileName,
-            skillUpdated: isSkillChanged ? '刚刚' : item.skillUpdated,
-            skillVersion: isSkillChanged ? bumpVersion(item.skillVersion) : item.skillVersion,
-          }
-        : item,
-    );
+    opsStore.saveDataEmployeeSkill({
+      ...employee, name, description, loginUrl,
+      loginType: newEmployeeForm.loginType, group: dataEmployeeSkillGroup, privateToolIds: [...newEmployeeForm.privateToolIds],
+      skillContent: newEmployeeForm.skillContent, skillFileName: newEmployeeForm.skillFileName,
+      skillUpdated: '刚刚', skillVersion: isSkillChanged ? bumpVersion(employee.skillVersion) : employee.skillVersion,
+    });
     selectedEmployeeId.value = employee.id;
     isCreateEmployeeModalOpen.value = false;
     resetNewEmployeeForm();
-    ElMessage.success('数据员工已保存');
+    ElMessage.success('数据员工 Skill 已保存，可在客户 Agent 配置中选择');
     return;
   }
 
@@ -623,18 +277,18 @@ function confirmCreateEmployee() {
     description,
     loginUrl,
     loginType: newEmployeeForm.loginType,
-    visibility: newEmployeeForm.visibility,
-    enterpriseIds,
+    group: dataEmployeeSkillGroup,
+    privateToolIds: [...newEmployeeForm.privateToolIds],
     skillVersion: 'v1.0',
     skillUpdated: '刚刚',
     skillFileName: newEmployeeForm.skillFileName,
     skillContent: newEmployeeForm.skillContent,
   };
-  dataEmployees.value = [employee, ...dataEmployees.value];
+  opsStore.saveDataEmployeeSkill(employee);
   selectedEmployeeId.value = employee.id;
   isCreateEmployeeModalOpen.value = false;
   resetNewEmployeeForm();
-  ElMessage.success('数据员工已增加');
+  ElMessage.success('Skill 已新增，请在客户 Agent 配置中按需加载');
 }
 
 function buildValidationEntity(employee: DataEmployee) {
@@ -700,38 +354,24 @@ async function uploadSkill(employee: DataEmployee, event: Event) {
   const file = input.files?.[0];
   if (!file) return;
   const content = await file.text();
-  dataEmployees.value = dataEmployees.value.map((item) =>
-    item.id === employee.id
-      ? {
-          ...item,
-          skillContent: content || item.skillContent,
-          skillFileName: file.name,
-          skillUpdated: '刚刚',
-          skillVersion: bumpVersion(item.skillVersion),
-        }
-      : item,
-  );
+  opsStore.saveDataEmployeeSkill({
+    ...employee, skillContent: content || employee.skillContent, skillFileName: file.name,
+    skillUpdated: '刚刚', skillVersion: bumpVersion(employee.skillVersion),
+  });
   selectedEmployeeId.value = employee.id;
   input.value = '';
   ElMessage.success(`${employee.name} 的数据映射 skill 已更新`);
 }
 
-function formatSkillVisibility(skill: ManagedSkill) {
-  if (skill.visibility === '全部企业') return '全部企业';
-  const names = skill.enterpriseIds
-    .map((id) => enterpriseOptions.find((enterprise) => enterprise.id === id)?.name)
-    .filter(Boolean);
-  return names.length ? names.join('、') : '未指定企业';
-}
 
 function resetSkillForm() {
   editingSkillId.value = '';
-  enterpriseSearch.value = '';
+  pendingPrivateToolId.value = '';
   skillForm.name = '';
   skillForm.description = '';
   skillForm.category = '在途专家';
-  skillForm.visibility = '全部企业';
-  skillForm.enterpriseIds = [];
+  skillForm.group = '基础 Skill 组';
+  skillForm.privateToolIds = [];
   skillForm.fileName = '';
   skillForm.fileContent = '';
 }
@@ -743,12 +383,12 @@ function openCreateSkillModal() {
 
 function openEditSkillModal(skill: ManagedSkill) {
   editingSkillId.value = skill.id;
-  enterpriseSearch.value = '';
+  pendingPrivateToolId.value = '';
   skillForm.name = skill.name;
   skillForm.description = skill.description;
   skillForm.category = skill.category;
-  skillForm.visibility = skill.visibility;
-  skillForm.enterpriseIds = [...skill.enterpriseIds];
+  skillForm.group = skill.group;
+  skillForm.privateToolIds = [...skill.privateToolIds];
   skillForm.fileName = skill.fileName;
   skillForm.fileContent = skill.content;
   isSkillFormModalOpen.value = true;
@@ -756,13 +396,6 @@ function openEditSkillModal(skill: ManagedSkill) {
 
 function closeSkillFormModal() {
   isSkillFormModalOpen.value = false;
-  resetSkillForm();
-}
-
-function toggleSkillEnterprise(enterpriseId: string) {
-  skillForm.enterpriseIds = skillForm.enterpriseIds.includes(enterpriseId)
-    ? skillForm.enterpriseIds.filter((id) => id !== enterpriseId)
-    : [...skillForm.enterpriseIds, enterpriseId];
 }
 
 async function uploadSkillFormFile(event: Event) {
@@ -785,16 +418,11 @@ function confirmSkillForm() {
     ElMessage.warning('请输入 Skill 描述');
     return;
   }
-  if (skillForm.visibility === '指定企业' && skillForm.enterpriseIds.length === 0) {
-    ElMessage.warning('请至少选择一个企业');
-    return;
-  }
   if (!skillForm.fileName || !skillForm.fileContent) {
     ElMessage.warning('请上传 Skill 文件');
     return;
   }
 
-  const enterpriseIds = skillForm.visibility === '全部企业' ? [] : [...skillForm.enterpriseIds];
   if (isEditingSkill.value) {
     managedSkills.value = managedSkills.value.map((skill) =>
       skill.id === editingSkillId.value
@@ -803,8 +431,9 @@ function confirmSkillForm() {
             name,
             description,
             category: skillForm.category,
-            visibility: skillForm.visibility,
-            enterpriseIds,
+            group: skillForm.group,
+
+            privateToolIds: [...skillForm.privateToolIds],
             fileName: skillForm.fileName,
             content: skillForm.fileContent,
             updatedAt: '刚刚',
@@ -820,8 +449,9 @@ function confirmSkillForm() {
         name,
         description,
         category: skillForm.category,
-        visibility: skillForm.visibility,
-        enterpriseIds,
+        group: skillForm.group,
+
+        privateToolIds: [...skillForm.privateToolIds],
         fileName: skillForm.fileName,
         content: skillForm.fileContent,
         enabled: true,
@@ -892,20 +522,6 @@ async function uploadManagedSkill(skill: ManagedSkill, event: Event) {
   ElMessage.success(`${skill.name} 已更新`);
 }
 
-async function uploadSystemPrompt(event: Event) {
-  const input = event.target as HTMLInputElement;
-  const file = input.files?.[0];
-  if (!file) return;
-  systemPrompt.value = {
-    fileName: file.name,
-    content: (await file.text()) || systemPrompt.value.content,
-    updatedAt: '刚刚',
-    updatedBy: '当前运营用户',
-  };
-  input.value = '';
-  ElMessage.success('System Prompt 已更新');
-}
-
 function isCustomerPasswordVisible(customerId: string) {
   return visibleCustomerPasswordIds.value.includes(customerId);
 }
@@ -923,24 +539,21 @@ function markTmsCustomerProcessed(customerId: string) {
 </script>
 
 <template>
-  <div class="flex h-screen flex-col overflow-hidden bg-[#f7f7f5] text-slate-900">
-    <header class="flex h-14 shrink-0 items-center justify-between border-b border-[#deded9] bg-white px-5">
+  <div class="flex h-screen flex-col overflow-hidden bg-[#f7f7f5] text-slate-900" :class="{ 'ops-catalog-screen': ['customers', 'agents', 'tools', 'skills', 'employees'].includes(activeTab) }">
+    <header v-if="!agentConfigPageOpen" class="flex h-14 shrink-0 items-center justify-between border-b border-[#deded9] bg-white px-5">
       <div class="flex min-w-0 items-center gap-3">
         <div class="flex h-8 w-8 shrink-0 items-center justify-center rounded-md border border-[#deded9] bg-[#f7f7f5] text-slate-700">
           <Icon :svg="strokeIconPaths.bot" :size="18" />
         </div>
         <div class="min-w-0">
           <h1 class="truncate text-sm font-semibold leading-5 text-slate-950">智能体运营配置</h1>
-          <p class="truncate text-xs leading-4 text-slate-500">数据员工、标准数据集、Skill 与系统提示词管理</p>
+          <p class="truncate text-xs leading-4 text-slate-500">客户 Agent 配置、Agent 定义、Skill 与 Tool 管理</p>
         </div>
       </div>
-      <button type="button" class="rounded-md border border-[#deded9] px-3 py-1.5 text-xs text-slate-600 hover:bg-[#f7f7f5]" @click="router.push('/index')">
-        返回工作台
-      </button>
     </header>
 
-    <main class="grid min-h-0 flex-1 grid-cols-[230px_minmax(0,1fr)] gap-3 p-4">
-      <aside class="flex min-h-0 flex-col overflow-hidden rounded-md border border-[#deded9] bg-white">
+    <main :class="{ 'is-agent-editor': agentConfigPageOpen }" class="ops-main grid min-h-0 flex-1 grid-cols-[230px_minmax(0,1fr)] gap-3 p-4">
+      <aside v-if="!agentConfigPageOpen" class="flex min-h-0 flex-col overflow-hidden rounded-md border border-[#deded9] bg-white">
         <div class="border-b border-[#e2e2dc] px-4 py-3">
           <h2 class="text-sm font-semibold leading-5 text-slate-950">运营菜单</h2>
           <p class="mt-1 text-xs leading-5 text-slate-500">维护智能体运行所需的运营配置。</p>
@@ -982,23 +595,24 @@ function markTmsCustomerProcessed(customerId: string) {
         </div>
       </aside>
 
-      <div class="min-h-0 overflow-hidden">
+      <div class="h-full min-h-0 overflow-hidden">
         <section v-if="activeTab === 'employees'" class="grid h-full min-h-0 grid-cols-[minmax(0,1.45fr)_minmax(360px,0.75fr)] gap-3">
         <div class="flex min-h-0 flex-col overflow-hidden rounded-md border border-[#deded9] bg-white">
           <div class="flex h-11 shrink-0 items-center justify-between border-b border-[#e2e2dc] px-4">
-            <h2 class="text-sm font-semibold leading-5 text-slate-950">数据员工列表</h2>
+            <h2 class="text-sm font-semibold leading-5 text-slate-950">数据员工 Skill 列表</h2>
             <div class="flex items-center gap-2">
-              <span class="text-xs text-slate-500">{{ dataEmployees.length }} 个数据员工</span>
+              <span class="text-xs text-slate-500">{{ dataEmployees.length }} 个 Skill</span>
               <button type="button" class="rounded-md bg-slate-900 px-3 py-1.5 text-xs font-medium text-white hover:bg-slate-800" @click="openCreateEmployeeModal">
-                增加数据员工（TMS）
+                新增 Skill
               </button>
             </div>
           </div>
+          <div class="flex flex-wrap items-center justify-between gap-2 border-b border-[#e2e2dc] px-4 py-3 text-xs leading-5 text-slate-600"><span>每项配置都是采集与映射 Skill，可在客户 Agent 配置中为数据员工 Agent 按组或逐项选择。</span><button type="button" class="shrink-0 font-medium underline underline-offset-4" @click="activeTab = 'customers'">配置客户 Agent</button></div>
           <div class="min-h-0 flex-1 overflow-auto">
             <table class="w-full table-fixed border-collapse text-left text-sm">
               <thead class="sticky top-0 z-10 bg-[#f7f7f5]">
                 <tr class="text-xs font-semibold text-slate-500">
-                  <th class="px-4 py-3">数据员工</th>
+                  <th class="px-4 py-3">Skill / 数据来源</th>
                   <th class="w-[205px] px-4 py-3">操作</th>
                 </tr>
               </thead>
@@ -1016,8 +630,8 @@ function markTmsCustomerProcessed(customerId: string) {
                     <div class="mt-2 max-w-[400px] truncate font-mono text-xs text-slate-500">{{ employee.loginUrl }}</div>
                     <div class="mt-2 flex flex-wrap items-center gap-1.5">
                       <span class="inline-flex rounded-md border px-2 py-0.5 text-xs font-medium" :class="loginTypeClass(employee.loginType)">{{ employee.loginType }}</span>
-                      <span class="inline-flex max-w-[230px] truncate rounded-md border border-[#deded9] bg-white px-2 py-0.5 text-xs text-slate-600" :title="formatEmployeeVisibility(employee)">
-                        {{ employee.visibility === '全部企业' ? '全部企业可见' : `指定企业：${formatEmployeeVisibility(employee)}` }}
+                      <span class="inline-flex max-w-[230px] truncate rounded-md border border-[#deded9] bg-white px-2 py-0.5 text-xs text-slate-600" :title="employee.group">
+                        {{ employee.group }}
                       </span>
                       <span class="text-xs text-slate-400">{{ employee.skillVersion }} · 更新于 {{ employee.skillUpdated }}</span>
                     </div>
@@ -1049,7 +663,7 @@ function markTmsCustomerProcessed(customerId: string) {
           </div>
           <div class="space-y-3 border-b border-[#e2e2dc] px-4 py-3 text-xs text-slate-500">
             <div class="flex items-center justify-between gap-3">
-              <span>当前数据员工</span>
+              <span>当前 Skill</span>
               <span class="font-medium text-slate-800">{{ selectedEmployee.name }}</span>
             </div>
             <div class="flex items-center justify-between gap-3">
@@ -1060,36 +674,6 @@ function markTmsCustomerProcessed(customerId: string) {
           <pre class="min-h-0 flex-1 overflow-auto whitespace-pre-wrap bg-[#fbfbfa] p-4 text-xs leading-5 text-slate-700">{{ selectedEmployee.skillContent }}</pre>
         </aside>
       </section>
-
-        <section v-else-if="activeTab === 'dataset'" class="flex h-full min-h-0 flex-col overflow-hidden rounded-md border border-[#deded9] bg-white">
-        <div class="shrink-0 border-b border-[#e2e2dc] px-4 py-3">
-          <div class="flex items-center justify-between gap-3">
-            <h2 class="text-sm font-semibold leading-5 text-slate-950">运单标准数据集</h2>
-            <span class="text-xs text-slate-500">{{ waybillFields.length }} 个字段</span>
-          </div>
-          <p class="mt-1 text-xs leading-5 text-slate-500">
-            数据员工抓取各 TMS 页面后，先按 Skill 将原始字段映射到该标准数据集。标准字段用于后续在途监控、异常识别、轨迹核验和报表输出。
-          </p>
-        </div>
-        <div class="min-h-0 flex-1 overflow-auto">
-          <table class="w-full border-collapse text-left text-sm">
-            <thead class="sticky top-0 z-10 bg-[#f7f7f5]">
-              <tr class="text-xs font-semibold text-slate-500">
-                <th class="w-[210px] px-4 py-3">字段名称</th>
-                <th class="px-4 py-3">语义</th>
-                <th class="w-[260px] px-4 py-3">数据示例</th>
-              </tr>
-            </thead>
-            <tbody class="divide-y divide-[#ededea]">
-              <tr v-for="field in waybillFields" :key="field.name" class="hover:bg-[#f7f7f5]">
-                <td class="px-4 py-3 align-top font-mono text-xs font-medium text-slate-900">{{ field.name }}</td>
-                <td class="px-4 py-3 align-top text-sm leading-5 text-slate-600">{{ field.semantic }}</td>
-                <td class="px-4 py-3 align-top font-mono text-xs text-slate-600">{{ field.example }}</td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
-        </section>
 
         <section v-else-if="activeTab === 'tmsCustomers'" class="flex h-full min-h-0 flex-col overflow-hidden rounded-md border border-[#deded9] bg-white">
           <div class="flex min-h-14 shrink-0 items-center justify-between gap-4 border-b border-[#e2e2dc] px-4 py-3">
@@ -1180,254 +764,155 @@ function markTmsCustomerProcessed(customerId: string) {
           </div>
         </section>
 
+        <CustomerAgentManagement v-else-if="activeTab === 'customers'" :initial-target="customerToEdit" @edit-agent-default="editAgentDefault" @editing-change="updateAgentEditing" />
+        <AgentManagement v-else-if="activeTab === 'agents'" :initial-agent-id="agentToEdit" @editing-change="updateAgentEditing" @manage-customers="activeTab = 'customers'" />
+        <ToolManagement v-else-if="activeTab === 'tools'" @edit-skill="editSkillFromTool" @edit-customer-agent="editCustomerAgentFromTool" />
+
         <section v-else class="flex h-full min-h-0 flex-col overflow-hidden rounded-md border border-[#deded9] bg-white">
           <div class="flex h-12 shrink-0 items-center justify-between border-b border-[#e2e2dc] px-4">
-            <div class="flex h-full items-center gap-5">
-              <button
-                v-for="tab in skillManagementTabs"
-                :key="tab.id"
-                type="button"
-                class="relative h-full text-sm font-medium transition"
-                :class="activeSkillManagementTab === tab.id ? 'text-slate-950' : 'text-slate-500 hover:text-slate-800'"
-                @click="activeSkillManagementTab = tab.id"
-              >
-                {{ tab.label }}
-                <span v-if="activeSkillManagementTab === tab.id" class="absolute inset-x-0 bottom-0 h-0.5 bg-slate-900" />
-              </button>
-            </div>
+            <h2 class="text-sm font-semibold text-slate-950">Skill 列表</h2>
             <span class="text-xs text-slate-400">运营配置</span>
           </div>
 
-          <template v-if="activeSkillManagementTab === 'skills'">
-            <div class="flex shrink-0 items-center justify-between gap-3 border-b border-[#e2e2dc] px-4 py-3">
-              <div class="flex min-w-0 flex-1 items-center gap-2">
-                <label class="relative block w-full max-w-[280px]">
-                  <Icon :svg="strokeIconPaths.search" :size="15" svg-class="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400" />
-                  <input
-                    v-model.trim="skillSearch"
-                    class="h-9 w-full rounded-md border border-[#deded9] bg-[#fbfbfa] pl-8 pr-3 text-xs outline-none focus:border-slate-400"
-                    placeholder="搜索 Skill 名称或文件"
-                  />
-                </label>
-                <select
-                  v-model="skillCategoryFilter"
-                  class="h-9 rounded-md border border-[#deded9] bg-[#fbfbfa] px-3 text-xs text-slate-600 outline-none focus:border-slate-400"
-                >
-                  <option v-for="category in skillCategoryOptions" :key="category" :value="category">{{ category }}</option>
-                </select>
-                <span class="shrink-0 text-xs text-slate-500">{{ filteredManagedSkills.length }} / {{ managedSkills.length }} 个</span>
-              </div>
-              <button type="button" class="inline-flex h-9 shrink-0 items-center gap-1.5 rounded-md bg-slate-900 px-3 text-xs font-medium text-white hover:bg-slate-800" @click="openCreateSkillModal">
-                <Icon :svg="strokeIconPaths.plus" :size="14" />
-                添加 Skill
-              </button>
-            </div>
-
-            <div class="min-h-0 flex-1 overflow-auto">
-              <table class="w-full table-fixed border-collapse text-left text-sm">
-                <thead class="sticky top-0 z-10 bg-[#f7f7f5]">
-                  <tr class="text-xs font-semibold text-slate-500">
-                    <th class="w-[20%] px-4 py-3">Skill 名称</th>
-                    <th class="w-[11%] px-3 py-3">分类</th>
-                    <th class="w-[17%] px-3 py-3">可见范围</th>
-                    <th class="w-[23%] px-3 py-3">Skill 文件</th>
-                    <th class="w-[15%] px-3 py-3">最后更新</th>
-                    <th class="w-[14%] px-3 py-3">操作</th>
-                  </tr>
-                </thead>
-                <tbody class="divide-y divide-[#ededea]">
-                  <tr v-for="skill in filteredManagedSkills" :key="skill.id" class="bg-white hover:bg-[#f7f7f5]">
-                    <td class="px-4 py-3 align-middle">
-                      <div class="flex items-center gap-2">
-                        <span class="h-2 w-2 shrink-0 rounded-full" :class="skill.enabled ? 'bg-emerald-500' : 'bg-slate-300'" />
-                        <div class="min-w-0">
-                          <div class="truncate font-medium text-slate-950">{{ skill.name }}</div>
-                          <div class="mt-0.5 truncate text-xs text-slate-500" :title="skill.description">{{ skill.description }}</div>
-                          <div class="mt-0.5 text-xs" :class="skill.enabled ? 'text-emerald-600' : 'text-slate-400'">{{ skill.enabled ? '已启用' : '已禁用' }}</div>
-                        </div>
-                      </div>
-                    </td>
-                    <td class="px-3 py-3 align-middle">
-                      <span class="inline-flex whitespace-nowrap rounded-md bg-[#f2f2ef] px-2 py-1 text-xs text-slate-600">{{ skill.category }}</span>
-                    </td>
-                    <td class="px-3 py-3 align-middle">
-                      <div class="text-xs font-medium text-slate-700">{{ skill.visibility }}</div>
-                      <div v-if="skill.visibility === '指定企业'" class="mt-1 max-w-[260px] truncate text-xs text-slate-400" :title="formatSkillVisibility(skill)">
-                        {{ formatSkillVisibility(skill) }}
-                      </div>
-                    </td>
-                    <td class="px-3 py-3 align-middle">
-                      <button type="button" class="inline-flex w-full items-center gap-1.5 text-left font-mono text-xs text-slate-600 hover:text-slate-950" title="下载 Skill 文件" @click="downloadTextFile(skill.fileName, skill.content)">
-                        <Icon :svg="strokeIconPaths.download" :size="14" />
-                        <span class="truncate">{{ skill.fileName }}</span>
-                      </button>
-                    </td>
-                    <td class="px-3 py-3 align-middle">
-                      <div class="whitespace-nowrap text-xs text-slate-600">{{ skill.updatedAt }}</div>
-                      <div class="mt-1 text-xs text-slate-400">{{ skill.updatedBy }}</div>
-                    </td>
-                    <td class="px-3 py-3 align-middle">
-                      <div class="flex items-center gap-1">
-                        <button type="button" class="flex h-7 w-7 items-center justify-center rounded-md border border-[#deded9] text-slate-500 hover:bg-white hover:text-slate-950" aria-label="显示 Skill" title="显示 Skill" @click="showManagedSkill(skill)">
-                          <Icon :svg="strokeIconPaths.eye" :size="14" />
-                        </button>
-                        <button type="button" class="flex h-7 w-7 items-center justify-center rounded-md border border-[#deded9] text-slate-500 hover:bg-white hover:text-slate-950" aria-label="配置 Skill" title="配置 Skill" @click="openEditSkillModal(skill)">
-                          <Icon :svg="strokeIconPaths.settings" :size="14" />
-                        </button>
-                        <label class="flex h-7 w-7 cursor-pointer items-center justify-center rounded-md border border-[#deded9] text-slate-500 hover:bg-white hover:text-slate-950" aria-label="更新上传 Skill" title="更新上传">
-                          <Icon :svg="strokeIconPaths.upload" :size="14" />
-                          <input class="hidden" type="file" accept=".md,.txt,.yaml,.yml" @change="uploadManagedSkill(skill, $event)" />
-                        </label>
-                        <button
-                          type="button"
-                          class="h-7 whitespace-nowrap rounded-md px-2 text-xs font-medium"
-                          :class="skill.enabled ? 'bg-amber-50 text-amber-700 hover:bg-amber-100' : 'bg-emerald-50 text-emerald-700 hover:bg-emerald-100'"
-                          @click="toggleManagedSkill(skill)"
-                        >
-                          {{ skill.enabled ? '禁用' : '启用' }}
-                        </button>
-                        <button type="button" class="flex h-7 w-7 items-center justify-center rounded-md text-slate-400 hover:bg-red-50 hover:text-red-600" aria-label="删除 Skill" title="删除 Skill" @click="removeManagedSkill(skill)">
-                          <Icon :svg="strokeIconPaths.trash" :size="14" />
-                        </button>
-                      </div>
-                    </td>
-                  </tr>
-                </tbody>
-              </table>
-              <div v-if="filteredManagedSkills.length === 0" class="flex h-40 items-center justify-center text-sm text-slate-400">未找到符合条件的 Skill</div>
-            </div>
-          </template>
-
-          <template v-else>
-            <div class="flex shrink-0 items-start justify-between gap-4 border-b border-[#e2e2dc] px-5 py-4">
-              <div class="min-w-0">
-                <h2 class="text-sm font-semibold leading-5 text-slate-950">当前 System Prompt</h2>
-                <div class="mt-2 flex flex-wrap items-center gap-x-5 gap-y-1 text-xs text-slate-500">
-                  <span>文件：<strong class="font-mono font-medium text-slate-700">{{ systemPrompt.fileName }}</strong></span>
-                  <span>最后更新时间：<strong class="font-medium text-slate-700">{{ systemPrompt.updatedAt }}</strong></span>
-                  <span>更新用户：<strong class="font-medium text-slate-700">{{ systemPrompt.updatedBy }}</strong></span>
-                </div>
-              </div>
-              <label class="inline-flex h-9 shrink-0 cursor-pointer items-center gap-1.5 rounded-md bg-slate-900 px-3 text-xs font-medium text-white hover:bg-slate-800" aria-label="更新上传 System Prompt">
-                <Icon :svg="strokeIconPaths.upload" :size="14" />
-                更新上传
-                <input class="hidden" type="file" accept=".md,.txt" @change="uploadSystemPrompt" />
+          <div class="skill-list-toolbar flex shrink-0 flex-wrap items-center justify-between gap-3 border-b border-[#e2e2dc] px-4 py-3">
+            <div class="skill-list-filters flex min-w-0 flex-1 flex-wrap items-center gap-2">
+              <label class="relative block w-full max-w-[280px]">
+                <Icon :svg="strokeIconPaths.search" :size="15" svg-class="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400" />
+                <input
+                  v-model.trim="skillSearch"
+                  class="h-9 w-full rounded-md border border-[#deded9] bg-[#fbfbfa] pl-8 pr-3 text-xs outline-none focus:border-slate-400"
+                  placeholder="搜索 Skill 名称或文件"
+                />
               </label>
+              <select
+                v-model="skillCategoryFilter"
+                aria-label="筛选 Skill 分类"
+                class="h-9 rounded-md border border-[#deded9] bg-[#fbfbfa] px-3 text-xs text-slate-600 outline-none focus:border-slate-400"
+              >
+                <option v-for="category in skillCategoryOptions" :key="category" :value="category">{{ category }}</option>
+              </select>
+              <span class="shrink-0 text-xs text-slate-500">{{ skillListCount }} 个</span>
             </div>
-            <div class="min-h-0 flex-1 overflow-auto bg-[#fbfbfa] p-5">
-              <pre class="mx-auto max-w-[980px] whitespace-pre-wrap rounded-md border border-[#deded9] bg-white p-5 text-xs leading-6 text-slate-700">{{ systemPrompt.content }}</pre>
-            </div>
-          </template>
+            <select v-model="skillGroupFilter" class="ops-input !w-auto" aria-label="筛选 Skill 分组"><option value="全部">通用 Skill · 全部分组</option><option v-for="group in commonSkillGroups" :key="group">{{ group }}</option></select>
+            <button type="button" class="inline-flex h-9 shrink-0 items-center gap-1.5 rounded-md bg-slate-900 px-3 text-xs font-medium text-white hover:bg-slate-800" @click="openCreateSkillModal">
+              <Icon :svg="strokeIconPaths.plus" :size="14" />
+              添加 Skill
+            </button>
+          </div>
+
+          <div class="min-h-0 flex-1 overflow-auto">
+            <table class="w-full min-w-[1120px] table-fixed border-collapse text-left text-sm">
+              <thead class="sticky top-0 z-10 bg-[#f7f7f5]">
+                <tr class="text-xs font-semibold text-slate-500">
+                  <th class="w-[18%] px-4 py-3">Skill 名称</th>
+                  <th class="w-[10%] px-3 py-3">分类</th>
+                  <th class="w-[15%] px-3 py-3">Skill 分组</th>
+                  <th class="w-[15%] px-3 py-3">私有工具</th>
+                  <th class="w-[15%] px-3 py-3">Skill 文件</th>
+                  <th class="w-[12%] px-3 py-3">最后更新</th>
+                  <th class="w-[15%] px-3 py-3">操作</th>
+                </tr>
+              </thead>
+              <tbody class="divide-y divide-[#ededea]">
+                <tr v-for="skill in filteredManagedSkills" :key="skill.id" class="bg-white hover:bg-[#f7f7f5]">
+                  <td class="px-4 py-3 align-middle">
+                    <div class="flex items-center gap-2">
+                      <span class="h-2 w-2 shrink-0 rounded-full" :class="skill.enabled ? 'bg-emerald-500' : 'bg-slate-300'" />
+                      <div class="min-w-0">
+                        <div class="truncate font-medium text-slate-950">{{ skill.name }}</div>
+                        <div class="mt-0.5 truncate text-xs text-slate-500" :title="skill.description">{{ skill.description }}</div>
+                        <div class="mt-0.5 text-xs" :class="skill.enabled ? 'text-emerald-600' : 'text-slate-400'">{{ skill.enabled ? '已启用' : '已禁用' }}</div>
+                      </div>
+                    </div>
+                  </td>
+                  <td class="px-3 py-3 align-middle">
+                    <span class="inline-flex whitespace-nowrap rounded-md bg-[#f2f2ef] px-2 py-1 text-xs text-slate-600">{{ skill.category }}</span>
+                  </td>
+                  <td class="px-3 py-3 align-middle">
+                    <span class="text-xs text-slate-700">{{ skill.group }}</span>
+                  </td>
+                  <td class="px-3 py-3 align-middle">
+                    <button type="button" class="text-xs leading-5 text-slate-700 hover:underline" :aria-label="`配置 ${skill.name} 的私有工具`" @click="openEditSkillModal(skill)">{{ skill.privateToolIds.length }} 个私有工具</button>
+                    <p class="mt-1 text-xs leading-5 text-slate-500">{{ skill.privateToolIds.map(toolName).join('、') || '未绑定私有工具' }}</p>
+                  </td>
+                  <td class="px-3 py-3 align-middle">
+                    <button type="button" class="inline-flex w-full items-center gap-1.5 text-left font-mono text-xs text-slate-600 hover:text-slate-950" title="下载 Skill 文件" @click="downloadTextFile(skill.fileName, skill.content)">
+                      <Icon :svg="strokeIconPaths.download" :size="14" />
+                      <span class="truncate">{{ skill.fileName }}</span>
+                    </button>
+                  </td>
+                  <td class="px-3 py-3 align-middle">
+                    <div class="whitespace-nowrap text-xs text-slate-600">{{ skill.updatedAt }}</div>
+                    <div class="mt-1 text-xs text-slate-400">{{ skill.updatedBy }}</div>
+                  </td>
+                  <td class="px-3 py-3 align-middle">
+                    <div class="flex items-center gap-1">
+                      <button type="button" class="flex h-7 w-7 items-center justify-center rounded-md border border-[#deded9] text-slate-500 hover:bg-white hover:text-slate-950" aria-label="显示 Skill" title="显示 Skill" @click="showManagedSkill(skill)">
+                        <Icon :svg="strokeIconPaths.eye" :size="14" />
+                      </button>
+                      <button type="button" class="flex h-7 w-7 items-center justify-center rounded-md border border-[#deded9] text-slate-500 hover:bg-white hover:text-slate-950" aria-label="配置 Skill" title="配置 Skill" @click="openEditSkillModal(skill)">
+                        <Icon :svg="strokeIconPaths.settings" :size="14" />
+                      </button>
+                      <label class="flex h-7 w-7 cursor-pointer items-center justify-center rounded-md border border-[#deded9] text-slate-500 hover:bg-white hover:text-slate-950" aria-label="更新上传 Skill" title="更新上传">
+                        <Icon :svg="strokeIconPaths.upload" :size="14" />
+                        <input class="hidden" type="file" accept=".md,.txt,.yaml,.yml" @change="uploadManagedSkill(skill, $event)" />
+                      </label>
+                      <button
+                        type="button"
+                        class="h-7 whitespace-nowrap rounded-md px-2 text-xs font-medium"
+                        :class="skill.enabled ? 'bg-amber-50 text-amber-700 hover:bg-amber-100' : 'bg-emerald-50 text-emerald-700 hover:bg-emerald-100'"
+                        @click="toggleManagedSkill(skill)"
+                      >
+                        {{ skill.enabled ? '禁用' : '启用' }}
+                      </button>
+                      <button type="button" class="flex h-7 w-7 items-center justify-center rounded-md text-slate-400 hover:bg-red-50 hover:text-red-600" aria-label="删除 Skill" title="删除 Skill" @click="removeManagedSkill(skill)">
+                        <Icon :svg="strokeIconPaths.trash" :size="14" />
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+            <div v-if="filteredManagedSkills.length === 0" class="flex h-40 items-center justify-center text-sm text-slate-400">未找到符合条件的 Skill</div>
+          </div>
         </section>
       </div>
     </main>
 
-    <div v-if="isSkillFormModalOpen" class="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/40 p-6">
-      <div class="flex max-h-[88vh] w-full max-w-[620px] flex-col overflow-hidden rounded-md border border-[#deded9] bg-white shadow-xl">
-        <div class="flex h-12 shrink-0 items-center justify-between border-b border-[#e2e2dc] px-4">
-          <div class="flex items-center gap-2.5">
-            <div class="flex h-7 w-7 items-center justify-center rounded-md bg-[#f2f2ef] text-slate-700">
-              <Icon :svg="strokeIconPaths.settings" :size="16" />
-            </div>
-            <h2 class="text-sm font-semibold leading-5 text-slate-950">{{ skillFormTitle }}</h2>
-          </div>
-          <button type="button" class="rounded-md p-1 text-slate-400 hover:bg-[#f7f7f5] hover:text-slate-700" title="关闭" @click="closeSkillFormModal">
-            <Icon :svg="strokeIconPaths.x" :size="16" />
-          </button>
-        </div>
-
-        <div class="min-h-0 flex-1 space-y-4 overflow-auto px-4 py-4">
-          <div class="grid gap-3 sm:grid-cols-2">
-            <label class="block">
-              <span class="mb-1.5 block text-xs font-medium text-slate-600">Skill 名称</span>
-              <input
-                v-model.trim="skillForm.name"
-                class="h-10 w-full rounded-md border border-[#deded9] bg-[#fbfbfa] px-3 text-sm outline-none focus:border-slate-400"
-                placeholder="请输入 Skill 名称"
-              />
-            </label>
-            <label class="block">
-              <span class="mb-1.5 block text-xs font-medium text-slate-600">Skill 分类</span>
-              <select v-model="skillForm.category" class="h-10 w-full rounded-md border border-[#deded9] bg-[#fbfbfa] px-3 text-sm outline-none focus:border-slate-400">
-                <option v-for="category in skillCategoryOptions.slice(1)" :key="category" :value="category">{{ category }}</option>
-              </select>
-            </label>
-          </div>
-
-          <label class="block">
-            <span class="mb-1.5 block text-xs font-medium text-slate-600">Skill 描述</span>
-            <textarea
-              v-model.trim="skillForm.description"
-              class="min-h-[82px] w-full resize-none rounded-md border border-[#deded9] bg-[#fbfbfa] px-3 py-2 text-sm leading-5 outline-none focus:border-slate-400"
-              placeholder="请输入用户侧技能卡片展示的功能描述"
-            />
-          </label>
-
-          <div>
-            <span class="mb-1.5 block text-xs font-medium text-slate-600">Skill 可见范围</span>
-            <div class="grid grid-cols-2 gap-2">
-              <button
-                v-for="visibility in skillVisibilityOptions"
-                :key="visibility"
-                type="button"
-                class="h-10 rounded-md border text-sm font-medium transition"
-                :class="skillForm.visibility === visibility ? 'border-slate-900 bg-slate-900 text-white' : 'border-[#deded9] bg-[#fbfbfa] text-slate-600 hover:bg-[#f7f7f5]'"
-                @click="skillForm.visibility = visibility"
-              >
-                {{ visibility }}
-              </button>
+    <ElDialog v-model="isSkillFormModalOpen" :title="skillFormTitle" width="1160px" top="4vh" class="ops-tool-dialog skill-config-dialog" :close-on-click-modal="false" @closed="resetSkillForm">
+      <form id="skill-config-form" class="skill-config-grid" @submit.prevent="confirmSkillForm">
+        <section class="skill-basics">
+          <h3 class="text-sm font-semibold text-slate-950">基本信息</h3>
+          <p v-if="isEditingSkill" class="mt-1 text-xs leading-5 text-slate-500">{{ editingSkillId }}</p>
+          <div class="mt-5 space-y-5">
+            <label class="ops-field">Skill 名称<input v-model.trim="skillForm.name" class="ops-input" placeholder="请输入 Skill 名称" maxlength="80" /></label>
+            <label class="ops-field">Skill 分类<select v-model="skillForm.category" class="ops-input"><option v-for="category in skillCategoryOptions.slice(1)" :key="category" :value="category">{{ category }}</option></select></label>
+            <label class="ops-field">Skill 分组<select v-model="skillForm.group" class="ops-input"><option v-for="group in commonSkillGroups" :key="group" :value="group">{{ group }}</option></select><span class="text-xs font-normal text-slate-500">用于客户按组批量选择；修改分组不改变已保存的客户授权。</span></label>
+            <label class="ops-field">Skill 描述<textarea v-model.trim="skillForm.description" class="ops-input !h-auto py-2" rows="4" placeholder="描述 Skill 的用途与适用场景" /></label>
+            <div>
+              <h4 class="mb-2 text-xs font-medium text-slate-700">Skill 文件</h4>
+              <div class="flex items-start gap-2 rounded-md border border-[#deded9] bg-[#fbfbfa] p-3"><Icon :svg="strokeIconPaths.file" :size="18" svg-class="shrink-0 text-slate-500" /><div class="min-w-0"><p class="break-all font-mono text-xs leading-5 text-slate-700">{{ skillForm.fileName || '尚未上传文件' }}</p><p class="mt-1 text-xs text-slate-500">支持 .md、.txt、.yaml、.yml</p></div></div>
+              <label class="mt-3 block text-xs text-slate-600">{{ skillForm.fileName ? '替换 Skill 文件' : '上传 Skill 文件' }}<input class="mt-2 block w-full text-xs file:mr-3 file:rounded-md file:border file:border-[#deded9] file:bg-white file:px-3 file:py-2 file:text-slate-700" type="file" accept=".md,.txt,.yaml,.yml" @change="uploadSkillFormFile" /></label>
+              <details v-if="skillForm.fileContent" class="mt-4 text-xs"><summary class="cursor-pointer text-slate-600">预览文件内容</summary><pre class="mt-3 whitespace-pre-wrap break-words border-t border-[#e2e2dc] pt-3 text-xs leading-6 text-slate-600">{{ skillForm.fileContent }}</pre></details>
             </div>
           </div>
-
-          <div v-if="skillForm.visibility === '指定企业'" class="overflow-hidden rounded-md border border-[#deded9]">
-            <label class="relative block border-b border-[#e2e2dc] bg-[#fbfbfa] p-2">
-              <Icon :svg="strokeIconPaths.search" :size="15" svg-class="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" />
-              <input
-                v-model.trim="enterpriseSearch"
-                class="h-9 w-full rounded-md border border-[#deded9] bg-white pl-8 pr-3 text-xs outline-none focus:border-slate-400"
-                placeholder="搜索企业名称"
-              />
-            </label>
-            <div class="max-h-[190px] overflow-auto p-2">
-              <button
-                v-for="enterprise in filteredEnterpriseOptions"
-                :key="enterprise.id"
-                type="button"
-                class="flex w-full items-center justify-between rounded-md px-2.5 py-2 text-left text-sm text-slate-600 hover:bg-[#f7f7f5]"
-                @click="toggleSkillEnterprise(enterprise.id)"
-              >
-                <span>{{ enterprise.name }}</span>
-                <span
-                  class="flex h-4 w-4 items-center justify-center rounded border"
-                  :class="skillForm.enterpriseIds.includes(enterprise.id) ? 'border-slate-900 bg-slate-900 text-white' : 'border-[#cfcfca] bg-white text-transparent'"
-                >
-                  <Icon :svg="strokeIconPaths.check" :size="11" />
-                </span>
-              </button>
-              <div v-if="filteredEnterpriseOptions.length === 0" class="py-5 text-center text-xs text-slate-400">未找到企业</div>
+        </section>
+        <div class="min-w-0 space-y-7">
+          <section>
+            <div class="flex items-center justify-between gap-2"><h3 class="text-sm font-semibold text-slate-950">私有化加载的 Tool</h3><span class="text-xs text-slate-500">已添加 {{ skillForm.privateToolIds.length }} 个</span></div>
+            <p class="mt-2 text-xs leading-5 text-slate-500">添加后，本 Skill 执行时会按需加载这些工具。同一工具可被多个 Skill 私有化加载；每个客户也可为 Agent 独立指定 Tool，实际调用范围由客户 Agent 配置决定。</p>
+            <div class="mt-4 overflow-hidden rounded-md border border-[#deded9]">
+              <div class="grid grid-cols-[minmax(0,1fr)_90px_auto] gap-2 bg-[#f7f7f5] px-3 py-2 text-xs text-slate-500"><span>工具名称 / Description</span><span>工具类型</span><span>操作</span></div>
+              <div v-for="id in skillForm.privateToolIds" :key="id" class="grid grid-cols-[minmax(0,1fr)_90px_auto] items-start gap-2 border-t border-[#ededea] px-3 py-3" data-testid="private-tool-row"><div class="min-w-0"><p class="text-sm font-medium text-slate-700">{{ toolName(id) }}</p><p class="mt-1 break-all font-mono text-xs text-slate-500">{{ id }}</p><p class="mt-1 text-xs leading-5 text-slate-500">{{ toolById(id)?.description }}</p></div><span class="pt-0.5 text-xs text-slate-600">{{ toolById(id)?.kind === 'mcp' ? 'MCP 服务' : '内置API工具' }}</span><button type="button" class="rounded p-1.5 text-slate-500 hover:bg-red-50 hover:text-red-600" :aria-label="`移除私有工具 ${toolName(id)}`" @click="skillForm.privateToolIds = skillForm.privateToolIds.filter((item) => item !== id)"><Icon :svg="strokeIconPaths.trash" :size="15" /></button></div>
+              <p v-if="!skillForm.privateToolIds.length" class="px-3 py-6 text-center text-xs leading-5 text-slate-500">尚未添加私有工具，请从下方工具目录中选择。</p>
             </div>
-            <div class="border-t border-[#e2e2dc] bg-[#fbfbfa] px-3 py-2 text-xs text-slate-500">已选择 {{ skillForm.enterpriseIds.length }} 家企业</div>
-          </div>
-
-          <div>
-            <span class="mb-1.5 block text-xs font-medium text-slate-600">Skill 文件</span>
-            <label class="flex min-h-[82px] cursor-pointer flex-col items-center justify-center rounded-md border border-dashed border-[#cfcfca] bg-[#fbfbfa] px-3 py-3 text-center hover:bg-[#f7f7f5]">
-              <Icon :svg="strokeIconPaths.upload" :size="18" svg-class="mb-1 text-slate-500" />
-              <span class="text-sm font-medium text-slate-700">{{ skillForm.fileName || '选择 Skill 文件' }}</span>
-              <span class="mt-1 text-xs text-slate-400">支持 .md / .txt / .yaml / .yml</span>
-              <input class="hidden" type="file" accept=".md,.txt,.yaml,.yml" @change="uploadSkillFormFile" />
-            </label>
-          </div>
+            <div class="mt-3 flex items-center gap-2"><ElSelect v-model="pendingPrivateToolId" filterable clearable class="min-w-0 flex-1" aria-label="选择私有工具" placeholder="搜索并选择一个私有工具" :disabled="!availablePrivateTools.length"><ElOption v-for="tool in availablePrivateTools" :key="tool.id" :label="`${tool.name} · ${tool.kind === 'mcp' ? 'MCP' : '代码'}`" :value="tool.id" /></ElSelect><button type="button" class="ops-secondary shrink-0" :disabled="!pendingPrivateToolId" @click="addPrivateTool"><Icon :svg="strokeIconPaths.plus" :size="14" />添加 Tool</button></div>
+            <p class="mt-2 text-xs leading-5 text-slate-500">{{ availablePrivateTools.length ? '可选择所有尚未添加的 MCP 服务和内置API工具。' : '所有工具均已添加。' }}</p>
+          </section>
         </div>
-
-        <div class="flex shrink-0 items-center justify-end gap-2 border-t border-[#e2e2dc] px-4 py-3">
-          <button type="button" class="rounded-md border border-[#deded9] px-3 py-1.5 text-sm text-slate-600 hover:bg-[#f7f7f5]" @click="closeSkillFormModal">取消</button>
-          <button type="button" class="rounded-md bg-slate-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-slate-800" @click="confirmSkillForm">
-            {{ isEditingSkill ? '保存' : '添加' }}
-          </button>
-        </div>
-      </div>
-    </div>
+      </form>
+      <template #footer><div class="flex flex-wrap items-center justify-between gap-3"><span class="text-xs text-slate-500">保存后同步更新 Tool 管理中的关联 Skill 列表。</span><div class="flex gap-2"><button type="button" class="ops-secondary" @click="closeSkillFormModal">取消</button><button type="submit" form="skill-config-form" class="ops-primary">{{ isEditingSkill ? '保存' : '添加' }}</button></div></div></template>
+    </ElDialog>
 
     <div v-if="isSkillPreviewModalOpen && previewingSkill" class="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/40 p-6">
       <div class="flex max-h-[88vh] w-full max-w-[820px] flex-col overflow-hidden rounded-md border border-[#deded9] bg-white shadow-xl">
@@ -1448,8 +933,9 @@ function markTmsCustomerProcessed(customerId: string) {
         </div>
         <div class="flex flex-wrap gap-x-5 gap-y-1 border-b border-[#e2e2dc] px-4 py-3 text-xs text-slate-500">
           <span>分类：<strong class="font-medium text-slate-700">{{ previewingSkill.category }}</strong></span>
-          <span>可见范围：<strong class="font-medium text-slate-700">{{ formatSkillVisibility(previewingSkill) }}</strong></span>
+          <span>Skill 分组：<strong class="font-medium text-slate-700">{{ previewingSkill.group }}</strong></span>
           <span>最后更新：<strong class="font-medium text-slate-700">{{ previewingSkill.updatedAt }} · {{ previewingSkill.updatedBy }}</strong></span>
+          <span class="w-full">私有工具：<strong class="font-medium text-slate-700">{{ previewingSkill.privateToolIds.map(toolName).join('、') || '未绑定私有工具' }}</strong></span>
           <p class="w-full pt-1 text-sm leading-5 text-slate-600">{{ previewingSkill.description }}</p>
         </div>
         <pre class="min-h-0 flex-1 overflow-auto whitespace-pre-wrap bg-[#fbfbfa] p-5 text-xs leading-6 text-slate-700">{{ previewingSkill.content }}</pre>
@@ -1595,8 +1081,8 @@ function markTmsCustomerProcessed(customerId: string) {
       </div>
     </div>
 
-    <div v-if="isCreateEmployeeModalOpen" class="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/40 p-6">
-      <div class="flex max-h-[88vh] w-full max-w-[560px] flex-col overflow-hidden rounded-md border border-[#deded9] bg-white shadow-xl">
+    <div v-if="isCreateEmployeeModalOpen" role="dialog" aria-modal="true" :aria-label="employeeFormTitle" class="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/40 p-6">
+      <div class="flex max-h-[88vh] w-full max-w-[760px] flex-col overflow-hidden rounded-md border border-[#deded9] bg-white shadow-xl">
         <div class="flex h-12 shrink-0 items-center justify-between border-b border-[#e2e2dc] px-4">
           <div class="flex items-center gap-2.5">
             <div class="flex h-7 w-7 items-center justify-center rounded-md bg-[#f2f2ef] text-slate-700">
@@ -1604,14 +1090,14 @@ function markTmsCustomerProcessed(customerId: string) {
             </div>
             <h2 class="text-sm font-semibold leading-5 text-slate-950">{{ employeeFormTitle }}</h2>
           </div>
-          <button type="button" class="rounded-md p-1 text-slate-400 hover:bg-[#f7f7f5] hover:text-slate-700" @click="closeCreateEmployeeModal">
+          <button type="button" aria-label="关闭数据员工 Skill 表单" class="rounded-md p-1 text-slate-400 hover:bg-[#f7f7f5] hover:text-slate-700" @click="closeCreateEmployeeModal">
             <Icon :svg="strokeIconPaths.x" :size="16" />
           </button>
         </div>
 
         <div class="min-h-0 flex-1 space-y-3 overflow-auto px-4 py-4">
           <label class="block">
-            <span class="mb-1.5 block text-xs font-medium text-slate-600">数据员工名称</span>
+            <span class="mb-1.5 block text-xs font-medium text-slate-600">Skill 名称</span>
             <input
               v-model.trim="newEmployeeForm.name"
               class="h-10 w-full rounded-md border border-[#deded9] bg-[#fbfbfa] px-3 text-sm outline-none focus:border-slate-400"
@@ -1624,7 +1110,7 @@ function markTmsCustomerProcessed(customerId: string) {
             <textarea
               v-model.trim="newEmployeeForm.description"
               class="min-h-[72px] w-full resize-none rounded-md border border-[#deded9] bg-[#fbfbfa] px-3 py-2 text-sm outline-none focus:border-slate-400"
-              placeholder="请输入该数据员工负责的目标系统、抓取范围或使用场景"
+              placeholder="请输入该 Skill 负责的目标系统、抓取范围或使用场景"
             />
           </label>
 
@@ -1647,50 +1133,12 @@ function markTmsCustomerProcessed(customerId: string) {
             </select>
           </label>
 
-          <div>
-            <span class="mb-1.5 block text-xs font-medium text-slate-600">可见范围</span>
-            <div class="grid grid-cols-2 gap-2">
-              <button
-                v-for="visibility in skillVisibilityOptions"
-                :key="visibility"
-                type="button"
-                class="h-10 rounded-md border text-sm font-medium transition"
-                :class="newEmployeeForm.visibility === visibility ? 'border-slate-900 bg-slate-900 text-white' : 'border-[#deded9] bg-[#fbfbfa] text-slate-600 hover:bg-[#f7f7f5]'"
-                @click="newEmployeeForm.visibility = visibility"
-              >
-                {{ visibility }}
-              </button>
-            </div>
-          </div>
-
-          <div v-if="newEmployeeForm.visibility === '指定企业'" class="overflow-hidden rounded-md border border-[#deded9]">
-            <label class="relative block border-b border-[#e2e2dc] bg-[#fbfbfa] p-2">
-              <Icon :svg="strokeIconPaths.search" :size="15" svg-class="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" />
-              <input
-                v-model.trim="employeeEnterpriseSearch"
-                class="h-9 w-full rounded-md border border-[#deded9] bg-white pl-8 pr-3 text-xs outline-none focus:border-slate-400"
-                placeholder="搜索可见企业"
-              />
-            </label>
-            <div class="max-h-[180px] overflow-auto p-2">
-              <button
-                v-for="enterprise in filteredEmployeeEnterpriseOptions"
-                :key="enterprise.id"
-                type="button"
-                class="flex w-full items-center justify-between rounded-md px-2.5 py-2 text-left text-sm text-slate-600 hover:bg-[#f7f7f5]"
-                @click="toggleEmployeeEnterprise(enterprise.id)"
-              >
-                <span>{{ enterprise.name }}</span>
-                <span
-                  class="flex h-4 w-4 items-center justify-center rounded border"
-                  :class="newEmployeeForm.enterpriseIds.includes(enterprise.id) ? 'border-slate-900 bg-slate-900 text-white' : 'border-[#cfcfca] bg-white text-transparent'"
-                >
-                  <Icon :svg="strokeIconPaths.check" :size="11" />
-                </span>
-              </button>
-              <div v-if="filteredEmployeeEnterpriseOptions.length === 0" class="py-5 text-center text-xs text-slate-400">未找到企业</div>
-            </div>
-            <div class="border-t border-[#e2e2dc] bg-[#fbfbfa] px-3 py-2 text-xs text-slate-500">已选择 {{ newEmployeeForm.enterpriseIds.length }} 家企业</div>
+          <label class="ops-field">Skill 分组<input class="ops-input" :value="dataEmployeeSkillGroup" readonly /><span class="text-xs font-normal leading-5 text-slate-500">数据员工配置中的 Skill 自动归入此组，可在客户配置中按组批量添加。</span></label>
+          <div class="border-t border-[#e2e2dc] pt-4">
+            <h3 class="text-sm font-semibold">私有化加载的 Tool</h3>
+            <p class="mt-2 text-xs leading-5 text-slate-500">随此 Skill 加载，与客户为 Agent 指定的直接工具独立。</p>
+            <ElSelect v-model="newEmployeeForm.privateToolIds" multiple filterable class="mt-3 w-full" aria-label="数据员工 Skill 私有工具" placeholder="选择私有 MCP 服务或内置API工具"><ElOption v-for="tool in managedTools" :key="tool.id" :value="tool.id" :label="tool.name" /></ElSelect>
+            <ul class="mt-3 divide-y divide-[#e2e2dc]"><li v-for="id in newEmployeeForm.privateToolIds" :key="id" class="flex items-start justify-between gap-3 py-2 text-xs"><div><strong>{{ toolName(id) }}</strong><p class="mt-1 leading-5 text-slate-500">{{ toolById(id)?.description }}</p></div><button type="button" :aria-label="`移除私有工具 ${toolName(id)}`" @click="newEmployeeForm.privateToolIds = newEmployeeForm.privateToolIds.filter(item => item !== id)">移除</button></li></ul>
           </div>
 
           <div>
@@ -1721,4 +1169,21 @@ function markTmsCustomerProcessed(customerId: string) {
   </div>
 </template>
 
-<style lang="scss" scoped></style>
+<style lang="scss" scoped>
+:global(html:has(.ops-catalog-screen)), :global(body:has(.ops-catalog-screen)) { min-width: 0; }
+.skill-config-grid { display: grid; grid-template-columns: minmax(0, .8fr) minmax(0, 1.25fr); gap: 28px; }
+.skill-basics { min-width: 0; padding-right: 28px; border-right: 1px solid #e2e2dc; }
+@media (max-width: 760px) {
+  .skill-list-toolbar { display: grid; grid-template-columns: minmax(0, 1fr) auto; }
+  .skill-list-filters { grid-column: 1 / -1; }
+  .skill-list-filters > label { max-width: none; }
+  .skill-list-toolbar > select { min-width: 0; max-width: 100%; }
+  .skill-config-grid { grid-template-columns: minmax(0, 1fr); gap: 24px; }
+  .skill-basics { padding-right: 0; padding-bottom: 24px; border-right: 0; border-bottom: 1px solid #e2e2dc; }
+  .ops-catalog-screen .ops-main { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); padding: 8px; gap: 8px; }
+  .ops-catalog-screen .ops-main > aside > div, .ops-catalog-screen .ops-main > aside > nav button > span:first-child, .ops-catalog-screen .ops-main > aside > nav button span.mt-0\.5 { display: none; }
+  .ops-catalog-screen .ops-main > aside > nav { display: flex; overflow-x: auto; padding: 6px; gap: 4px; }
+  .ops-catalog-screen .ops-main > aside > nav button { width: auto; flex-shrink: 0; padding: 8px; margin: 0; white-space: nowrap; }
+}
+.ops-catalog-screen .ops-main.is-agent-editor { display: block; padding: 0; }
+</style>

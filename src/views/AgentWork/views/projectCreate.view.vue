@@ -1,4 +1,5 @@
 <script lang="ts" setup>
+import { migrateCapacitySkillIds } from '@/pinia/capacitySkills';
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 
@@ -10,6 +11,7 @@ import { agentWorkData } from '@/pinia/agentWork';
 import { strokeIconPaths } from '../strokeIconPaths';
 import { useAgentWorkNav } from '../useAgentWorkNav';
 import { badgeToneClass, projectStatusTone } from '../utils';
+import { ensureRequiredMonitorSkills, monitorDefinitions, requiredMonitorSkillIds } from '../dailyTasks';
 
 type SkillType = 'analysis' | 'capacity' | 'data' | 'logistics' | 'operations';
 type SkillTab = 'all' | SkillType;
@@ -37,7 +39,7 @@ const { goPage } = useAgentWorkNav();
 const route = useRoute();
 const router = useRouter();
 const maxProjectNameLength = 20;
-const defaultLogisticsSkillIds = ['route-risk-expert', 'gps-trace-expert', 'parking-event-expert'];
+const defaultLogisticsSkillIds = ensureRequiredMonitorSkills(['route-risk-expert', 'gps-trace-expert', 'parking-event-expert']);
 const projectName = ref('');
 const activeTab = ref<SkillTab>('all');
 const selectedDataSkillIds = ref<string[]>([]);
@@ -79,6 +81,14 @@ const skillTypeLabels: Record<SkillType, string> = {
 };
 
 const skills: ProjectSkill[] = [
+  ...monitorDefinitions.filter((monitor) => monitor.id !== 'parking').map((monitor): ProjectSkill => ({
+    id: monitor.skillId,
+    name: monitor.name,
+    type: 'logistics',
+    description: monitor.description,
+    usage: monitor.required ? '免费' : '付费',
+    icon: strokeIconPaths[monitor.icon],
+  })),
   {
     id: 'jinyu-cement-tms',
     name: '金隅水泥TMS',
@@ -329,7 +339,7 @@ const isPendingTmsSyncEmployee = computed(() => pendingLoginSkill.value?.id === 
 function getProjectSkillIds() {
   const project = editingProject.value;
   if (!project) return [];
-  if (project.skillIds?.length) return project.skillIds;
+  if (project.skillIds?.length) return migrateCapacitySkillIds(project.skillIds);
   return skills.filter((skill) => project.tmsUrl.includes(skill.name)).map((skill) => skill.id);
 }
 
@@ -351,7 +361,7 @@ function initializeProjectForm() {
     return;
   }
 
-  const projectSkillIds = getProjectSkillIds();
+  const projectSkillIds = ensureRequiredMonitorSkills(getProjectSkillIds());
   const dataSkills = skills.filter((skill) => projectSkillIds.includes(skill.id) && skill.type === 'data');
   projectName.value = project.name;
   selectedDataSkillIds.value = dataSkills.map((skill) => skill.id);
@@ -394,7 +404,7 @@ function skillAvatarClass(skill: ProjectSkill) {
 }
 
 function toggleSkill(skill: ProjectSkill) {
-  if (isSkillConnecting(skill)) return;
+  if (isSkillConnecting(skill) || requiredMonitorSkillIds.includes(skill.id)) return;
   if (skill.type === 'data') {
     if (selectedDataSkillIds.value.includes(skill.id)) {
       selectedDataSkillIds.value = selectedDataSkillIds.value.filter((id) => id !== skill.id);
@@ -487,7 +497,7 @@ function submitLoginVerificationCode() {
   loginAgentStatus.value = 'running';
   scheduleLoginAgentStep(500, () => appendLoginAgentMessage('agent', '验证码已回填并提交，正在校验登录状态。'));
   scheduleLoginAgentStep(1200, () => appendLoginAgentMessage('agent', '登录成功，已进入运单列表页面。'));
-  scheduleLoginAgentStep(1900, () => appendLoginAgentMessage('agent', '执行数据获取映射 skill，检查运单字段与标准数据集语义。'));
+  scheduleLoginAgentStep(1900, () => appendLoginAgentMessage('agent', '执行数据获取映射 Skill，检查运单字段映射结果。'));
   scheduleLoginAgentStep(2600, () => {
     appendLoginAgentMessage('system', '数据员工验证完成，登录授权已就绪。');
     loginAgentStatus.value = 'complete';
@@ -692,7 +702,8 @@ onBeforeUnmount(() => {
                 ? 'border-slate-900 shadow-[0_0_0_1px_rgba(15,23,42,0.85),0_10px_22px_rgba(15,23,42,0.08)]'
                 : 'border-transparent hover:border-[#deded9] hover:shadow-md'
             "
-            :disabled="isSkillConnecting(skill)"
+            :disabled="isSkillConnecting(skill) || requiredMonitorSkillIds.includes(skill.id)"
+            :aria-pressed="isSkillSelected(skill)"
             @click="toggleSkill(skill)"
           >
             <div class="flex items-start justify-between gap-3">
@@ -732,7 +743,7 @@ onBeforeUnmount(() => {
                 class="rounded-md px-2 py-1 text-xs font-medium leading-4"
                 :class="isSkillSelected(skill) ? 'bg-slate-900 text-white' : 'bg-[#f1f1ef] text-slate-600'"
               >
-                {{ isSkillSelected(skill) ? '已选择' : '未选择' }}
+                {{ requiredMonitorSkillIds.includes(skill.id) ? '必选 · 状态流转' : isSkillSelected(skill) ? '已选择' : '未选择' }}
               </span>
             </div>
           </button>

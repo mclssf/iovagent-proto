@@ -69,7 +69,7 @@ watch(
             <p class="text-xs leading-4 text-slate-400">查询大卡与满帮的抢单、报价及电话联系反馈</p>
           </div>
         </div>
-        <span class="rounded-md border border-[#deded9] bg-[#f7f7f5] px-3 py-1.5 text-xs text-slate-500">每 2 分钟自动同步平台反馈</span>
+        <span class="rounded-md border border-[#deded9] bg-[#f7f7f5] px-3 py-1.5 text-xs text-slate-500">平台反馈（演示数据）</span>
       </header>
       <div class="grid grid-cols-4 divide-x divide-[#ededea]">
         <div class="px-4 py-3"><div class="text-xs text-slate-500">待处理</div><div class="mt-1 text-xl font-semibold text-amber-600">{{ pendingCount }}</div></div>
@@ -155,13 +155,13 @@ watch(
               <td class="px-4 py-4">
                 <div class="flex flex-wrap gap-1.5">
                   <button
-                    v-if="quote.status === '待处理'"
+                    v-if="quote.status === '待处理' && cargoById(quote.cargoId)?.status === '发布中'"
                     type="button"
                     class="rounded-md border border-[#deded9] px-2.5 py-1.5 text-xs text-slate-700 hover:bg-[#f7f7f5]"
                     @click="store.updateQuoteStatus(quote.id, '已联系')"
                   >联系司机</button>
                   <button
-                    v-if="quote.status !== '已合作' && quote.type !== '电话联系'"
+                    v-if="quote.status !== '已合作' && quote.type !== '电话联系' && cargoById(quote.cargoId)?.status === '发布中'"
                     type="button"
                     class="rounded-md bg-slate-900 px-2.5 py-1.5 text-xs font-medium text-white hover:bg-slate-800"
                     @click="store.dispatchQuote(quote.id)"
