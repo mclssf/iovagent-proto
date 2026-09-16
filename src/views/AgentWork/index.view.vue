@@ -17,7 +17,7 @@ onBeforeUnmount(() => { if (taskClock) clearInterval(taskClock); });
 </script>
 
 <template>
-  <div class="grid h-screen grid-cols-[280px_minmax(0,1fr)] overflow-hidden bg-[#f7f7f6] text-slate-900" :class="{ 'daily-tasks-layout': route.name === 'agent-work-daily-tasks', 'agent-workbench-layout': route.name === 'agent-work-agent' }">
+  <div class="grid h-screen grid-cols-[280px_minmax(0,1fr)] overflow-hidden bg-[#f7f7f6] text-slate-900" :class="{ 'knowledge-base-layout': ['agent-work-knowledge-base', 'agent-work-knowledge-base-empty'].includes(String(route.name)), 'daily-tasks-layout': route.name === 'agent-work-daily-tasks', 'agent-workbench-layout': route.name === 'agent-work-agent' }">
     <MenuComp class="project-navigation" />
 
     <main class="h-full overflow-hidden" :class="isFullBleedRoute ? 'bg-[#fcfcfc] p-0' : 'bg-[#f7f7f5] p-3'">
@@ -28,7 +28,8 @@ onBeforeUnmount(() => { if (taskClock) clearInterval(taskClock); });
 
 <style lang="scss" scoped>
 @media (max-width: 700px) {
-  .daily-tasks-layout, .agent-workbench-layout { grid-template-columns: minmax(0, 1fr); height: 100dvh; }
-  .daily-tasks-layout > .project-navigation, .agent-workbench-layout > .project-navigation { display: none; }
+  :global(html:has(.knowledge-base-layout)), :global(body:has(.knowledge-base-layout)) { min-width: 0; }
+  .knowledge-base-layout, .daily-tasks-layout, .agent-workbench-layout { grid-template-columns: minmax(0, 1fr); height: 100dvh; }
+  .knowledge-base-layout > .project-navigation, .daily-tasks-layout > .project-navigation, .agent-workbench-layout > .project-navigation { display: none; }
 }
 </style>

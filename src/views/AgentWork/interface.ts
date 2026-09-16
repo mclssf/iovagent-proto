@@ -39,14 +39,16 @@ export interface TmsSyncCustomer {
 export type PageId =
   | 'agent'
   | 'analytics'
-  | 'cargoQuotes'
   | 'cargoSources'
+  | 'cargoQuotes'
+  | 'privateCapacity'
   | 'dailyTasks'
   | 'detail'
   | 'downloads'
+  | 'knowledgeBase'
+  | 'knowledgeBaseEmpty'
   | 'longTasks'
   | 'orders'
-  | 'privateCapacity'
   | 'projectCreate'
   | 'projects'
   | 'risk';
@@ -206,6 +208,7 @@ export interface ChatMessage {
   file?: AgentResultFile;
   link?: AgentResultLink;
   progressMode?: boolean;
+  sources?: { name: string; summary: string; format?: string }[];
   steps?: {
     title: string;
     text: string;

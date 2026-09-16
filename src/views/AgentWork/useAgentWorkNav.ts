@@ -21,6 +21,8 @@ export const agentWorkRouteName: Record<PageId, string> = {
   projects: 'agent-work-projects',
   projectCreate: 'agent-work-project-create',
   downloads: 'agent-work-downloads',
+  knowledgeBase: 'agent-work-knowledge-base',
+  knowledgeBaseEmpty: 'agent-work-knowledge-base-empty',
 };
 
 export function useAgentWorkNav() {

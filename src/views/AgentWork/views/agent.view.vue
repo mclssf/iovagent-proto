@@ -836,6 +836,15 @@ onBeforeUnmount(() => {
             <template v-else>
               <span class="whitespace-pre-line">{{ m.text }}</span>
             </template>
+            <section v-if="m.role === 'agent' && m.sources?.length && m.status !== '处理中'" class="mt-3 border-t border-[#deded9] pt-3" aria-label="引用来源">
+              <h3 class="mb-2 text-xs font-semibold text-slate-700">引用来源（演示）</h3>
+              <ol class="space-y-2 text-xs leading-5 text-slate-500">
+                <li v-for="(source, sourceIndex) in m.sources" :key="`${sourceIndex}-${source.name}`">
+                  <p class="break-words font-medium text-slate-700">[{{ sourceIndex + 1 }}] {{ source.name }}</p>
+                  <p>{{ source.summary }}</p>
+                </li>
+              </ol>
+            </section>
             </div>
           </div>
         </div>
