@@ -16,6 +16,13 @@
 .agent-message { min-width: 0; overflow-wrap: anywhere; }
 .agent-message.is-user { max-width: 80%; }
 .agent-message.is-agent { max-width: 100%; }
+.agent-ordinary-task { display: flex; align-items: center; gap: 12px; width: 100%; margin-top: 14px; padding: 12px; border: 1px solid #deded9; border-radius: 8px; background: white; text-align: left; cursor: pointer; }
+.agent-ordinary-task:hover { background: #f6f7f5; }
+.agent-ordinary-task:disabled { opacity: .6; cursor: default; }
+.agent-ordinary-task > svg { flex-shrink: 0; }
+.agent-ordinary-task > span { flex: 1; min-width: 0; }
+.agent-ordinary-task strong { display: block; font-size: 13px; font-weight: 500; overflow-wrap: anywhere; }
+.agent-ordinary-task small { display: block; color: #66717d; font-size: 11px; }
 .agent-composer-dock { position: relative; flex-shrink: 0; padding: 12px calc(28px + var(--message-scrollbar)) 18px 28px; background: #fcfcfc; z-index: 20; }
 .agent-composer { container-type: inline-size; }
 .agent-composer [role="combobox"] { max-width: min(190px, 100%); }

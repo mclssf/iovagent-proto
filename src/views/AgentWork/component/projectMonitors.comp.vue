@@ -3,7 +3,7 @@ import { computed, ref } from 'vue';
 import { Icon } from '@packages/icon';
 import { useAgentDailyTasks } from '@/pinia/agentDailyTasks';
 import type { DailyTask } from '../dailyTasks';
-import { eventLabel, formatTaskTime, monitorDefinitions, triggerLabel, waybillPhases } from '../dailyTasks';
+import { eventLabel, formatTaskTime, monitorDefinitions, triggerLabel, waybillPhases, taskRunLabels } from '../dailyTasks';
 import { strokeIconPaths } from '../strokeIconPaths';
 import { useAgentWorkNav } from '../useAgentWorkNav';
 import GeofenceDialog from './geofence.dialog.vue';
@@ -23,10 +23,11 @@ const monitors = computed(() => monitorDefinitions.map((definition) => {
 }));
 const enabledMonitors = computed(() => monitors.value.filter((item) => item.enabled));
 const dailyTasks = computed(() => tasks.tasks.filter((task) => task.projectId === props.projectId));
-const visibleTasks = computed(() => dailyTasks.value.filter((task) => task.enabled || task.runs.some((run) => run.status === 'waiting')).slice(0, 4));
+const visibleTasks = computed(() => dailyTasks.value.filter((task) => task.trigger === 'once' ? task.runs[0]?.status === 'running' : task.enabled || task.runs.some((run) => run.status === 'waiting')).slice(0, 4));
 const pendingCount = computed(() => dailyTasks.value.reduce((total, task) => total + task.runs.filter((run) => run.status === 'waiting').length, 0));
 
 function dailyStatus(task: DailyTask) {
+  if (task.trigger === 'once') return task.runs[0] ? taskRunLabels[task.runs[0].status] : '已提交';
   if (task.runs.some((run) => run.status === 'waiting')) return '待确认';
   if (task.runs.some((run) => run.status === 'running')) return '执行中';
   if (!task.enabled) return '已暂停';
@@ -53,7 +54,7 @@ function dailyStatus(task: DailyTask) {
     <section class="dt-monitor-group" aria-label="日常任务摘要">
       <div class="dt-monitor-group-title"><h3>日常任务 <span>{{ dailyTasks.length }}</span></h3><button type="button" class="dt-icon" title="管理日常任务" aria-label="管理日常任务" @click="goPage('dailyTasks')"><Icon :svg="strokeIconPaths.chevron" :size="14" /></button></div>
       <button v-for="task in visibleTasks" :key="task.id" type="button" class="dt-monitor-row dt-monitor-task" :title="task.name" @click="goPage('dailyTasks', { taskId: task.id })">
-        <Icon :svg="task.trigger === 'schedule' ? strokeIconPaths.alarmClock : strokeIconPaths.zap" :size="15" />
+        <Icon :svg="task.trigger === 'once' ? strokeIconPaths.file : task.trigger === 'schedule' ? strokeIconPaths.alarmClock : strokeIconPaths.zap" :size="15" />
         <div class="dt-monitor-name"><strong>{{ task.name }}</strong><small>{{ triggerLabel(task, runtime.fences) }}</small></div>
         <span class="dt-task-status" :class="{ pending: dailyStatus(task) === '待确认' }">{{ dailyStatus(task) }}</span>
       </button>

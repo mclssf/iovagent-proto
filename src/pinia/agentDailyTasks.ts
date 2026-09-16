@@ -2,6 +2,7 @@ import { defineStore } from 'pinia';
 import type { Order, Project } from '@/views/AgentWork/interface';
 import type { DailyTask, DailyTaskDraft, EventType, MonitorId, ProjectFence, ProjectTaskRuntime, TaskRun, WaybillEvent, WaybillPhase } from '@/views/AgentWork/dailyTasks';
 import { createMonitoredOrders, ensureRequiredMonitorSkills, eventDefinitions, eventLabel, isThresholdEvent, monitorDefinitions } from '@/views/AgentWork/dailyTasks';
+import { extractTaskPlates, makeOrdinaryRun, mergeTaskAttachments, ordinaryStepDelay, ordinaryTaskName, ordinaryTaskResult, resolveAsyncTool } from '@/views/AgentWork/ordinaryTasks';
 
 const newId = (prefix: string) => `${prefix}-${crypto.randomUUID()}`;
 const stepDelay = () => 1600 + Math.round(Math.random() * 1000);
@@ -72,7 +73,7 @@ export const useAgentDailyTasks = defineStore('agentDailyTasks', {
       }
       const ids = new Set(projects.map((project) => project.id));
       for (const id of Object.keys(this.projects)) if (!ids.has(id)) delete this.projects[id];
-      this.tasks = this.tasks.filter((task) => ids.has(task.projectId));
+      this.tasks = this.tasks.filter((task) => !task.projectId || ids.has(task.projectId));
     },
     seedTasks(runtime: ProjectTaskRuntime) {
       const base: DailyTaskDraft = { name: '', trigger: 'event', eventType: 'parking', threshold: 30, fenceId: '', time: '18:00', prompt: '', confirmBeforeSend: true };
@@ -105,6 +106,7 @@ export const useAgentDailyTasks = defineStore('agentDailyTasks', {
       }
     },
     unavailableReason(task: DailyTaskDraft & { projectId: string }) {
+      if (task.trigger === 'once') return task.projectId && !this.projects[task.projectId] ? '项目不存在' : '';
       const runtime = this.projects[task.projectId];
       if (!runtime) return '项目不存在';
       if (!runtime.connected) return '等待数据源连接';
@@ -115,20 +117,25 @@ export const useAgentDailyTasks = defineStore('agentDailyTasks', {
       if (task.eventType.startsWith('fence-') && !runtime.fences.some((fence) => fence.id === task.fenceId)) return '等待配置有效围栏';
       return '';
     },
-    saveTask(projectId: string, draft: DailyTaskDraft, taskId?: string) {
-      if (!this.projects[projectId]) throw new Error('项目不存在');
-      if (!draft.name.trim() || !draft.prompt.trim()) throw new Error('请填写任务名称和执行指令');
+    saveTask(projectId: string, draft: DailyTaskDraft, taskId?: string, source?: { origin: 'workbench'; conversationId?: string }) {
+      if ((projectId || draft.trigger !== 'once') && !this.projects[projectId]) throw new Error('项目不存在');
+      if (!draft.prompt.trim() || (draft.trigger !== 'once' && !draft.name.trim())) throw new Error('请填写任务名称和执行指令');
+      if (draft.name.trim().length > 40 || draft.prompt.trim().length > 2000) throw new Error('任务名称最多 40 字，执行指令最多 2000 字');
+      const attachments = mergeTaskAttachments([], draft.attachments ?? []);
+      if (draft.trigger === 'once' && resolveAsyncTool(draft.prompt) && !extractTaskPlates(draft.prompt).length && !attachments.length) throw new Error('请补充需要查询的车牌号，或上传包含车牌号的文件');
       if (draft.trigger === 'schedule' && !/^([01]\d|2[0-3]):[0-5]\d$/.test(draft.time)) throw new Error('请选择有效执行时间');
       if (draft.trigger === 'event' && isThresholdEvent(draft.eventType) && (!Number.isFinite(draft.threshold) || draft.threshold <= 0)) throw new Error('阈值必须大于 0');
       if (draft.trigger === 'event' && draft.eventType.startsWith('fence-') && !this.projects[projectId]!.fences.some((fence) => fence.id === draft.fenceId)) throw new Error('请选择一个有效围栏');
       const existing = this.tasks.find((task) => task.id === taskId && task.projectId === projectId);
       if (taskId && !existing) throw new Error('任务已删除');
+      if (existing && (existing.trigger === 'once' || draft.trigger === 'once')) throw new Error('已提交的任务不能改为或编辑为普通任务，请新建任务');
       if (existing?.runs.some((run) => run.status === 'running')) throw new Error('请等待本轮执行结束后再编辑');
       if (existing) {
-        Object.assign(existing, draft, { name: draft.name.trim(), prompt: draft.prompt.trim() });
+        Object.assign(existing, draft, { name: draft.name.trim(), prompt: draft.prompt.trim(), attachments });
         return existing.id;
       }
-      const task: DailyTask = { ...draft, name: draft.name.trim(), prompt: draft.prompt.trim(), id: newId('task'), projectId, enabled: true, createdAt: Date.now(), lastScheduledDay: '', runs: [] };
+      const task: DailyTask = { ...draft, name: draft.name.trim() || ordinaryTaskName(draft.prompt), prompt: draft.prompt.trim(), attachments, id: newId('task'), projectId, enabled: draft.trigger !== 'once', createdAt: Date.now(), lastScheduledDay: '', runs: [], origin: source?.origin ?? 'manual', conversationId: source?.conversationId };
+      if (task.trigger === 'once') task.runs.push(makeOrdinaryRun(task));
       this.tasks.unshift(task);
       return task.id;
     },
@@ -137,7 +144,27 @@ export const useAgentDailyTasks = defineStore('agentDailyTasks', {
     },
     toggleTask(taskId: string) {
       const task = this.tasks.find((item) => item.id === taskId);
+      if (task?.trigger === 'once') throw new Error('普通任务仅执行一次，不支持暂停或启动');
       if (task) task.enabled = !task.enabled;
+    },
+    cancelOrdinaryTask(taskId: string) {
+      const task = this.tasks.find((item) => item.id === taskId);
+      if (task?.trigger !== 'once') return;
+      const run = task.runs[0];
+      if (!run || run.status !== 'running') return;
+      run.status = 'cancelled';
+      run.finishedAt = Date.now();
+      run.result = '本次普通任务已取消，不再接收结果，也不会再次执行。';
+    },
+    receiveOrdinaryResult(taskId: string, jobId: string, result: { text: string; files: NonNullable<TaskRun['files']> }) {
+      const task = this.tasks.find((item) => item.id === taskId);
+      const run = task?.runs[0];
+      if (task?.trigger !== 'once' || !run || run.status !== 'running' || run.toolJobId !== jobId) return;
+      run.status = 'complete';
+      run.activeStep = run.steps.length;
+      run.finishedAt = this.now;
+      run.result = result.text;
+      run.files = result.files;
     },
     saveFence(projectId: string, fence: Omit<ProjectFence, 'id'>) {
       const runtime = this.projects[projectId];
@@ -182,6 +209,7 @@ export const useAgentDailyTasks = defineStore('agentDailyTasks', {
     testTask(taskId: string) {
       const task = this.tasks.find((item) => item.id === taskId);
       if (!task) return;
+      if (task.trigger === 'once') throw new Error('普通任务提交后只执行一次，不支持重复测试');
       const reason = this.unavailableReason(task);
       if (reason) throw new Error(reason);
       if (task.runs.some((run) => run.status === 'running')) throw new Error('本轮正在执行，请稍后再试');
@@ -239,16 +267,20 @@ export const useAgentDailyTasks = defineStore('agentDailyTasks', {
       const time = `${value('hour')}:${value('minute')}`;
       for (const task of this.tasks) {
         const runtime = this.projects[task.projectId];
-        if (!runtime) continue;
-        if (task.enabled && task.trigger === 'schedule' && task.time === time && task.lastScheduledDay !== day && !this.unavailableReason(task)) {
+        if (!runtime && task.trigger !== 'once') continue;
+        if (runtime && task.enabled && task.trigger === 'schedule' && task.time === time && task.lastScheduledDay !== day && !this.unavailableReason(task)) {
           task.lastScheduledDay = day;
           task.runs.unshift(makeRun(task, runtime, 'schedule'));
         }
         for (const run of task.runs) {
           if (run.status !== 'running' || now < run.nextStepAt) continue;
           run.activeStep++;
-          run.nextStepAt = now + stepDelay();
+          run.nextStepAt = now + (task.trigger === 'once' ? ordinaryStepDelay() : stepDelay());
           if (run.activeStep < run.steps.length) continue;
+          if (task.trigger === 'once') {
+            this.receiveOrdinaryResult(task.id, run.toolJobId!, ordinaryTaskResult(task, run));
+            continue;
+          }
           run.finishedAt = now;
           if (run.action) {
             run.status = task.confirmBeforeSend ? 'waiting' : 'complete';
@@ -256,7 +288,7 @@ export const useAgentDailyTasks = defineStore('agentDailyTasks', {
             run.result = `${run.event?.order.id ?? '项目运单'}：已完成事件核验与${run.action.channel}内容生成。${task.confirmBeforeSend ? '等待确认发送。' : '发送成功（演示回执）。'}`;
           } else {
             run.status = 'complete';
-            run.result = `${run.event ? `${run.event.order.id} · ${run.event.order.plate}\n${run.event.detail}` : `本项目 ${runtime.total} 条运单已完成汇总，近期产生 ${runtime.events.length} 条运单事件。`}\n已按指令“${run.prompt}”完成处理。${run.event?.type === 'unloading-end' ? '卸货结束节点已归档。' : '建议优先复核未闭环异常，并持续关注在途状态变化。'}`;
+            run.result = `${run.event ? `${run.event.order.id} · ${run.event.order.plate}\n${run.event.detail}` : `本项目 ${runtime!.total} 条运单已完成汇总，近期产生 ${runtime!.events.length} 条运单事件。`}\n已按指令“${run.prompt}”完成处理。${run.event?.type === 'unloading-end' ? '卸货结束节点已归档。' : '建议优先复核未闭环异常，并持续关注在途状态变化。'}`;
           }
         }
       }

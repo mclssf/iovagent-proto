@@ -22,6 +22,9 @@ import { cargoQuoteSeedData, cargoSeedData, privateCapacitySeedData } from '@/vi
 import { extractMcpPrompt, runMcpPrompt } from '@/views/AgentWork/mcpClient';
 import { getRiskOrders, summarizeOrders } from '@/views/AgentWork/utils';
 import { ensureRequiredMonitorSkills } from '@/views/AgentWork/dailyTasks';
+import type { TaskAttachment } from '@/views/AgentWork/dailyTasks';
+import { resolveAsyncTool, extractTaskPlates } from '@/views/AgentWork/ordinaryTasks';
+import { useAgentDailyTasks } from './agentDailyTasks';
 
 const defaultOrdersDateRange = {
   start: '2026-05-09',
@@ -1872,12 +1875,33 @@ export const agentWorkData = defineStore('agentWork', {
       this.ordersEndDate = defaultOrdersDateRange.end;
     },
     /** 智能体对话：由调用方传入 `navigate`，避免 store 依赖 router */
-    async appendAgentExchange(text: string | undefined, navigate: (page: PageId) => void) {
+    async appendAgentExchange(text: string | undefined, navigate: (page: PageId) => void, attachments: TaskAttachment[] = []) {
       clearAgentProcessTimers();
       const raw = text ?? this.agentInput;
       if (!raw.trim()) return;
       this.ensureConversationStarted();
       const next: ChatMessage[] = [...this.agentMessages, { role: 'user', text: raw }];
+      const pendingPrompt = this.agentMessages[this.agentMessages.length - 1]?.pendingAsyncPrompt;
+      const inputPrompt = raw.split('\n附件：')[0]!.trim();
+      const isPlateAnswer = /^(?:车牌(?:号)?[是为：:\s]*)?[京津沪渝冀豫云辽黑湘皖鲁新苏浙赣鄂桂甘晋蒙陕吉闽贵粤青藏川宁琼][A-Z][A-Z0-9]{5,6}$/i.test(inputPrompt);
+      const asyncPrompt = pendingPrompt && (isPlateAnswer || (attachments.length && /^附件：/.test(inputPrompt))) ? `${pendingPrompt}\n${isPlateAnswer ? inputPrompt : ''}` : inputPrompt;
+      const asyncTool = resolveAsyncTool(asyncPrompt);
+      if (asyncTool) {
+        if (!extractTaskPlates(asyncPrompt).length && !attachments.length) {
+          this.agentMessages = [...next, { role: 'agent', text: `查询 ${asyncTool.date} 的历史轨迹需要调用异步归档工具。请补充车牌号，或上传包含车牌号的文件，我会创建普通任务执行一次。`, pendingAsyncPrompt: asyncPrompt }];
+        } else {
+          try {
+            const taskId = useAgentDailyTasks().saveTask(this.workspaceMode === 'project' ? this.currentProjectId : '', {
+              name: '', trigger: 'once', eventType: 'parking', threshold: 30, fenceId: '', time: '18:00', prompt: asyncPrompt, confirmBeforeSend: true, attachments,
+            }, undefined, { origin: 'workbench', conversationId: this.workspaceMode === 'conversation' ? this.currentConversationId : undefined });
+            this.agentMessages = [...next, { role: 'agent', text: `已识别需要调用“${asyncTool.name}”异步工具，已创建普通任务，仅执行一次。\n任务将独立处理，完成后的文字结果和下载文件会出现在任务运行事件中，你可以继续当前对话。`, dailyTaskId: taskId }];
+          } catch (error) {
+            this.agentMessages = [...next, { role: 'agent', text: `普通任务未创建：${(error as Error).message}。` }];
+          }
+        }
+        this.agentInput = '';
+        return;
+      }
       const regionVisitRegion = extractRegionVisitRegion(raw);
       const regionVisitRequest = extractRegionVisitRequest(raw);
       const spreadsheetRequest = regionVisitRequest ? null : extractSpreadsheetRequest(raw);

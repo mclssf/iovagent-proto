@@ -208,6 +208,8 @@ export interface ChatMessage {
   file?: AgentResultFile;
   link?: AgentResultLink;
   progressMode?: boolean;
+  dailyTaskId?: string;
+  pendingAsyncPrompt?: string;
   sources?: { name: string; summary: string; format?: string }[];
   steps?: {
     title: string;

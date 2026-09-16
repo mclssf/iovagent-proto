@@ -10,6 +10,9 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { Icon } from '@packages/icon';
 
 import { agentWorkData, quickPrompts, rightPanelTabs } from '@/pinia/agentWork';
+import { useAgentDailyTasks } from '@/pinia/agentDailyTasks';
+import { taskRunLabels } from '../dailyTasks';
+import { resolveAsyncTool } from '../ordinaryTasks';
 
 import { getRiskOrders, badgeToneClass } from '../utils';
 import { strokeIconPaths } from '../strokeIconPaths';
@@ -20,6 +23,18 @@ import ProjectMonitors from '../component/projectMonitors.comp.vue';
 import '../agentWorkspace.css';
 
 const store = agentWorkData();
+const dailyTasks = useAgentDailyTasks();
+const ordinaryTask = (id: string) => dailyTasks.tasks.find((task) => task.id === id);
+function openOrdinaryTask(id: string) {
+  const task = ordinaryTask(id);
+  if (!task) return;
+  if (task.projectId && (store.workspaceMode !== 'project' || store.currentProjectId !== task.projectId)) {
+    const project = store.projects.find((item) => item.id === task.projectId);
+    if (!project) return;
+    store.switchProject(project);
+  }
+  goPage('dailyTasks', { taskId: id, scope: task.projectId ? 'project' : 'personal' });
+}
 const { agentMessages, agentInput } = storeToRefs(store);
 const { goPage, createDownload, sendAgent } = useAgentWorkNav();
 const agentMessageListRef = ref<HTMLDivElement | null>(null);
@@ -217,6 +232,7 @@ function isRegionVisitQuery(value: string) {
 }
 
 function openWaybillImportGuide(files: File[], purpose: 'regular' | 'waybill') {
+  if (purpose !== 'waybill' && (resolveAsyncTool(agentInput.value) || agentMessages.value[agentMessages.value.length - 1]?.pendingAsyncPrompt)) return;
   const isRegionVisitFlow = isRegionVisitQuery(agentInput.value);
   const waybillFiles = files.filter(
     (file) => !isRegionVisitFlow && !/(?:历史到访|地区到访|区域到访)/.test(file.name) && isWaybillListFile(file, purpose),
@@ -296,7 +312,7 @@ function sendComposerMessage() {
 
   if (uploadedFiles.value.length > 0) {
     const attachmentText = `附件：${uploadedFiles.value.map((file) => file.name).join('、')}`;
-    sendAgent(text ? `${text}\n${attachmentText}` : attachmentText);
+    sendAgent(text ? `${text}\n${attachmentText}` : attachmentText, uploadedFiles.value);
     uploadedFiles.value = [];
     agentInput.value = '';
     return;
@@ -836,6 +852,11 @@ onBeforeUnmount(() => {
             <template v-else>
               <span class="whitespace-pre-line">{{ m.text }}</span>
             </template>
+            <button v-if="m.dailyTaskId" type="button" class="agent-ordinary-task" :disabled="!ordinaryTask(m.dailyTaskId)" :aria-label="`查看普通任务 ${ordinaryTask(m.dailyTaskId)?.name ?? '已删除'}`" @click="openOrdinaryTask(m.dailyTaskId)">
+              <Icon :svg="strokeIconPaths.file" :size="18" />
+              <span><strong>{{ ordinaryTask(m.dailyTaskId)?.name ?? '任务已删除' }}</strong><small>普通任务 · {{ ordinaryTask(m.dailyTaskId)?.runs[0] ? taskRunLabels[ordinaryTask(m.dailyTaskId)!.runs[0]!.status] : '不可用' }}</small></span>
+              <Icon :svg="strokeIconPaths.chevron" :size="15" />
+            </button>
             <section v-if="m.role === 'agent' && m.sources?.length && m.status !== '处理中'" class="mt-3 border-t border-[#deded9] pt-3" aria-label="引用来源">
               <h3 class="mb-2 text-xs font-semibold text-slate-700">引用来源（演示）</h3>
               <ol class="space-y-2 text-xs leading-5 text-slate-500">
