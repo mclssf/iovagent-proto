@@ -8,6 +8,7 @@ import { Icon } from '@packages/icon';
 import { storeToRefs } from 'pinia';
 
 import { agentWorkData } from '@/pinia/agentWork';
+import { useAgentDailyTasks } from '@/pinia/agentDailyTasks';
 import { removeToken } from '@/utils/auth';
 
 import { strokeIconPaths } from '../strokeIconPaths';
@@ -15,6 +16,7 @@ import { agentWorkRouteName } from '../useAgentWorkNav';
 import { badgeToneClass, projectStatusTone } from '../utils';
 
 const store = agentWorkData();
+const dailyTasks = useAgentDailyTasks();
 const { projects, recentConversations } = storeToRefs(store);
 const route = useRoute();
 const router = useRouter();
@@ -281,7 +283,7 @@ const kbConversationCases: KnowledgeBaseConversationCase[] = [
 
 const projectNavs: { icon: string; id: PageId; label: string }[] = [
   { id: 'agent', label: '智能体工作台', icon: strokeIconPaths.bot },
-  { id: 'dailyTasks', label: '日常任务', icon: strokeIconPaths.alarmClock },
+  { id: 'dailyTasks', label: '做任务', icon: strokeIconPaths.alarmClock },
   { id: 'orders', label: '运单列表', icon: strokeIconPaths.list },
   { id: 'risk', label: '异常运单列表', icon: strokeIconPaths.shield },
   { id: 'detail', label: '运单详情与地图', icon: strokeIconPaths.map },
@@ -556,6 +558,7 @@ function logout() {
                 v-for="item in projectNavsFor(project)"
                 :key="item.id"
                 type="button"
+                :aria-label="item.label"
                 class="flex h-8 w-full items-center gap-2 rounded-md px-2 text-xs transition"
                 :class="
                   store.workspaceMode === 'project' && store.currentProjectId === project.id && isNavActive(item.id)
@@ -566,6 +569,7 @@ function logout() {
               >
                 <Icon :svg="item.icon" :size="14" />
                 {{ item.label }}
+                <span v-if="item.id === 'dailyTasks' && dailyTasks.unreadResultsByProject[project.id]" class="ml-auto inline-flex h-[18px] min-w-[18px] shrink-0 items-center justify-center rounded-full bg-[#2563eb] px-1 text-[10px] leading-none text-white tabular-nums" :aria-label="`${dailyTasks.unreadResultsByProject[project.id]} 条未读结果`">{{ dailyTasks.unreadResultsByProject[project.id] }}</span>
               </button>
             </div>
           </div>

@@ -5,6 +5,7 @@ import { computed, onMounted, reactive, ref, watch } from 'vue';
 
 import { Icon } from '@packages/icon';
 import { ElMessage } from 'element-plus';
+import AppDialog from '@/components/AppDialog.vue';
 import { storeToRefs } from 'pinia';
 
 import { agentWorkData } from '@/pinia/agentWork';
@@ -355,17 +356,8 @@ onMounted(() => {
       </footer>
     </section>
 
-    <div v-if="selectedCargo" class="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/35 p-6" @click.self="selectedCargo = null">
-      <section class="max-h-[88vh] w-full max-w-[760px] overflow-hidden rounded-md border border-[#deded9] bg-white shadow-xl">
-        <header class="flex h-12 items-center justify-between border-b border-[#e2e2dc] px-4">
-          <div>
-            <h2 class="text-sm font-semibold text-slate-950">货源详情 · {{ selectedCargo.id }}</h2>
-          </div>
-          <button type="button" class="rounded p-1 text-slate-400 hover:bg-[#f7f7f5]" aria-label="关闭货源详情" @click="selectedCargo = null">
-            <Icon :svg="strokeIconPaths.x" :size="16" />
-          </button>
-        </header>
-        <div class="max-h-[calc(88vh-48px)] space-y-4 overflow-auto p-4">
+    <AppDialog v-if="selectedCargo" :model-value="true" :title="`货源详情 · ${selectedCargo.id}`" width="760px" :close-on-click-modal="true" @update:model-value="selectedCargo = null">
+        <div class="space-y-4">
           <div class="rounded-md bg-[#f7f7f5] p-4">
             <div class="text-base font-semibold text-slate-950">{{ selectedCargo.cargoName }} · {{ routeText(selectedCargo) }}</div>
             <div class="mt-2 text-sm leading-6 text-slate-600">{{ selectedCargo.remark }}</div>
@@ -373,7 +365,7 @@ onMounted(() => {
               <span v-for="tag in selectedCargo.tags" :key="tag" class="rounded bg-white px-2 py-1 text-xs text-slate-600">{{ tag }}</span>
             </div>
           </div>
-          <div class="grid grid-cols-2 gap-3 text-sm">
+          <div class="dialog-form-grid text-sm">
             <div class="rounded-md border border-[#deded9] p-3"><div class="text-xs text-slate-400">装货地址</div><div class="mt-1 text-slate-800">{{ selectedCargo.loadAddresses[0]?.detail }}</div></div>
             <div class="rounded-md border border-[#deded9] p-3"><div class="text-xs text-slate-400">卸货地址</div><div class="mt-1 text-slate-800">{{ selectedCargo.unloadAddresses[0]?.detail }}</div></div>
             <div class="rounded-md border border-[#deded9] p-3"><div class="text-xs text-slate-400">车型要求</div><div class="mt-1 text-slate-800">{{ selectedCargo.truckTypes.join('、') }} · {{ selectedCargo.truckLengths.join('、') }}</div></div>
@@ -389,22 +381,11 @@ onMounted(() => {
             </div>
           </div>
         </div>
-      </section>
-    </div>
+    </AppDialog>
 
-    <div v-if="editingCargo" class="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/35 p-6" @click.self="editingCargo = null">
-      <section class="flex max-h-[90vh] w-full max-w-[820px] flex-col overflow-hidden rounded-md border border-[#deded9] bg-white shadow-xl">
-        <header class="flex h-12 shrink-0 items-center justify-between border-b border-[#e2e2dc] px-4">
-          <div>
-            <h2 class="text-sm font-semibold text-slate-950">编辑 Excel 货源 · {{ editingCargo.id }}</h2>
-            <p class="text-xs text-slate-400">保存后生成新版本，并自动重新发布到原发布平台</p>
-          </div>
-          <button type="button" class="rounded p-1 text-slate-400 hover:bg-[#f7f7f5]" aria-label="关闭编辑货源" @click="editingCargo = null">
-            <Icon :svg="strokeIconPaths.x" :size="16" />
-          </button>
-        </header>
-        <div class="min-h-0 flex-1 overflow-auto p-4">
-          <div class="grid grid-cols-2 gap-4 text-sm">
+    <AppDialog v-if="editingCargo" :model-value="true" :title="`编辑 Excel 货源 · ${editingCargo.id}`" width="820px" @update:model-value="editingCargo = null">
+          <p class="dialog-description">保存后生成新版本，并自动重新发布到原发布平台</p>
+          <div class="dialog-form-grid text-sm">
             <label class="block">
               <span class="mb-1.5 block text-xs font-medium text-slate-600">货物名称 *</span>
               <input v-model.trim="editCargoForm.cargoName" class="h-10 w-full rounded-md border border-[#deded9] bg-[#fbfbfa] px-3 outline-none focus:border-slate-400" />
@@ -484,15 +465,13 @@ onMounted(() => {
               <textarea v-model.trim="editCargoForm.remark" rows="3" class="w-full resize-none rounded-md border border-[#deded9] bg-[#fbfbfa] px-3 py-2 outline-none focus:border-slate-400"></textarea>
             </label>
           </div>
-        </div>
-        <footer class="flex h-14 shrink-0 items-center justify-between border-t border-[#e2e2dc] px-4">
-          <span class="text-xs text-amber-700">保存将触发大卡必发，并同步到已配置的满帮账号</span>
-          <div class="flex gap-2">
-            <button type="button" class="rounded-md border border-[#deded9] px-4 py-2 text-sm text-slate-600" @click="editingCargo = null">取消</button>
-            <button type="button" class="rounded-md bg-slate-900 px-4 py-2 text-sm font-medium text-white" @click="saveImportedCargo">保存并重新发布</button>
+        <template #footer><div class="dialog-footer">
+          <span class="dialog-note">保存将触发大卡必发，并同步到已配置的满帮账号</span>
+          <div class="dialog-actions">
+            <button type="button" class="dialog-button" @click="editingCargo = null">取消</button>
+            <button type="button" class="dialog-button dialog-primary" @click="saveImportedCargo">保存并重新发布</button>
           </div>
-        </footer>
-      </section>
-    </div>
+        </div></template>
+    </AppDialog>
   </div>
 </template>

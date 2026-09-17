@@ -6,12 +6,11 @@ import { ElMessage, ElMessageBox } from 'element-plus';
 import { agentWorkData } from '@/pinia/agentWork';
 import { useAgentDailyTasks } from '@/pinia/agentDailyTasks';
 import type { DailyTask, TaskRun } from '../dailyTasks';
-import { formatTaskTime, taskDuration, triggerLabel, taskTypeLabels, taskRunLabels } from '../dailyTasks';
+import { formatTaskTime, getTaskStatus, hasTaskResult, taskDuration, triggerLabel, taskTypeLabels, taskStatusLabels } from '../dailyTasks';
 import { downloadTaskResult } from '../ordinaryTasks';
 import { strokeIconPaths } from '../strokeIconPaths';
 import { useAgentWorkNav } from '../useAgentWorkNav';
 import DailyTaskDialog from '../component/dailyTask.dialog.vue';
-import GeofenceDialog from '../component/geofence.dialog.vue';
 import '../dailyTasks.css';
 
 const work = agentWorkData();
@@ -21,11 +20,12 @@ const route = useRoute();
 const selectedId = ref('');
 const editingId = ref('');
 const showForm = ref(false);
-const showFences = ref(false);
 const search = ref('');
 const filter = ref('all');
 const typeFilter = ref('all');
 const showBackground = ref(false);
+const confirmingRemoval = ref(false);
+const resultScroll = ref<HTMLElement | null>(null);
 const backgroundRef = ref<HTMLElement | null>(null);
 const backgroundToggleRef = ref<HTMLButtonElement | null>(null);
 const isPersonal = computed(() => route.query.scope === 'personal' || work.workspaceMode === 'conversation');
@@ -34,18 +34,41 @@ const runtime = computed(() => store.projects[projectId.value]);
 const projectTasks = computed(() => store.tasks.filter((task) => task.projectId === projectId.value));
 const selected = computed(() => projectTasks.value.find((task) => task.id === selectedId.value));
 const editing = computed(() => projectTasks.value.find((task) => task.id === editingId.value));
-const pendingCount = computed(() => projectTasks.value.reduce((count, task) => count + task.runs.filter((run) => run.status === 'waiting').length, 0));
 const filteredTasks = computed(() => projectTasks.value.filter((task) => {
   const matchesSearch = `${task.name} ${task.prompt} ${triggerLabel(task, runtime.value?.fences)}`.includes(search.value.trim());
-  return matchesSearch && (typeFilter.value === 'all' || typeFilter.value === task.trigger) && (filter.value === 'all' || (filter.value === 'active' && task.enabled) || (filter.value === 'paused' && task.trigger !== 'once' && !task.enabled) || (filter.value === 'pending' && task.runs.some((run) => run.status === 'waiting')) || (['running', 'complete', 'cancelled'].includes(filter.value) && task.runs[0]?.status === filter.value));
+  return matchesSearch && (typeFilter.value === 'all' || typeFilter.value === task.trigger) && (filter.value === 'all' || getTaskStatus(task) === filter.value);
 }));
-const runLabels = taskRunLabels;
+const results = computed(() => (selected.value?.runs ?? []).filter(hasTaskResult).sort((a, b) => (b.finishedAt ?? b.startedAt) - (a.finishedAt ?? a.startedAt)));
+const activeRuns = computed(() => (selected.value?.runs ?? []).filter((run) => run.status === 'running'));
 const sourceLabels: Record<TaskRun['source'], string> = { test: '测试执行', event: '事件触发', schedule: '定时执行', manual: '手动创建', workbench: '智能体工作台' };
 watch([projectId, () => route.query.taskId], () => {
   selectedId.value = projectTasks.value.find((task) => task.id === route.query.taskId)?.id ?? projectTasks.value[0]?.id ?? '';
   search.value = ''; filter.value = 'all'; typeFilter.value = 'all'; showForm.value = false;
 }, { immediate: true });
 watch(selectedId, () => { showBackground.value = false; });
+watch(filteredTasks, (tasks) => {
+  if (selectedId.value && !tasks.some((task) => task.id === selectedId.value)) selectedId.value = '';
+}, { flush: 'post' });
+
+let resultObserver: IntersectionObserver | undefined;
+function observeVisibleResults() {
+  resultObserver?.disconnect();
+  resultObserver = undefined;
+  const taskId = selectedId.value;
+  const root = resultScroll.value;
+  if (!root || !taskId || document.hidden || showForm.value || showBackground.value || confirmingRemoval.value) return;
+  // Only acknowledge results actually brought into view, never the whole task history.
+  const observer = new IntersectionObserver((entries) => {
+    if (resultObserver !== observer || selectedId.value !== taskId || document.hidden || showForm.value || showBackground.value || confirmingRemoval.value) return;
+    for (const entry of entries) {
+      const runId = (entry.target as HTMLElement).dataset.resultId;
+      if (entry.isIntersecting && entry.intersectionRatio >= 0.99 && runId) store.markResultRead(taskId, runId);
+    }
+  }, { root, threshold: 0.99 });
+  resultObserver = observer;
+  root.querySelectorAll('[data-result-id]').forEach((element) => observer.observe(element));
+}
+watch([resultScroll, selectedId, () => results.value.map((run) => run.id).join(','), showForm, showBackground, confirmingRemoval], observeVisibleResults, { flush: 'post' });
 
 function dismissBackground(event: MouseEvent) {
   if (!backgroundRef.value?.contains(event.target as Node) && !backgroundToggleRef.value?.contains(event.target as Node)) showBackground.value = false;
@@ -58,96 +81,95 @@ function closeBackgroundOnEscape(event: KeyboardEvent) {
 onMounted(() => {
   document.addEventListener('click', dismissBackground);
   document.addEventListener('keydown', closeBackgroundOnEscape);
+  document.addEventListener('visibilitychange', observeVisibleResults);
 });
 onBeforeUnmount(() => {
+  resultObserver?.disconnect();
+  resultObserver = undefined;
   document.removeEventListener('click', dismissBackground);
   document.removeEventListener('keydown', closeBackgroundOnEscape);
+  document.removeEventListener('visibilitychange', observeVisibleResults);
 });
 
 function create() { editingId.value = ''; showForm.value = true; }
 function edit(task: DailyTask) { editingId.value = task.id; showForm.value = true; }
-function saved(id: string) { selectedId.value = id; search.value = ''; filter.value = 'all'; typeFilter.value = 'all'; ElMessage.success(editingId.value ? '任务已更新' : selected.value?.trigger === 'once' ? '普通任务已提交，正在执行' : '日常任务已创建'); }
+function selectTask(id: string) { selectedId.value = id; resultScroll.value?.scrollTo({ top: 0 }); }
+function saved(id: string) { selectedId.value = id; search.value = ''; filter.value = 'all'; typeFilter.value = 'all'; ElMessage.success(editingId.value ? '任务已更新' : selected.value?.trigger === 'once' ? '普通任务已提交，正在执行' : '任务已创建'); }
 function test(task: DailyTask) {
   selectedId.value = task.id;
   try { store.testTask(task.id); } catch (error) { ElMessage.warning((error as Error).message); }
 }
 function status(task: DailyTask) {
-  if (task.trigger === 'once') return task.runs[0] ? runLabels[task.runs[0].status] : '已提交';
-  if (!task.enabled) return '已暂停';
-  if (task.runs.some((run) => run.status === 'running')) return '执行中';
-  return store.unavailableReason(task) || (task.trigger === 'schedule' ? '已计划' : '监听中');
+  return taskStatusLabels[getTaskStatus(task)];
 }
 async function remove(task: DailyTask) {
+  confirmingRemoval.value = true;
   try {
-    await ElMessageBox.confirm(task.trigger === 'once' ? `删除“${task.name}”将取消尚未完成的执行，并移除结果与下载文件。` : `删除“${task.name}”将停止后续触发，并移除该任务的运行记录。`, '删除日常任务', { confirmButtonText: '删除', cancelButtonText: '取消', type: 'warning' });
+    await ElMessageBox.confirm(task.trigger === 'once' ? `删除“${task.name}”将取消尚未完成的执行，并移除结果与下载文件。` : `删除“${task.name}”将停止后续触发，并移除该任务的执行结果。`, '删除任务', { confirmButtonText: '删除', cancelButtonText: '取消', confirmButtonClass: 'dialog-danger', type: 'warning' });
     store.deleteTask(task.id);
-    if (selectedId.value === task.id) selectedId.value = projectTasks.value[0]?.id ?? '';
+    if (selectedId.value === task.id) selectedId.value = '';
     ElMessage.success('任务已删除');
   } catch { /* Dialog cancellation preserves task and history. */ }
-}
-async function cancelTask(task: DailyTask) {
-  try {
-    await ElMessageBox.confirm(`取消“${task.name}”后将停止本次执行，不再接收结果。`, '取消普通任务', { confirmButtonText: '取消任务', cancelButtonText: '继续执行', type: 'warning' });
-    store.cancelOrdinaryTask(task.id);
-  } catch { /* Keep the submitted task running. */ }
+  finally { confirmingRemoval.value = false; }
 }
 </script>
 
 <template>
   <div v-if="isPersonal || runtime" class="dt-surface dt-page">
     <header class="dt-page-header">
-      <div class="dt-title"><Icon :svg="strokeIconPaths.alarmClock" :size="16" /><h1>日常任务</h1><span class="dt-project-name">{{ isPersonal ? '个人任务' : work.currentProject.name }}</span></div>
-      <div class="dt-actions"><button class="dt-icon" type="button" title="返回智能体工作台" aria-label="返回智能体工作台" @click="goPage('agent')"><Icon :svg="strokeIconPaths.msg" :size="16" /></button><button class="dt-button primary" type="button" @click="create"><Icon :svg="strokeIconPaths.plus" :size="15" />新建任务</button></div>
+      <div class="dt-title"><Icon :svg="strokeIconPaths.alarmClock" :size="16" /><h1>做任务</h1><span class="dt-project-name">{{ isPersonal ? '个人任务' : work.currentProject.name }}</span></div>
+      <div class="dt-actions"><button class="dt-icon" type="button" title="返回智能体工作台" aria-label="返回智能体工作台" @click="goPage('agent')"><Icon :svg="strokeIconPaths.msg" :size="16" /></button></div>
     </header>
     <div class="dt-page-body" :class="{ 'has-panel': selected }">
-      <section class="dt-task-area" aria-label="项目日常任务列表">
-        <div class="dt-list-heading"><span>{{ projectTasks.length }} 项任务 <span class="dt-secondary">· {{ projectTasks.filter(task => task.trigger === 'once' ? task.runs[0]?.status === 'running' : task.enabled).length }} 项进行中</span></span><span v-if="pendingCount" class="dt-badge warning">{{ pendingCount }} 项待确认</span></div>
-        <div class="dt-type-filter" role="group" aria-label="任务类型筛选"><button type="button" :aria-pressed="typeFilter === 'all'" @click="typeFilter = 'all'">全部</button><button v-for="(label, type) in taskTypeLabels" :key="type" type="button" :aria-pressed="typeFilter === type" @click="typeFilter = type">{{ label }}</button></div>
-        <div class="dt-filters"><div class="dt-search"><Icon :svg="strokeIconPaths.search" :size="14" /><input v-model="search" aria-label="搜索日常任务" placeholder="搜索任务" /></div><select v-model="filter" aria-label="任务状态筛选"><option value="all">全部状态</option><option value="running">执行中</option><option value="complete">已完成</option><option value="cancelled">已取消</option><option value="active">已启用</option><option value="paused">已暂停</option><option value="pending">待确认</option></select></div>
-        <div v-if="filteredTasks.length" class="dt-task-grid">
-          <article v-for="task in filteredTasks" :key="task.id" class="dt-task-card" :class="{ selected: selectedId === task.id }">
-            <button type="button" class="dt-task-main" :aria-label="`查看任务 ${task.name}`" :aria-pressed="selectedId === task.id" @click="selectedId = task.id">
-              <div class="dt-task-heading"><span class="dt-task-symbol"><Icon :svg="task.trigger === 'once' ? strokeIconPaths.file : task.trigger === 'event' ? strokeIconPaths.zap : strokeIconPaths.alarmClock" :size="17" /></span><h2>{{ task.name }}</h2><span class="dt-badge" :class="{ success: status(task) === '已完成' || (task.enabled && !store.unavailableReason(task)), blue: status(task) === '执行中' }">{{ status(task) }}</span></div>
-              <p class="dt-trigger">{{ triggerLabel(task, runtime?.fences) }}</p>
-              <p class="dt-task-description" :title="task.prompt">{{ task.prompt }}</p>
-            </button>
-            <footer class="dt-task-footer">
-              <div class="dt-task-meta"><span>{{ task.runs.length }} 次执行</span><span v-if="task.runs.some(run => run.status === 'waiting')" class="dt-pending">{{ task.runs.filter(run => run.status === 'waiting').length }} 项待确认</span></div>
-              <div class="dt-task-actions">
-              <template v-if="task.trigger === 'once'">
-                <button type="button" class="dt-icon" :aria-label="`查看结果 ${task.name}`" title="查看运行结果" @click="selectedId = task.id"><Icon :svg="strokeIconPaths.list" :size="15" /></button>
-                <button v-if="task.runs[0]?.status === 'running'" type="button" class="dt-icon" :aria-label="`取消任务 ${task.name}`" title="取消任务" @click="cancelTask(task)"><Icon :svg="strokeIconPaths.x" :size="15" /></button>
-              </template>
-              <template v-else>
-              <button type="button" class="dt-icon" :aria-label="`编辑 ${task.name}`" title="编辑" :disabled="task.runs.some(run => run.status === 'running')" @click="edit(task)"><Icon :svg="strokeIconPaths.edit" :size="15" /></button>
-              <button type="button" class="dt-icon" :aria-label="`测试执行一次 ${task.name}`" title="测试执行一次" :disabled="task.runs.some(run => run.status === 'running')" @click="test(task)"><Icon :svg="strokeIconPaths.refresh" :size="15" /></button>
-              <button type="button" class="dt-icon" :aria-label="`${task.enabled ? '暂停' : '启动'} ${task.name}`" :title="task.enabled ? '暂停后续触发' : '启动任务'" @click="store.toggleTask(task.id)"><Icon :svg="task.enabled ? strokeIconPaths.pause : strokeIconPaths.play" :size="15" /></button>
-              </template>
-              <button type="button" class="dt-icon danger" :aria-label="`删除 ${task.name}`" title="删除" @click="remove(task)"><Icon :svg="strokeIconPaths.trash" :size="15" /></button>
-              </div>
-            </footer>
-          </article>
+      <div class="dt-task-column">
+        <div class="dt-list-toolbar">
+          <div class="dt-list-heading"><span>{{ projectTasks.length }} 项任务 <span class="dt-secondary">· {{ projectTasks.filter(task => getTaskStatus(task) === 'running').length }} 项执行中</span></span><button class="dt-button primary" type="button" @click="create"><Icon :svg="strokeIconPaths.plus" :size="15" />新建任务</button></div>
+          <div class="dt-type-filter" role="group" aria-label="任务类型筛选"><button type="button" :aria-pressed="typeFilter === 'all'" @click="typeFilter = 'all'">全部</button><button v-for="(label, type) in taskTypeLabels" :key="type" type="button" :aria-pressed="typeFilter === type" @click="typeFilter = type">{{ label }}</button></div>
+          <div class="dt-filters"><div class="dt-search"><Icon :svg="strokeIconPaths.search" :size="14" /><input v-model="search" aria-label="搜索任务" placeholder="搜索任务" /></div><select v-model="filter" aria-label="任务状态筛选"><option value="all">全部状态</option><option v-for="(label, value) in taskStatusLabels" :key="value" :value="value">{{ label }}</option></select></div>
         </div>
-        <div v-else class="dt-empty"><Icon :svg="strokeIconPaths.alarmClock" :size="30" /><h2>{{ projectTasks.length ? '没有匹配的任务' : '暂无日常任务' }}</h2><button type="button" class="dt-button" @click="projectTasks.length ? (search = '', filter = 'all', typeFilter = 'all') : create()">{{ projectTasks.length ? '清除筛选' : '新建任务' }}</button></div>
-        <div class="dt-list-footer"><button v-if="runtime" type="button" class="dt-text-button" @click="showFences = true"><Icon :svg="strokeIconPaths.locate" :size="14" />项目区域围栏 <span>{{ runtime.fences.length }}</span></button><span>演示运行</span></div>
-      </section>
+        <section class="dt-task-area" aria-label="项目做任务列表">
+          <div v-if="filteredTasks.length" class="dt-task-grid">
+            <article v-for="task in filteredTasks" :key="task.id" class="dt-task-card" :class="{ selected: selectedId === task.id }">
+              <button type="button" class="dt-task-main" :aria-label="`查看任务 ${task.name}`" :aria-pressed="selectedId === task.id" @click="selectTask(task.id)">
+                <div class="dt-task-heading"><span class="dt-task-symbol"><Icon :svg="task.trigger === 'once' ? strokeIconPaths.file : task.trigger === 'event' ? strokeIconPaths.zap : strokeIconPaths.alarmClock" :size="17" /></span><h2>{{ task.name }}</h2><span v-if="store.unreadResultsByTask[task.id]" class="dt-unread-badge" :aria-label="`${store.unreadResultsByTask[task.id]} 条未读结果`">{{ store.unreadResultsByTask[task.id] }}</span><span class="dt-badge" :class="{ success: getTaskStatus(task) === 'complete', blue: getTaskStatus(task) === 'running' }">{{ status(task) }}</span></div>
+                <p class="dt-trigger">{{ triggerLabel(task, runtime?.fences) }}</p>
+                <p class="dt-task-description" :title="task.prompt">{{ task.prompt }}</p>
+              </button>
+              <footer class="dt-task-footer">
+                <div class="dt-task-meta"><span>{{ task.runs.filter(hasTaskResult).length }} 条结果</span><span v-if="task.runs.some(run => run.status === 'waiting')" class="dt-pending">{{ task.runs.filter(run => run.status === 'waiting').length }} 项待确认</span></div>
+                <div class="dt-task-actions">
+                <template v-if="task.trigger === 'once'">
+                  <button type="button" class="dt-icon" :aria-label="`查看结果 ${task.name}`" title="查看执行结果" @click="selectTask(task.id)"><Icon :svg="strokeIconPaths.list" :size="15" /></button>
+                </template>
+                <template v-else>
+                <button type="button" class="dt-icon" :aria-label="`编辑 ${task.name}`" title="编辑" :disabled="task.runs.some(run => run.status === 'running')" @click="edit(task)"><Icon :svg="strokeIconPaths.edit" :size="15" /></button>
+                <button type="button" class="dt-icon" :aria-label="`测试执行一次 ${task.name}`" title="测试执行一次" :disabled="task.runs.some(run => run.status === 'running')" @click="test(task)"><Icon :svg="strokeIconPaths.refresh" :size="15" /></button>
+                <button type="button" class="dt-icon" :aria-label="`${task.enabled ? '暂停' : '启动'} ${task.name}`" :title="task.enabled ? '暂停后续触发' : '启动任务'" @click="store.toggleTask(task.id)"><Icon :svg="task.enabled ? strokeIconPaths.pause : strokeIconPaths.play" :size="15" /></button>
+                </template>
+                <button type="button" class="dt-icon danger" :aria-label="`删除 ${task.name}`" title="删除" @click="remove(task)"><Icon :svg="strokeIconPaths.trash" :size="15" /></button>
+                </div>
+              </footer>
+            </article>
+          </div>
+          <div v-else class="dt-empty"><Icon :svg="strokeIconPaths.alarmClock" :size="30" /><h2>{{ projectTasks.length ? '没有匹配的任务' : '暂无任务' }}</h2><button v-if="projectTasks.length" type="button" class="dt-button" @click="search = ''; filter = 'all'; typeFilter = 'all'">清除筛选</button></div>
+        </section>
+      </div>
 
       <aside v-if="selected" class="dt-run-panel" aria-label="任务运行面板">
         <header class="dt-run-header">
-          <div class="dt-title"><Icon :svg="strokeIconPaths.bot" :size="16" /><h2>任务运行面板</h2></div>
+          <div class="dt-title"><Icon :svg="strokeIconPaths.bot" :size="16" /><h2 :title="selected.name">{{ selected.name }}</h2></div>
           <div class="dt-actions">
             <button ref="backgroundToggleRef" class="dt-background-toggle" type="button" title="任务背景" aria-label="任务背景" aria-controls="daily-task-background" :aria-expanded="showBackground" @click="showBackground = !showBackground"><Icon :svg="strokeIconPaths.alarmClock" :size="15" /><span>任务背景</span></button>
             <button class="dt-icon" type="button" title="关闭运行面板" aria-label="关闭运行面板" @click="selectedId = ''"><Icon :svg="strokeIconPaths.x" :size="16" /></button>
           </div>
         </header>
         <div class="dt-run-body">
-          <div class="dt-run-scroll" :key="selected.id">
-            <div class="dt-run-section-heading"><h3>{{ selected.trigger === 'once' ? '运行事件' : '运行记录' }}</h3><button v-if="selected.trigger !== 'once'" type="button" class="dt-text-button" :disabled="selected.runs.some(run => run.status === 'running')" @click="test(selected)"><Icon :svg="strokeIconPaths.refresh" :size="13" />测试执行一次</button></div>
-            <div v-if="!selected.runs.length" class="dt-empty compact"><Icon :svg="strokeIconPaths.alarmClock" :size="24" /><h2>等待首次执行</h2><p>{{ triggerLabel(selected, runtime?.fences) }}</p></div>
-            <section v-for="(run, index) in selected.runs" :key="run.id" class="dt-run" :aria-label="`第 ${selected.runs.length - index} 次执行`">
-              <header><div><strong>{{ selected.trigger === 'once' ? '本次执行' : `第 ${selected.runs.length - index} 次执行` }}</strong><small>{{ formatTaskTime(run.startedAt) }} · {{ sourceLabels[run.source] }}</small><small v-if="run.toolJobId">{{ run.toolJobId }}</small></div><span class="dt-badge" :class="run.status === 'waiting' ? 'warning' : run.status === 'running' ? 'blue' : run.status === 'complete' ? 'success' : ''">{{ runLabels[run.status] }}</span></header>
-              <p v-if="run.event" class="dt-run-context">{{ run.event.order.id }} · {{ run.event.order.plate }}<br />{{ run.event.detail }}</p>
-              <details :open="run.status === 'running' || selected.trigger === 'once'" class="dt-run-steps"><summary>Agent 执行过程 <span>{{ Math.min(run.activeStep, run.steps.length) }}/{{ run.steps.length }}</span></summary><ol><template v-for="(step, stepIndex) in run.steps" :key="step.title"><li v-if="stepIndex <= run.activeStep"><Icon :svg="stepIndex === run.activeStep && run.status === 'running' ? strokeIconPaths.refresh : stepIndex === run.activeStep && run.status === 'cancelled' ? strokeIconPaths.x : strokeIconPaths.check" :size="13" :svg-class="stepIndex === run.activeStep && run.status === 'running' ? 'animate-spin' : ''" /><div><strong>{{ step.title }}</strong><p>{{ step.text }}</p><span v-if="step.tool" class="dt-tool">{{ step.tool }}</span></div></li></template></ol></details>
+          <div ref="resultScroll" class="dt-run-scroll" :key="selected.id">
+            <div class="dt-run-section-heading"><h3>执行结果 <span class="dt-secondary">{{ results.length }}</span></h3><button v-if="selected.trigger !== 'once'" type="button" class="dt-text-button" :disabled="activeRuns.length > 0" @click="test(selected)"><Icon :svg="strokeIconPaths.refresh" :size="13" />测试执行一次</button></div>
+            <div v-for="run in activeRuns" :key="run.id" class="dt-active-run" role="status"><Icon :svg="strokeIconPaths.refresh" :size="15" svg-class="animate-spin" /><div><strong>{{ run.steps[run.activeStep]?.title ?? '正在接收结果' }}</strong><p>{{ run.steps[run.activeStep]?.text }}</p><small>{{ sourceLabels[run.source] }} · {{ Math.min(run.activeStep + 1, run.steps.length) }}/{{ run.steps.length }}</small></div></div>
+            <div v-if="!results.length" class="dt-empty compact"><Icon :svg="strokeIconPaths.fileText" :size="24" /><h2>{{ activeRuns.length ? '执行结果生成中' : '暂无执行结果' }}</h2><p>{{ activeRuns.length ? '结果返回后将在此展示' : getTaskStatus(selected) === 'paused' ? '任务已暂停，启动后等待下次触发' : triggerLabel(selected, runtime?.fences) }}</p></div>
+            <section v-for="(run, index) in results" :key="run.id" class="dt-run" :aria-label="`执行结果 ${results.length - index}`">
+              <header :data-result-id="run.id"><div><strong>{{ run.event ? `${run.event.order.id} · ${run.event.order.plate}` : selected.trigger === 'once' ? '任务结果' : `执行结果 ${results.length - index}` }}</strong><small>{{ formatTaskTime(run.finishedAt ?? run.startedAt) }} · {{ sourceLabels[run.source] }}</small></div><span v-if="run.action?.status === 'pending'" class="dt-badge warning">待确认</span></header>
               <p v-if="run.result" class="dt-run-result">{{ run.result }}</p>
               <div v-if="run.files?.length" class="dt-result-files" aria-label="任务结果文件">
                 <button v-for="file in run.files" :key="file.name" type="button" class="dt-result-file" :aria-label="`下载 ${file.name}`" @click="downloadTaskResult(file)"><Icon :svg="file.name.endsWith('.csv') ? strokeIconPaths.fileSpreadsheet : strokeIconPaths.fileText" :size="20" /><span><strong>{{ file.name }}</strong><small>{{ file.name.endsWith('.csv') ? 'CSV 表格' : '文本文件' }}</small></span><Icon :svg="strokeIconPaths.download" :size="17" /></button>
@@ -157,12 +179,13 @@ async function cancelTask(task: DailyTask) {
                 <p class="dt-recipient">{{ run.action.recipient }}</p><p>{{ run.action.content }}</p>
                 <div v-if="run.status === 'waiting'" class="dt-actions"><button class="dt-button primary" type="button" @click="store.resolveAction(selected.id, run.id, true)">确认发送</button><button class="dt-button" type="button" @click="store.resolveAction(selected.id, run.id, false)">取消发送</button></div>
               </div>
-              <footer v-if="run.finishedAt">{{ formatTaskTime(run.finishedAt) }} · {{ run.status === 'cancelled' ? '已取消' : '结果已返回' }} · 耗时 {{ taskDuration(run.finishedAt - run.startedAt) }}</footer>
+              <details class="dt-run-steps"><summary>执行详情</summary><p v-if="run.event" class="dt-run-context">{{ run.event.detail }}</p><p v-if="run.toolJobId" class="dt-run-context">{{ run.toolJobId }}</p><ol><li v-for="step in run.steps" :key="step.title"><Icon :svg="strokeIconPaths.check" :size="13" /><div><strong>{{ step.title }}</strong><p>{{ step.text }}</p><span v-if="step.tool" class="dt-tool">{{ step.tool }}</span></div></li></ol></details>
+              <footer v-if="run.finishedAt">耗时 {{ taskDuration(run.finishedAt - run.startedAt) }}</footer>
             </section>
           </div>
           <aside id="daily-task-background" ref="backgroundRef" class="dt-background-rail" :class="{ 'is-open': showBackground }" aria-label="任务背景">
             <section class="dt-task-summary">
-              <div class="dt-summary-title"><h2>{{ selected.name }}</h2><span class="dt-badge" :class="selected.enabled ? 'success' : ''">{{ status(selected) }}</span></div>
+              <div class="dt-summary-title"><h2>{{ selected.name }}</h2><span class="dt-badge" :class="{ success: getTaskStatus(selected) === 'complete', blue: getTaskStatus(selected) === 'running' }">{{ status(selected) }}</span></div>
               <dl class="dt-summary-metrics">
                 <div class="dt-summary-trigger"><dt>{{ selected.trigger === 'once' ? '执行方式' : '触发条件' }}</dt><dd>{{ triggerLabel(selected, runtime?.fences) }}</dd></div>
                 <div><dt>执行轮次</dt><dd>{{ selected.runs.length }} 次</dd></div>
@@ -178,7 +201,6 @@ async function cancelTask(task: DailyTask) {
       </aside>
     </div>
     <DailyTaskDialog v-model="showForm" :project-id="projectId" :task="editing" @saved="saved" />
-    <GeofenceDialog v-model="showFences" :project-id="projectId" />
   </div>
   <div v-else class="dt-surface dt-empty"><Icon :svg="strokeIconPaths.alarmClock" :size="30" /><h1>请先选择项目</h1><button class="dt-button" @click="goPage('projects')">前往项目管理</button></div>
 </template>

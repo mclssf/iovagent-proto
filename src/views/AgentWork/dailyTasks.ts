@@ -115,6 +115,7 @@ export interface TaskRun {
   activeStep: number;
   nextStepAt: number;
   result: string;
+  readAt?: number;
   toolJobId?: string;
   files?: TaskResultFile[];
   action?: { channel: '短信' | '邮件'; recipient: string; content: string; status: 'pending' | 'sent' | 'cancelled' };
@@ -155,6 +156,18 @@ export function triggerLabel(task: DailyTaskDraft, fences: ProjectFence[] = []) 
 
 export const taskTypeLabels = { once: '普通任务', event: '条件触发', schedule: '定时 / 持续' };
 export const taskRunLabels: Record<TaskRun['status'], string> = { running: '执行中', waiting: '待确认', complete: '已完成', cancelled: '已取消' };
+
+export type DailyTaskStatus = 'complete' | 'running' | 'paused';
+export const taskStatusLabels: Record<DailyTaskStatus, string> = { complete: '已完成', running: '执行中', paused: '已暂停' };
+
+export function hasTaskResult(run: TaskRun) {
+  return run.status !== 'running' && Boolean(run.result.trim() || run.files?.length);
+}
+
+export function getTaskStatus(task: DailyTask): DailyTaskStatus {
+  if (task.trigger === 'once') return task.runs.some((run) => run.status === 'complete' && hasTaskResult(run)) ? 'complete' : 'running';
+  return task.enabled ? 'running' : 'paused';
+}
 
 export function formatTaskTime(value: number) {
   return new Intl.DateTimeFormat('zh-CN', { timeZone: 'Asia/Shanghai', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false }).format(value);

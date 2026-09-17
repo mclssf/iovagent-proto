@@ -1,7 +1,7 @@
 import { defineStore } from 'pinia';
 import type { Order, Project } from '@/views/AgentWork/interface';
 import type { DailyTask, DailyTaskDraft, EventType, MonitorId, ProjectFence, ProjectTaskRuntime, TaskRun, WaybillEvent, WaybillPhase } from '@/views/AgentWork/dailyTasks';
-import { createMonitoredOrders, ensureRequiredMonitorSkills, eventDefinitions, eventLabel, isThresholdEvent, monitorDefinitions } from '@/views/AgentWork/dailyTasks';
+import { createMonitoredOrders, ensureRequiredMonitorSkills, eventDefinitions, eventLabel, hasTaskResult, isThresholdEvent, monitorDefinitions } from '@/views/AgentWork/dailyTasks';
 import { extractTaskPlates, makeOrdinaryRun, mergeTaskAttachments, ordinaryStepDelay, ordinaryTaskName, ordinaryTaskResult, resolveAsyncTool } from '@/views/AgentWork/ordinaryTasks';
 
 const newId = (prefix: string) => `${prefix}-${crypto.randomUUID()}`;
@@ -46,7 +46,20 @@ export const useAgentDailyTasks = defineStore('agentDailyTasks', {
     tasks: [] as DailyTask[],
     now: Date.now(),
   }),
+  getters: {
+    unreadResultsByTask: (state): Record<string, number> => Object.fromEntries(state.tasks.map((task) => [task.id, task.runs.filter((run) => hasTaskResult(run) && run.readAt === undefined).length])),
+    unreadResultsByProject(state): Record<string, number> {
+      return state.tasks.reduce<Record<string, number>>((counts, task) => {
+        counts[task.projectId] = (counts[task.projectId] ?? 0) + (this.unreadResultsByTask[task.id] ?? 0);
+        return counts;
+      }, {});
+    },
+  },
   actions: {
+    markResultRead(taskId: string, runId: string) {
+      const run = this.tasks.find((task) => task.id === taskId)?.runs.find((item) => item.id === runId);
+      if (run && hasTaskResult(run) && run.readAt === undefined) run.readAt = Date.now();
+    },
     syncProjects(projects: Project[], orders: Order[]) {
       for (const project of projects) {
         let runtime = this.projects[project.id];
@@ -94,6 +107,7 @@ export const useAgentDailyTasks = defineStore('agentDailyTasks', {
           }
           if (event) event.occurredAt = run.startedAt;
           run.finishedAt = run.startedAt + 11000;
+          if (day === 2) run.readAt = run.finishedAt;
           run.activeStep = run.steps.length;
           run.status = index === 0 && day === 1 ? 'waiting' : 'complete';
           if (run.action) run.action.status = run.status === 'waiting' ? 'pending' : 'sent';
@@ -147,19 +161,11 @@ export const useAgentDailyTasks = defineStore('agentDailyTasks', {
       if (task?.trigger === 'once') throw new Error('普通任务仅执行一次，不支持暂停或启动');
       if (task) task.enabled = !task.enabled;
     },
-    cancelOrdinaryTask(taskId: string) {
-      const task = this.tasks.find((item) => item.id === taskId);
-      if (task?.trigger !== 'once') return;
-      const run = task.runs[0];
-      if (!run || run.status !== 'running') return;
-      run.status = 'cancelled';
-      run.finishedAt = Date.now();
-      run.result = '本次普通任务已取消，不再接收结果，也不会再次执行。';
-    },
     receiveOrdinaryResult(taskId: string, jobId: string, result: { text: string; files: NonNullable<TaskRun['files']> }) {
       const task = this.tasks.find((item) => item.id === taskId);
       const run = task?.runs[0];
       if (task?.trigger !== 'once' || !run || run.status !== 'running' || run.toolJobId !== jobId) return;
+      if (!result.text.trim() && !result.files.length) return;
       run.status = 'complete';
       run.activeStep = run.steps.length;
       run.finishedAt = this.now;

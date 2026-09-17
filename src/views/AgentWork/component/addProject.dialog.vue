@@ -2,11 +2,10 @@
 import { storeToRefs } from 'pinia';
 import { ref } from 'vue';
 
-import { Icon } from '@packages/icon';
+import AppDialog from '@/components/AppDialog.vue';
 
 import { agentWorkData } from '@/pinia/agentWork';
 
-import { strokeIconPaths } from '../strokeIconPaths';
 
 const store = agentWorkData();
 const { showProjectModal } = storeToRefs(store);
@@ -15,16 +14,9 @@ const selectedAddress = ref('');
 </script>
 
 <template>
-  <div v-if="showProjectModal" class="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/40 p-6">
-    <div class="w-full max-w-xl rounded-md border border-[#deded9] bg-white p-4 shadow-2xl">
-      <div class="mb-4 flex items-center justify-between">
-        <h3 class="text-sm font-semibold leading-5 text-slate-950">新建项目</h3>
-        <button type="button" class="rounded-full p-2 text-slate-500 hover:bg-slate-100" @click="store.closeAddProjectModal()">
-          <Icon :svg="strokeIconPaths.x" :size="18" />
-        </button>
-      </div>
+  <AppDialog :model-value="showProjectModal" title="新建项目" @update:model-value="store.closeAddProjectModal()">
       <div class="space-y-4">
-        <div class="grid grid-cols-2 gap-3">
+        <div class="dialog-form-grid">
           <input class="rounded-md border border-[#deded9] bg-[#fbfbfa] px-3 py-2 text-sm" placeholder="项目名称" />
           <select v-model="selectedAddress" class="rounded-md border border-[#deded9] bg-[#fbfbfa] px-3 py-2 text-sm" aria-label="地址">
             <option value="" disabled>地址</option>
@@ -42,15 +34,14 @@ const selectedAddress = ref('');
         <div class="rounded-md bg-[#f7f7f5] p-4 text-sm text-slate-600">
           首次创建项目需要完成用户授权的目标 TMS 系统连接。连接成功后，系统将持续同步目标 TMS 运单并加入在途监控。
         </div>
-        <div class="flex justify-end gap-2">
-          <button type="button" class="rounded-md border border-[#deded9] px-4 py-2 text-sm" @click="store.closeAddProjectModal()">取消</button>
-          <button type="button" class="rounded-md bg-slate-900 px-4 py-2 text-sm font-medium text-white" @click="store.addDemoProject(selectedAddress || addressOptions[0])">
+      </div>
+      <template #footer><div class="dialog-actions">
+          <button type="button" class="dialog-button" @click="store.closeAddProjectModal()">取消</button>
+          <button type="button" class="dialog-button dialog-primary" @click="store.addDemoProject(selectedAddress || addressOptions[0])">
             创建并连接
           </button>
-        </div>
-      </div>
-    </div>
-  </div>
+      </div></template>
+  </AppDialog>
 </template>
 
 <style lang="scss"></style>

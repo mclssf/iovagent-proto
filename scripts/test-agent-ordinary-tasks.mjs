@@ -62,19 +62,17 @@ try {
   store.syncProjects([], []);
   assert(store.tasks.some(item => item.id === personalId), 'personal tasks survive project changes');
   assert(!store.tasks.some(item => item.id === id), 'deleted projects remove their own tasks');
-  store.cancelOrdinaryTask(personalId);
+  store.deleteTask(personalId);
   store.receiveOrdinaryResult(personalId, personal.runs[0].toolJobId, { text: '迟到回调', files: [] });
   now += 10000;
   store.tick(now);
-  assert.equal(personal.runs[0].status, 'cancelled');
   assert.equal(personal.runs[0].files, undefined);
-  store.deleteTask(personalId);
   store.receiveOrdinaryResult(personalId, personal.runs[0].toolJobId, { text: '已删任务回调', files: [] });
   assert.equal(store.tasks.length, 0);
   const genericId = store.saveTask('', { ...draft, prompt: '整理一份物流风险核验要点' });
   for (let i = 0; i < 5; i++) { now += 6100; store.tick(now); }
   assert.equal(store.tasks.find(item => item.id === genericId).runs[0].status, 'complete');
-  console.log('PASS: async tool routing, date/plate preservation, validation, attachment snapshots, one-shot lifecycle, scoped execution, idempotent callbacks, cancellation, deletion, downloadable CSV and text-only results.');
+  console.log('PASS: async tool routing, date/plate preservation, validation, attachment snapshots, one-shot lifecycle, scoped execution, idempotent callbacks, deletion stops execution, downloadable CSV and text-only results.');
 } finally {
   Date.now = originalNow;
   await server.close();

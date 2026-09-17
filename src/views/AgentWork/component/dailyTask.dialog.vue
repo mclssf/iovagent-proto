@@ -1,6 +1,6 @@
 <script lang="ts" setup>
 import { computed, reactive, ref, watch } from 'vue';
-import { ElDialog } from 'element-plus';
+import AppDialog from '@/components/AppDialog.vue';
 import { Icon } from '@packages/icon';
 import { useAgentDailyTasks } from '@/pinia/agentDailyTasks';
 import type { DailyTask, DailyTaskDraft, TaskAttachment } from '../dailyTasks';
@@ -76,8 +76,8 @@ function save() {
 </script>
 
 <template>
-  <ElDialog :model-value="modelValue" :title="task ? '编辑日常任务' : '新建日常任务'" width="min(580px, calc(100vw - 32px))" append-to-body @update:model-value="emit('update:modelValue', $event)">
-    <form class="dt-surface dt-form" @submit.prevent="save">
+  <AppDialog :model-value="modelValue" :title="task ? '编辑任务' : '新建任务'" @update:model-value="emit('update:modelValue', $event)">
+    <form id="daily-task-form" class="dt-surface dt-form" @submit.prevent="save">
       <div class="dt-task-types" role="radiogroup" aria-label="任务类型">
         <label v-for="(label, type) in taskTypeLabels" :key="type" :class="{ selected: form.trigger === type, disabled: (type !== 'once' && !projectId) || (type === 'once' && !!task) }"><input v-model="form.trigger" type="radio" name="task-type" :value="type" :disabled="(type !== 'once' && !projectId) || (type === 'once' && !!task)" />{{ label }}</label>
       </div>
@@ -107,8 +107,8 @@ function save() {
       </div>
       <label v-if="form.trigger !== 'once'" class="dt-checkbox"><input v-model="form.confirmBeforeSend" type="checkbox" />短信、邮件发送前由我确认</label>
       <p v-if="error" class="dt-error" role="alert">{{ error }}</p>
-      <div class="dt-dialog-footer"><button type="button" class="dt-button" @click="emit('update:modelValue', false)">取消</button><button type="submit" class="dt-button primary" :disabled="submitting">{{ task ? '保存修改' : form.trigger === 'once' ? '提交并执行一次' : '创建任务' }}</button></div>
     </form>
+    <template #footer><div class="dialog-actions"><button type="button" class="dialog-button" @click="emit('update:modelValue', false)">取消</button><button type="submit" form="daily-task-form" class="dialog-button dialog-primary" :disabled="submitting">{{ task ? '保存修改' : form.trigger === 'once' ? '提交并执行一次' : '创建任务' }}</button></div></template>
     <GeofenceDialog v-model="showFences" :project-id="projectId" @saved="form.fenceId = $event" />
-  </ElDialog>
+  </AppDialog>
 </template>

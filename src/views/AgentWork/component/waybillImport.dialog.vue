@@ -4,6 +4,7 @@ import type { Project } from '../interface';
 import { computed, nextTick, ref, watch } from 'vue';
 
 import { Icon } from '@packages/icon';
+import AppDialog from '@/components/AppDialog.vue';
 
 import { strokeIconPaths } from '../strokeIconPaths';
 import { badgeToneClass, projectStatusTone } from '../utils';
@@ -13,7 +14,9 @@ type ImportMode = 'create' | 'merge';
 const props = defineProps<{
   fileNames: string[];
   importedCount: number;
+  initialMode?: ImportMode;
   open: boolean;
+  preferredProjectId?: string;
   projects: Project[];
 }>();
 
@@ -43,10 +46,12 @@ watch(
   () => props.open,
   (open) => {
     if (!open) return;
-    importMode.value = 'create';
+    importMode.value = props.initialMode ?? 'create';
     projectName.value = '';
-    selectedProjectId.value = props.projects[0]?.id ?? '';
-    nextTick(() => projectNameInputRef.value?.focus());
+    selectedProjectId.value = props.projects.some((project) => project.id === props.preferredProjectId)
+      ? props.preferredProjectId!
+      : props.projects[0]?.id ?? '';
+    if (importMode.value === 'create') nextTick(() => projectNameInputRef.value?.focus());
   },
 );
 
@@ -70,31 +75,9 @@ function confirmImport() {
 </script>
 
 <template>
-  <Teleport to="body">
-    <div v-if="open" class="fixed inset-0 z-[1200] flex items-center justify-center bg-slate-950/40 p-6" role="presentation">
-      <div
-        class="w-full max-w-[640px] overflow-hidden rounded-lg bg-white shadow-[0_24px_70px_rgba(15,23,42,0.24),0_4px_16px_rgba(15,23,42,0.08)]"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="waybill-import-title"
-      >
-        <div class="flex items-start justify-between gap-4 border-b border-[#e7e7e3] px-5 py-4">
-          <div class="min-w-0">
-            <h2 id="waybill-import-title" class="text-base font-semibold leading-6 text-slate-950">保存运单并持续跟踪</h2>
-            <p class="mt-1 text-xs leading-5 text-slate-500">已识别为运单列表。保存到项目后，可持续监控在途状态并针对这些运单问答。</p>
-          </div>
-          <button
-            type="button"
-            class="flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-slate-400 transition hover:bg-[#f2f2ef] hover:text-slate-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400"
-            aria-label="暂不保存"
-            title="暂不保存"
-            @click="emit('cancel')"
-          >
-            <Icon :svg="strokeIconPaths.x" :size="15" />
-          </button>
-        </div>
-
-        <div class="space-y-5 px-5 py-5">
+  <AppDialog :model-value="open" title="保存运单并持续跟踪" width="640px" @update:model-value="emit('cancel')" @opened="projectNameInputRef?.focus()">
+        <p class="dialog-description">已识别为运单列表。保存到项目后，可持续监控在途状态并针对这些运单问答。</p>
+        <div class="space-y-5">
           <div class="flex items-center gap-3 bg-[#f7f7f5] px-3.5 py-3">
             <span class="flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-white text-emerald-700 shadow-sm">
               <Icon :svg="strokeIconPaths.fileSpreadsheet" :size="18" />
@@ -145,13 +128,13 @@ function confirmImport() {
 
           <div v-if="importMode === 'create'">
             <label for="import-project-name" class="mb-1.5 block text-xs font-medium text-slate-600">项目名称</label>
-            <div class="flex h-10 items-center rounded-md border border-[#deded9] bg-[#fbfbfa] px-3 focus-within:border-blue-400 focus-within:ring-2 focus-within:ring-blue-100">
+            <div class="dialog-input-group">
               <input
                 id="import-project-name"
                 ref="projectNameInputRef"
                 :value="projectName"
                 type="text"
-                class="min-w-0 flex-1 bg-transparent text-sm text-slate-900 outline-none placeholder:text-slate-400"
+                class="dialog-inline-input"
                 placeholder="例如：华东临时运单监控"
                 @input="handleProjectNameInput"
                 @keydown.enter.prevent="confirmImport"
@@ -183,23 +166,21 @@ function confirmImport() {
           </div>
         </div>
 
-        <div class="flex items-center justify-between gap-3 border-t border-[#e7e7e3] bg-[#fbfbfa] px-5 py-3.5">
-          <span class="text-xs text-slate-500">当前会话不会创建消息或切换上下文</span>
-          <div class="flex shrink-0 items-center gap-2">
-            <button type="button" class="h-9 rounded-md px-3 text-sm text-slate-600 transition hover:bg-[#f0f0ed] hover:text-slate-900" @click="emit('cancel')">
+        <template #footer><div class="dialog-footer">
+          <span class="dialog-note">保存后不会切换当前会话</span>
+          <div class="dialog-actions">
+            <button type="button" class="dialog-button" @click="emit('cancel')">
               暂不保存
             </button>
             <button
               type="button"
-              class="h-9 rounded-md bg-slate-900 px-4 text-sm font-medium text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:bg-slate-300"
+              class="dialog-button dialog-primary"
               :disabled="!canConfirm"
               @click="confirmImport"
             >
               {{ importMode === 'create' ? '创建并导入' : '合并并导入' }}
             </button>
           </div>
-        </div>
-      </div>
-    </div>
-  </Teleport>
+        </div></template>
+  </AppDialog>
 </template>

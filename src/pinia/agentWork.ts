@@ -520,7 +520,7 @@ function createSpreadsheetFillSteps(sourceFileName: string): NonNullable<ChatMes
   ];
 }
 
-function extractSpreadsheetRequest(raw: string) {
+function extractAttachmentRequest(raw: string, matches = (name: string) => Boolean(name)) {
   const attachmentMarker = '\n附件：';
   const markerIndex = raw.lastIndexOf(attachmentMarker);
   if (markerIndex <= 0) return null;
@@ -530,9 +530,13 @@ function extractSpreadsheetRequest(raw: string) {
     .slice(markerIndex + attachmentMarker.length)
     .split('、')
     .map((name) => name.trim())
-    .find(Boolean);
+    .find((name) => Boolean(name) && matches(name));
   if (!prompt || !sourceFileName) return null;
   return { prompt, sourceFileName };
+}
+
+function extractSpreadsheetRequest(raw: string) {
+  return extractAttachmentRequest(raw, (name) => /\.(?:xls|xlsx)$/i.test(name));
 }
 
 interface RegionVisitRequest {
@@ -549,8 +553,8 @@ function extractRegionVisitRegion(raw: string) {
 
 function extractRegionVisitRequest(raw: string): RegionVisitRequest | null {
   const region = extractRegionVisitRegion(raw);
-  const spreadsheetRequest = extractSpreadsheetRequest(raw);
-  if (!region || !spreadsheetRequest || !/\.(?:csv|xls|xlsx)$/i.test(spreadsheetRequest.sourceFileName)) return null;
+  const spreadsheetRequest = extractAttachmentRequest(raw, (name) => /\.(?:csv|xls|xlsx)$/i.test(name));
+  if (!region || !spreadsheetRequest) return null;
   return { region, sourceFileName: spreadsheetRequest.sourceFileName };
 }
 

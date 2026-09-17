@@ -5,6 +5,7 @@ import { useRoute, useRouter } from 'vue-router';
 
 import { Icon } from '@packages/icon';
 import { ElMessage } from 'element-plus';
+import AppDialog from '@/components/AppDialog.vue';
 
 import { agentWorkData } from '@/pinia/agentWork';
 
@@ -475,7 +476,7 @@ function startSkillLoginAgent() {
   loginAgentStatus.value = 'running';
   loginAgentMessages.value = [];
   loginVerificationCode.value = '';
-  appendLoginAgentMessage('system', `已接收 ${pendingLoginSkill.value.name} 登录任务，开始调用 Playwright 自动执行。`);
+  appendLoginAgentMessage('system', `已接收 ${pendingLoginSkill.value.name} 登录任务，开始调用浏览器自动执行。`);
   scheduleLoginAgentStep(400, () => appendLoginAgentMessage('agent', '创建隔离浏览器上下文，打开目标 TMS 登录页。'));
   scheduleLoginAgentStep(1000, () => appendLoginAgentMessage('agent', '识别用户名、密码输入框，已使用当前表单凭据填充。'));
   scheduleLoginAgentStep(1600, () => appendLoginAgentMessage('agent', '点击登录按钮，等待目标系统返回校验结果。'));
@@ -772,20 +773,8 @@ onBeforeUnmount(() => {
       </div>
     </section>
 
-    <div v-if="pendingLoginSkill" class="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/40 p-6">
-      <div class="w-full max-w-[560px] overflow-hidden rounded-md border border-[#deded9] bg-white shadow-xl">
-        <div class="flex h-12 items-center justify-between border-b border-[#e2e2dc] px-4">
-          <div class="flex items-center gap-2.5">
-            <div class="flex h-7 w-7 items-center justify-center rounded-md bg-[#f2f2ef] text-slate-700">
-              <Icon :svg="strokeIconPaths.user" :size="16" />
-            </div>
-            <h2 class="text-sm font-semibold leading-5 text-slate-950">{{ pendingLoginSkill.name }}</h2>
-          </div>
-          <button type="button" class="rounded-md p-1 text-slate-400 hover:bg-[#f7f7f5] hover:text-slate-700" @click="cancelSkillLogin">
-            <Icon :svg="strokeIconPaths.x" :size="16" />
-          </button>
-        </div>
-        <div class="space-y-4 px-4 py-4">
+    <AppDialog v-if="pendingLoginSkill" :model-value="true" :title="pendingLoginSkill.name" width="560px" @update:model-value="cancelSkillLogin">
+        <div class="space-y-4">
           <label v-if="isPendingTmsSyncEmployee" class="block">
             <span class="mb-1.5 block text-xs font-medium text-slate-600">需要连接的系统地址：</span>
             <input
@@ -816,45 +805,6 @@ onBeforeUnmount(() => {
                 placeholder="请输入密码"
               />
             </label>
-          </div>
-
-          <div class="flex items-center justify-between gap-3">
-            <div v-if="isPendingTmsSyncEmployee" class="min-w-0 text-xs leading-5 text-slate-500">
-              大卡数字人将会加密存储您提供的账密，并提供
-              <a
-                href="/legal/information-protection-commitment.html"
-                target="_blank"
-                rel="noreferrer"
-                class="font-medium text-blue-600 hover:text-blue-700 hover:underline"
-              >信息保护承诺书</a>
-            </div>
-            <div v-else class="min-w-0 text-xs leading-5 text-slate-500">
-              Agent 将使用 Playwright 自动打开目标系统并完成登录。
-            </div>
-            <div class="flex shrink-0 items-center gap-2">
-              <button
-                type="button"
-                class="rounded-md border border-[#deded9] px-3 py-1.5 text-sm text-slate-600 hover:bg-[#f7f7f5]"
-                @click="cancelSkillLogin"
-              >
-                取消
-              </button>
-              <button
-                type="button"
-                class="rounded-md px-3 py-1.5 text-sm font-medium transition"
-                :class="
-                  loginAgentStatus === 'complete'
-                    ? 'bg-blue-600 text-white hover:bg-blue-500'
-                    : loginAgentStatus === 'idle'
-                      ? 'bg-slate-900 text-white hover:bg-slate-800'
-                      : 'cursor-not-allowed bg-slate-200 text-slate-500'
-                "
-                :disabled="loginAgentStatus === 'running' || loginAgentStatus === 'waitingCode'"
-                @click="confirmSkillLogin"
-              >
-                {{ loginConfirmText }}
-              </button>
-            </div>
           </div>
 
           <div v-if="loginAgentStatus !== 'idle'" class="overflow-hidden rounded-md border border-[#deded9] bg-[#fbfbfa]">
@@ -897,7 +847,7 @@ onBeforeUnmount(() => {
               />
               <button
                 type="button"
-                class="rounded-md bg-slate-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-slate-800"
+                class="dialog-button dialog-primary"
                 @click="submitLoginVerificationCode"
               >
                 提交
@@ -905,8 +855,14 @@ onBeforeUnmount(() => {
             </div>
           </div>
         </div>
-      </div>
-    </div>
+      <template #footer>
+        <div class="dialog-footer">
+          <p v-if="isPendingTmsSyncEmployee" class="dialog-note">大卡数字人将会加密存储您提供的账密，并提供 <a href="/legal/information-protection-commitment.html" target="_blank" rel="noreferrer" class="font-medium text-blue-600 hover:underline">信息保护承诺书</a></p>
+          <p v-else class="dialog-note">Agent 将使用浏览器自动打开目标系统并完成登录。</p>
+          <div class="dialog-actions"><button type="button" class="dialog-button" @click="cancelSkillLogin">取消</button><button type="button" class="dialog-button dialog-primary" :disabled="loginAgentStatus === 'running' || loginAgentStatus === 'waitingCode'" @click="confirmSkillLogin">{{ loginConfirmText }}</button></div>
+        </div>
+      </template>
+    </AppDialog>
   </div>
 </template>
 
