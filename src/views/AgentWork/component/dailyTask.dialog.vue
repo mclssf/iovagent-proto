@@ -21,6 +21,12 @@ const submitting = ref(false);
 let dragDepth = 0;
 const runtime = computed(() => tasks.projects[props.projectId]);
 const form = reactive<DailyTaskDraft>({ name: '', trigger: 'once', eventType: 'parking', threshold: 30, fenceId: '', time: '18:00', prompt: '', confirmBeforeSend: true, attachments: [] });
+const availableTaskTypes = computed(() =>
+  (Object.entries(taskTypeLabels) as Array<[DailyTaskDraft['trigger'], string]>)
+    .filter(([type]) => Boolean(props.projectId) || type !== 'event')
+    .map(([type, label]) => [type, !props.projectId && type === 'schedule' ? '定时任务' : label] as const),
+);
+const exampleLabel = computed(() => form.trigger === 'once' ? '使用历史轨迹示例' : !props.projectId && form.trigger === 'schedule' ? '使用个人定时示例' : '使用短信通知示例');
 const events = computed(() => eventDefinitions.map((event) => ({ ...event, enabled: runtime.value?.skillIds.includes(monitorDefinitions.find((monitor) => monitor.id === event.monitor)!.skillId) })));
 const isFence = computed(() => form.trigger === 'event' && form.eventType.startsWith('fence-'));
 
@@ -41,6 +47,11 @@ watch(() => props.projectId, () => { emit('update:modelValue', false); });
 function example() {
   if (form.trigger === 'once') {
     form.prompt = '查询沪A12345在180天之前的轨迹，返回轨迹摘要和可下载的明细文件。';
+    return;
+  }
+  if (form.trigger === 'schedule' && !props.projectId) {
+    if (!form.name) form.name = '每日工作事项整理';
+    form.prompt = '每天整理我的待办事项和个人知识库更新，输出今日重点与需要确认的工作，不读取任何项目运单数据。';
     return;
   }
   if (!form.name) form.name = '异常事件通知司机';
@@ -65,6 +76,7 @@ function dropFiles(event: DragEvent) {
 function save() {
   if (submitting.value) return;
   try {
+    if (!props.projectId && form.trigger === 'event') { error.value = '条件触发任务需要在项目中创建'; return; }
     const event = events.value.find((item) => item.id === form.eventType);
     if (form.trigger === 'event' && !event?.enabled) { error.value = '请先在项目技能中启用对应的判断任务'; return; }
     submitting.value = true;
@@ -79,7 +91,7 @@ function save() {
   <AppDialog :model-value="modelValue" :title="task ? '编辑任务' : '新建任务'" @update:model-value="emit('update:modelValue', $event)">
     <form id="daily-task-form" class="dt-surface dt-form" @submit.prevent="save">
       <div class="dt-task-types" role="radiogroup" aria-label="任务类型">
-        <label v-for="(label, type) in taskTypeLabels" :key="type" :class="{ selected: form.trigger === type, disabled: (type !== 'once' && !projectId) || (type === 'once' && !!task) }"><input v-model="form.trigger" type="radio" name="task-type" :value="type" :disabled="(type !== 'once' && !projectId) || (type === 'once' && !!task)" />{{ label }}</label>
+        <label v-for="[type, label] in availableTaskTypes" :key="type" :class="{ selected: form.trigger === type, disabled: type === 'once' && !!task }"><input v-model="form.trigger" type="radio" name="task-type" :value="type" :disabled="type === 'once' && !!task" />{{ label }}</label>
       </div>
       <label>任务名称{{ form.trigger === 'once' ? '（选填）' : '' }}<input v-model="form.name" maxlength="40" :placeholder="form.trigger === 'once' ? '根据执行指令自动命名' : '例如：异常停车通知司机'" :required="form.trigger !== 'once'" /></label>
       <template v-if="form.trigger === 'event'">
@@ -94,7 +106,7 @@ function save() {
       </template>
       <label v-else-if="form.trigger === 'schedule'">每日执行时间（北京时间）<input v-model="form.time" type="time" required /></label>
       <div>
-        <div class="dt-prompt-label"><label for="daily-task-prompt">要做的事情</label><button type="button" class="dt-text-button" @click="example">{{ form.trigger === 'once' ? '使用历史轨迹示例' : '使用短信通知示例' }}</button></div>
+        <div class="dt-prompt-label"><label for="daily-task-prompt">要做的事情</label><button type="button" class="dt-text-button" @click="example">{{ exampleLabel }}</button></div>
         <div v-if="form.trigger === 'once'" class="dt-task-composer" :class="{ dragging }" @dragenter.prevent="dragDepth++; dragging = true" @dragover.prevent @dragleave.prevent="dragDepth = Math.max(0, dragDepth - 1); dragging = dragDepth > 0" @drop.prevent="dropFiles">
           <div v-if="form.attachments?.length" class="dt-input-files">
             <div v-for="(file, index) in form.attachments" :key="`${file.name}-${index}`" class="dt-input-file"><Icon :svg="strokeIconPaths.file" :size="15" /><span :title="file.name">{{ file.name }}</span><button type="button" class="dt-icon" :aria-label="`移除附件 ${file.name}`" @click="form.attachments.splice(index, 1)"><Icon :svg="strokeIconPaths.x" :size="12" /></button></div>
@@ -109,6 +121,6 @@ function save() {
       <p v-if="error" class="dt-error" role="alert">{{ error }}</p>
     </form>
     <template #footer><div class="dialog-actions"><button type="button" class="dialog-button" @click="emit('update:modelValue', false)">取消</button><button type="submit" form="daily-task-form" class="dialog-button dialog-primary" :disabled="submitting">{{ task ? '保存修改' : form.trigger === 'once' ? '提交并执行一次' : '创建任务' }}</button></div></template>
-    <GeofenceDialog v-model="showFences" :project-id="projectId" @saved="form.fenceId = $event" />
+    <GeofenceDialog v-if="projectId" v-model="showFences" :project-id="projectId" @saved="form.fenceId = $event" />
   </AppDialog>
 </template>

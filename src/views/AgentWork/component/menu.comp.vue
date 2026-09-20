@@ -31,9 +31,15 @@ const currentUserName = computed(
 );
 
 const publicNavs: { icon: string; id: PageId; label: string }[] = [
+  { id: 'dailyTasks', label: '做任务', icon: strokeIconPaths.alarmClock },
   { id: 'knowledgeBase', label: '我的知识库', icon: strokeIconPaths.book },
   { id: 'downloads', label: '下载', icon: strokeIconPaths.download },
 ];
+const personalTaskUnreadCount = computed(() =>
+  dailyTasks.tasks
+    .filter((task) => !task.projectId)
+    .reduce((total, task) => total + (dailyTasks.unreadResultsByTask[task.id] ?? 0), 0),
+);
 
 interface KnowledgeBaseConversationCase {
   icon: string;
@@ -281,6 +287,21 @@ const kbConversationCases: KnowledgeBaseConversationCase[] = [
   },
 ];
 
+const featuredConversationCaseIds = new Set([
+  'KB-CASE-001',
+  'KB-CASE-002',
+  'KB-CASE-004',
+  'PDA-CASE-001',
+  'PDA-CASE-002',
+  'PDA-CASE-003',
+]);
+const featuredConversationCases = kbConversationCases.filter((item) => featuredConversationCaseIds.has(item.id));
+const unopenedFeaturedConversationCases = computed(() =>
+  featuredConversationCases.filter(
+    (item) => !recentConversations.value.some((conversation) => conversation.title === item.title),
+  ),
+);
+
 const projectNavs: { icon: string; id: PageId; label: string }[] = [
   { id: 'agent', label: '智能体工作台', icon: strokeIconPaths.bot },
   { id: 'dailyTasks', label: '做任务', icon: strokeIconPaths.alarmClock },
@@ -326,9 +347,27 @@ function goNav(page: PageId) {
   router.push({ name: agentWorkRouteName[page] });
 }
 
+function goPublicNav(page: PageId) {
+  if (page === 'dailyTasks') {
+    router.push({ name: agentWorkRouteName.dailyTasks, query: { scope: 'personal' } });
+    return;
+  }
+  goNav(page);
+}
+
 function isNavActive(page: PageId) {
   if (page === 'projects' && route.name === agentWorkRouteName.projectCreate) return true;
   return route.name === agentWorkRouteName[page];
+}
+
+function isPublicNavActive(page: PageId) {
+  if (page === 'dailyTasks') return route.name === agentWorkRouteName.dailyTasks && route.query.scope === 'personal';
+  return isNavActive(page);
+}
+
+function isProjectNavActive(page: PageId) {
+  if (page === 'dailyTasks') return route.name === agentWorkRouteName.dailyTasks && route.query.scope !== 'personal';
+  return isNavActive(page);
 }
 
 function startNewConversation() {
@@ -430,11 +469,12 @@ function logout() {
           :key="item.id"
           type="button"
           class="flex h-9 w-full items-center gap-2.5 rounded-md px-3 text-sm transition"
-          :class="isNavActive(item.id) ? 'bg-white font-medium text-slate-950' : 'text-slate-600 hover:bg-white/75 hover:text-slate-900'"
-          @click="goNav(item.id)"
+          :class="isPublicNavActive(item.id) ? 'bg-white font-medium text-slate-950' : 'text-slate-600 hover:bg-white/75 hover:text-slate-900'"
+          @click="goPublicNav(item.id)"
         >
           <Icon :svg="item.icon" :size="16" />
           {{ item.label }}
+          <span v-if="item.id === 'dailyTasks' && personalTaskUnreadCount" class="ml-auto inline-flex h-[18px] min-w-[18px] shrink-0 items-center justify-center rounded-full bg-[#2563eb] px-1 text-[10px] leading-none text-white tabular-nums" :aria-label="`${personalTaskUnreadCount} 条未读结果`">{{ personalTaskUnreadCount }}</span>
         </button>
       </nav>
 
@@ -488,7 +528,7 @@ function logout() {
           </div>
 
           <button
-            v-for="item in kbConversationCases"
+            v-for="item in unopenedFeaturedConversationCases"
             :key="item.id"
             type="button"
             class="group flex h-9 w-full items-center rounded-md px-2.5 text-left text-xs text-slate-700 transition hover:bg-white/75"
@@ -561,7 +601,7 @@ function logout() {
                 :aria-label="item.label"
                 class="flex h-8 w-full items-center gap-2 rounded-md px-2 text-xs transition"
                 :class="
-                  store.workspaceMode === 'project' && store.currentProjectId === project.id && isNavActive(item.id)
+                  store.workspaceMode === 'project' && store.currentProjectId === project.id && isProjectNavActive(item.id)
                     ? 'bg-white font-medium text-slate-950'
                     : 'text-slate-500 hover:bg-white/75 hover:text-slate-900'
                 "

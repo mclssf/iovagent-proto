@@ -156,23 +156,7 @@ const projectWelcomeMessages: ChatMessage[] = [
   { role: 'agent', text: '发现 2 单非目的地物流园长停、1 单 GPS 轨迹疑似造假，建议优先复核。' },
 ];
 
-const conversationSeeds: AgentConversation[] = [
-  ['C001', '今日在途异常处理建议', '今天有哪些真正需要优先处理的在途异常？', '已汇总高风险运单，并按影响程度给出处理顺序。', '10分钟前'],
-  ['C002', '沪A12345当前位置查询', '查询沪A12345现在的位置。', '车辆最新定位在 G60 沪昆高速嘉兴服务区东侧，定位状态正常。', '26分钟前'],
-  ['C003', '华东线路高风险运单复核', '复核华东线路今天的高风险运单。', '已完成复核，建议优先人工核验 3 单。', '今天 09:42'],
-  ['C004', '8月16日在途日报', '生成昨天的在途运输日报。', '日报已生成，包含运单规模、异常分布和处理建议。', '昨天'],
-  ['C005', '承运商异常集中度分析', '分析近期异常是否集中在特定承运商。', '异常主要集中在安捷物流与远恒运输，已整理对应线路。', '昨天'],
-  ['C006', '皖K55821停车事件复盘', '复盘皖K55821的异常停车。', '该车存在一次合理休息和一次高风险非合同经停。', '8月15日'],
-  ['C007', '冷链到货时效预测', '预测冷链项目今晚的到货情况。', '预计 61 单按时到达，3 单存在延误风险。', '8月14日'],
-].map(([id, title, userText, agentText, updatedAt]) => ({
-  id,
-  title,
-  updatedAt,
-  messages: [
-    { role: 'user', text: userText },
-    { role: 'agent', text: agentText },
-  ],
-}));
+const conversationSeeds: AgentConversation[] = [];
 
 function cloneChatMessages(messages: ChatMessage[]) {
   return messages.map((message) => ({

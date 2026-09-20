@@ -32,6 +32,11 @@ const isPersonal = computed(() => route.query.scope === 'personal' || work.works
 const projectId = computed(() => isPersonal.value ? '' : work.currentProjectId);
 const runtime = computed(() => store.projects[projectId.value]);
 const projectTasks = computed(() => store.tasks.filter((task) => task.projectId === projectId.value));
+const availableTaskTypes = computed(() =>
+  (Object.entries(taskTypeLabels) as Array<[DailyTask['trigger'], string]>)
+    .filter(([type]) => !isPersonal.value || type !== 'event')
+    .map(([type, label]) => [type, isPersonal.value && type === 'schedule' ? '定时任务' : label] as const),
+);
 const selected = computed(() => projectTasks.value.find((task) => task.id === selectedId.value));
 const editing = computed(() => projectTasks.value.find((task) => task.id === editingId.value));
 const filteredTasks = computed(() => projectTasks.value.filter((task) => {
@@ -124,10 +129,10 @@ async function remove(task: DailyTask) {
       <div class="dt-task-column">
         <div class="dt-list-toolbar">
           <div class="dt-list-heading"><span>{{ projectTasks.length }} 项任务 <span class="dt-secondary">· {{ projectTasks.filter(task => getTaskStatus(task) === 'running').length }} 项执行中</span></span><button class="dt-button primary" type="button" @click="create"><Icon :svg="strokeIconPaths.plus" :size="15" />新建任务</button></div>
-          <div class="dt-type-filter" role="group" aria-label="任务类型筛选"><button type="button" :aria-pressed="typeFilter === 'all'" @click="typeFilter = 'all'">全部</button><button v-for="(label, type) in taskTypeLabels" :key="type" type="button" :aria-pressed="typeFilter === type" @click="typeFilter = type">{{ label }}</button></div>
+          <div class="dt-type-filter" role="group" aria-label="任务类型筛选"><button type="button" :aria-pressed="typeFilter === 'all'" @click="typeFilter = 'all'">全部</button><button v-for="[type, label] in availableTaskTypes" :key="type" type="button" :aria-pressed="typeFilter === type" @click="typeFilter = type">{{ label }}</button></div>
           <div class="dt-filters"><div class="dt-search"><Icon :svg="strokeIconPaths.search" :size="14" /><input v-model="search" aria-label="搜索任务" placeholder="搜索任务" /></div><select v-model="filter" aria-label="任务状态筛选"><option value="all">全部状态</option><option v-for="(label, value) in taskStatusLabels" :key="value" :value="value">{{ label }}</option></select></div>
         </div>
-        <section class="dt-task-area" aria-label="项目做任务列表">
+        <section class="dt-task-area" :aria-label="isPersonal ? '个人做任务列表' : '项目做任务列表'">
           <div v-if="filteredTasks.length" class="dt-task-grid">
             <article v-for="task in filteredTasks" :key="task.id" class="dt-task-card" :class="{ selected: selectedId === task.id }">
               <button type="button" class="dt-task-main" :aria-label="`查看任务 ${task.name}`" :aria-pressed="selectedId === task.id" @click="selectTask(task.id)">
