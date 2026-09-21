@@ -3,7 +3,8 @@ import { computed, reactive, ref } from 'vue';
 import { storeToRefs } from 'pinia';
 
 import { Icon } from '@packages/icon';
-import { ElDialog, ElMessage, ElMessageBox, ElOption, ElSelect } from 'element-plus';
+import { ElMessage, ElMessageBox, ElOption, ElSelect } from 'element-plus';
+import AppDialog from '@/components/AppDialog.vue';
 
 import { agentWorkData } from '@/pinia/agentWork';
 import { commonSkillGroups, useAgentOpsStore } from '@/pinia/agentOps';
@@ -477,6 +478,7 @@ async function removeManagedSkill(skill: ManagedSkill) {
     await ElMessageBox.confirm(`删除后将无法在项目中继续选择“${skill.name}”，是否确认删除？`, '删除 Skill', {
       confirmButtonText: '删除',
       cancelButtonText: '取消',
+      confirmButtonClass: 'dialog-danger',
       type: 'warning',
     });
   } catch {
@@ -879,7 +881,7 @@ function markTmsCustomerProcessed(customerId: string) {
       </div>
     </main>
 
-    <ElDialog v-model="isSkillFormModalOpen" :title="skillFormTitle" width="1160px" top="4vh" class="ops-tool-dialog skill-config-dialog" :close-on-click-modal="false" @closed="resetSkillForm">
+    <AppDialog v-model="isSkillFormModalOpen" :title="skillFormTitle" width="1160px" class="ops-tool-dialog skill-config-dialog" @closed="resetSkillForm">
       <form id="skill-config-form" class="skill-config-grid" @submit.prevent="confirmSkillForm">
         <section class="skill-basics">
           <h3 class="text-sm font-semibold text-slate-950">基本信息</h3>
@@ -911,56 +913,25 @@ function markTmsCustomerProcessed(customerId: string) {
           </section>
         </div>
       </form>
-      <template #footer><div class="flex flex-wrap items-center justify-between gap-3"><span class="text-xs text-slate-500">保存后同步更新 Tool 管理中的关联 Skill 列表。</span><div class="flex gap-2"><button type="button" class="ops-secondary" @click="closeSkillFormModal">取消</button><button type="submit" form="skill-config-form" class="ops-primary">{{ isEditingSkill ? '保存' : '添加' }}</button></div></div></template>
-    </ElDialog>
+      <template #footer><div class="dialog-footer"><span class="dialog-note">保存后同步更新 Tool 管理中的关联 Skill 列表。</span><div class="dialog-actions"><button type="button" class="ops-secondary" @click="closeSkillFormModal">取消</button><button type="submit" form="skill-config-form" class="ops-primary">{{ isEditingSkill ? '保存' : '添加' }}</button></div></div></template>
+    </AppDialog>
 
-    <div v-if="isSkillPreviewModalOpen && previewingSkill" class="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/40 p-6">
-      <div class="flex max-h-[88vh] w-full max-w-[820px] flex-col overflow-hidden rounded-md border border-[#deded9] bg-white shadow-xl">
-        <div class="flex h-12 shrink-0 items-center justify-between border-b border-[#e2e2dc] px-4">
-          <div class="min-w-0">
-            <h2 class="truncate text-sm font-semibold leading-5 text-slate-950">{{ previewingSkill.name }}</h2>
-            <p class="truncate text-xs leading-4 text-slate-500">{{ previewingSkill.fileName }}</p>
-          </div>
-          <div class="flex items-center gap-2">
-            <button type="button" class="inline-flex items-center gap-1 rounded-md border border-[#deded9] px-2.5 py-1.5 text-xs text-slate-600 hover:bg-[#f7f7f5]" @click="downloadTextFile(previewingSkill.fileName, previewingSkill.content)">
-              <Icon :svg="strokeIconPaths.download" :size="13" />
-              下载
-            </button>
-            <button type="button" class="rounded-md p-1 text-slate-400 hover:bg-[#f7f7f5] hover:text-slate-700" title="关闭" @click="closeSkillPreviewModal">
-              <Icon :svg="strokeIconPaths.x" :size="16" />
-            </button>
-          </div>
-        </div>
-        <div class="flex flex-wrap gap-x-5 gap-y-1 border-b border-[#e2e2dc] px-4 py-3 text-xs text-slate-500">
+    <AppDialog v-if="previewingSkill" :model-value="isSkillPreviewModalOpen" :title="previewingSkill.name" width="820px" @update:model-value="closeSkillPreviewModal">
+        <p class="dialog-description">{{ previewingSkill.fileName }}</p>
+        <div class="mb-4 flex flex-wrap gap-x-5 gap-y-1 border-b border-[#e2e2dc] pb-4 text-xs text-slate-500">
           <span>分类：<strong class="font-medium text-slate-700">{{ previewingSkill.category }}</strong></span>
           <span>Skill 分组：<strong class="font-medium text-slate-700">{{ previewingSkill.group }}</strong></span>
           <span>最后更新：<strong class="font-medium text-slate-700">{{ previewingSkill.updatedAt }} · {{ previewingSkill.updatedBy }}</strong></span>
           <span class="w-full">私有工具：<strong class="font-medium text-slate-700">{{ previewingSkill.privateToolIds.map(toolName).join('、') || '未绑定私有工具' }}</strong></span>
           <p class="w-full pt-1 text-sm leading-5 text-slate-600">{{ previewingSkill.description }}</p>
         </div>
-        <pre class="min-h-0 flex-1 overflow-auto whitespace-pre-wrap bg-[#fbfbfa] p-5 text-xs leading-6 text-slate-700">{{ previewingSkill.content }}</pre>
-      </div>
-    </div>
+        <pre class="overflow-auto whitespace-pre-wrap rounded-md bg-[#f8f9fa] p-4 text-xs leading-6 text-slate-700">{{ previewingSkill.content }}</pre>
+        <template #footer><div class="dialog-actions"><button type="button" class="dialog-button" @click="closeSkillPreviewModal">关闭</button><button type="button" class="dialog-button dialog-primary" @click="downloadTextFile(previewingSkill.fileName, previewingSkill.content)"><Icon :svg="strokeIconPaths.download" :size="15" />下载</button></div></template>
+    </AppDialog>
 
-    <div v-if="isValidationModalOpen && validatingEmployee" class="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/40 p-6">
-      <div class="flex max-h-[88vh] w-full max-w-[760px] flex-col overflow-hidden rounded-md border border-[#deded9] bg-white shadow-xl">
-        <div class="flex h-12 shrink-0 items-center justify-between border-b border-[#e2e2dc] px-4">
-          <div class="flex min-w-0 items-center gap-2.5">
-            <div class="flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-[#f2f2ef] text-slate-700">
-              <Icon :svg="strokeIconPaths.shield" :size="16" />
-            </div>
-            <div class="min-w-0">
-              <h2 class="truncate text-sm font-semibold leading-5 text-slate-950">验证数据员工</h2>
-              <p class="truncate text-xs leading-4 text-slate-500">{{ validatingEmployee.name }} · {{ validatingEmployee.loginType }}</p>
-            </div>
-          </div>
-          <button type="button" class="rounded-md p-1 text-slate-400 hover:bg-[#f7f7f5] hover:text-slate-700" @click="closeValidationModal">
-            <Icon :svg="strokeIconPaths.x" :size="16" />
-          </button>
-        </div>
-
-        <div class="min-h-0 flex-1 overflow-auto">
-          <div class="grid gap-4 p-4 lg:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]">
+    <AppDialog v-if="validatingEmployee" :model-value="isValidationModalOpen" title="验证数据员工" width="760px" @update:model-value="closeValidationModal">
+          <p class="dialog-description">{{ validatingEmployee.name }} · {{ validatingEmployee.loginType }}</p>
+          <div class="grid gap-5 sm:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]">
             <div class="space-y-3">
               <div class="rounded-md border border-[#deded9] bg-[#fbfbfa] px-3 py-2 text-xs leading-5 text-slate-500">
                 接入地址：<span class="font-mono text-slate-700">{{ validatingEmployee.loginUrl }}</span>
@@ -1029,9 +1000,6 @@ function markTmsCustomerProcessed(customerId: string) {
                 </div>
               </div>
 
-              <button type="button" class="w-full rounded-md bg-slate-900 px-3 py-2 text-sm font-medium text-white hover:bg-slate-800" @click="validateEmployee">
-                验证
-              </button>
             </div>
 
             <div class="flex min-h-[360px] flex-col overflow-hidden rounded-md border border-[#deded9] bg-[#fbfbfa]">
@@ -1077,25 +1045,11 @@ function markTmsCustomerProcessed(customerId: string) {
               </div>
             </div>
           </div>
-        </div>
-      </div>
-    </div>
+          <template #footer><div class="dialog-actions"><button type="button" class="dialog-button" @click="closeValidationModal">关闭</button><button type="button" class="dialog-button dialog-primary" @click="validateEmployee">验证</button></div></template>
+    </AppDialog>
 
-    <div v-if="isCreateEmployeeModalOpen" role="dialog" aria-modal="true" :aria-label="employeeFormTitle" class="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/40 p-6">
-      <div class="flex max-h-[88vh] w-full max-w-[760px] flex-col overflow-hidden rounded-md border border-[#deded9] bg-white shadow-xl">
-        <div class="flex h-12 shrink-0 items-center justify-between border-b border-[#e2e2dc] px-4">
-          <div class="flex items-center gap-2.5">
-            <div class="flex h-7 w-7 items-center justify-center rounded-md bg-[#f2f2ef] text-slate-700">
-              <Icon :svg="strokeIconPaths.bot" :size="16" />
-            </div>
-            <h2 class="text-sm font-semibold leading-5 text-slate-950">{{ employeeFormTitle }}</h2>
-          </div>
-          <button type="button" aria-label="关闭数据员工 Skill 表单" class="rounded-md p-1 text-slate-400 hover:bg-[#f7f7f5] hover:text-slate-700" @click="closeCreateEmployeeModal">
-            <Icon :svg="strokeIconPaths.x" :size="16" />
-          </button>
-        </div>
-
-        <div class="min-h-0 flex-1 space-y-3 overflow-auto px-4 py-4">
+    <AppDialog :model-value="isCreateEmployeeModalOpen" :title="employeeFormTitle" width="760px" @update:model-value="closeCreateEmployeeModal">
+        <div class="space-y-4">
           <label class="block">
             <span class="mb-1.5 block text-xs font-medium text-slate-600">Skill 名称</span>
             <input
@@ -1156,16 +1110,15 @@ function markTmsCustomerProcessed(customerId: string) {
           </div>
         </div>
 
-        <div class="flex shrink-0 items-center justify-end gap-2 border-t border-[#e2e2dc] px-4 py-3">
-          <button type="button" class="rounded-md border border-[#deded9] px-3 py-1.5 text-sm text-slate-600 hover:bg-[#f7f7f5]" @click="closeCreateEmployeeModal">
+        <template #footer><div class="dialog-actions">
+          <button type="button" class="dialog-button" @click="closeCreateEmployeeModal">
             取消
           </button>
-          <button type="button" class="rounded-md bg-slate-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-slate-800" @click="confirmCreateEmployee">
+          <button type="button" class="dialog-button dialog-primary" @click="confirmCreateEmployee">
             {{ employeeFormConfirmText }}
           </button>
-        </div>
-      </div>
-    </div>
+        </div></template>
+    </AppDialog>
   </div>
 </template>
 

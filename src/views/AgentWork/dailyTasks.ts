@@ -69,13 +69,27 @@ export interface WaybillEvent {
 
 export interface DailyTaskDraft {
   name: string;
-  trigger: 'event' | 'schedule';
+  trigger: 'once' | 'event' | 'schedule';
   eventType: EventType;
   threshold: number;
   fenceId: string;
   time: string;
   prompt: string;
   confirmBeforeSend: boolean;
+  attachments?: TaskAttachment[];
+}
+
+export interface TaskAttachment {
+  name: string;
+  size: number;
+  type: string;
+  lastModified: number;
+}
+
+export interface TaskResultFile {
+  name: string;
+  mimeType: string;
+  content: string;
 }
 
 export interface DailyTask extends DailyTaskDraft {
@@ -85,13 +99,15 @@ export interface DailyTask extends DailyTaskDraft {
   createdAt: number;
   lastScheduledDay: string;
   runs: TaskRun[];
+  origin?: 'manual' | 'workbench';
+  conversationId?: string;
 }
 
 export interface TaskRun {
   id: string;
   startedAt: number;
   finishedAt?: number;
-  source: 'event' | 'schedule' | 'test';
+  source: 'event' | 'schedule' | 'test' | 'manual' | 'workbench';
   status: 'running' | 'waiting' | 'complete' | 'cancelled';
   event?: WaybillEvent;
   prompt: string;
@@ -99,6 +115,9 @@ export interface TaskRun {
   activeStep: number;
   nextStepAt: number;
   result: string;
+  readAt?: number;
+  toolJobId?: string;
+  files?: TaskResultFile[];
   action?: { channel: '短信' | '邮件'; recipient: string; content: string; status: 'pending' | 'sent' | 'cancelled' };
 }
 
@@ -128,10 +147,26 @@ export const eventLabel = (type: EventType) => eventDefinitions.find((event) => 
 export const isThresholdEvent = (type: EventType) => ['parking', 'offline', 'deviation'].includes(type);
 
 export function triggerLabel(task: DailyTaskDraft, fences: ProjectFence[] = []) {
+  if (task.trigger === 'once') return '普通任务 · 提交后执行一次';
   if (task.trigger === 'schedule') return `每天 ${task.time}`;
   const threshold = isThresholdEvent(task.eventType) ? ` ≥ ${task.threshold} ${task.eventType === 'deviation' ? '公里' : '分钟'}` : '';
   const fence = task.eventType.startsWith('fence-') ? ` · ${fences.find((item) => item.id === task.fenceId)?.name ?? '未配置围栏'}` : '';
   return `${eventLabel(task.eventType)}${threshold}${fence}`;
+}
+
+export const taskTypeLabels = { once: '普通任务', event: '条件触发', schedule: '定时 / 持续' };
+export const taskRunLabels: Record<TaskRun['status'], string> = { running: '执行中', waiting: '待确认', complete: '已完成', cancelled: '已取消' };
+
+export type DailyTaskStatus = 'complete' | 'running' | 'paused';
+export const taskStatusLabels: Record<DailyTaskStatus, string> = { complete: '已完成', running: '执行中', paused: '已暂停' };
+
+export function hasTaskResult(run: TaskRun) {
+  return run.status !== 'running' && Boolean(run.result.trim() || run.files?.length);
+}
+
+export function getTaskStatus(task: DailyTask): DailyTaskStatus {
+  if (task.trigger === 'once') return task.runs.some((run) => run.status === 'complete' && hasTaskResult(run)) ? 'complete' : 'running';
+  return task.enabled ? 'running' : 'paused';
 }
 
 export function formatTaskTime(value: number) {

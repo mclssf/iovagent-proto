@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue';
-import { ElDialog } from 'element-plus';
+import AppDialog from '@/components/AppDialog.vue';
 import { Icon } from '@packages/icon';
 import { skillGroups } from '@/pinia/agentOps';
 import type { SkillGroup, ToolKind } from '@/pinia/agentOps';
@@ -45,7 +45,7 @@ watch(() => [props.open, props.kind, props.context], () => { clearFilters(); pen
 </script>
 
 <template>
-  <ElDialog :model-value="open" :title="`添加 ${noun}`" width="960px" top="5vh" class="ops-tool-dialog capability-picker-dialog" append-to-body :close-on-click-modal="false" @update:model-value="emit('close')">
+  <AppDialog :model-value="open" :title="`添加 ${noun}`" width="960px" class="ops-tool-dialog capability-picker-dialog" @update:model-value="emit('close')">
     <div class="capability-picker">
       <p class="picker-context">{{ context }}</p>
       <p class="picker-help">{{ kind === 'skill' ? '按组筛选后可批量勾选，也可搜索并逐项选择。已加载的 Skill 不会重复添加。' : '搜索并勾选 MCP 服务或内置API工具，一次添加多个。Skill 私有加载的工具仍可独立选择。' }}</p>
@@ -78,7 +78,7 @@ watch(() => [props.open, props.kind, props.context], () => { clearFilters(); pen
     <template #footer>
       <div class="picker-footer"><div><span role="status">本次勾选 {{ pending.length }} 个 {{ noun }}</span><button v-if="pending.length" type="button" class="picker-clear" @click="pendingIds = []">清空勾选</button><p>勾选跨搜索和筛选保留；添加后请保存配置。</p></div><div class="picker-actions"><button type="button" class="ops-secondary" @click="emit('close')">取消</button><button type="button" class="ops-primary" :disabled="!pending.length" @click="emit('add', pending.map(item => item.id))">添加已勾选（{{ pending.length }}）</button></div></div>
     </template>
-  </ElDialog>
+  </AppDialog>
 </template>
 
 <style scoped>

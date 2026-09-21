@@ -1,6 +1,7 @@
 <script lang="ts" setup>
 import { computed, nextTick, onBeforeUnmount, reactive, ref, watch } from 'vue';
-import { ElDialog, ElMessage, ElMessageBox } from 'element-plus';
+import { ElMessage, ElMessageBox } from 'element-plus';
+import AppDialog from '@/components/AppDialog.vue';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import { Icon } from '@packages/icon';
@@ -62,7 +63,7 @@ function save() {
 
 async function remove(id: string) {
   try {
-    await ElMessageBox.confirm('删除围栏后，订阅该围栏的日常任务将等待重新配置。', '删除围栏', { confirmButtonText: '删除', cancelButtonText: '取消', type: 'warning' });
+    await ElMessageBox.confirm('删除围栏后，关联的做任务配置将等待重新设置。', '删除围栏', { confirmButtonText: '删除', cancelButtonText: '取消', confirmButtonClass: 'dialog-danger', type: 'warning' });
     tasks.deleteFence(props.projectId, id);
   } catch { /* Dialog cancellation leaves the fence unchanged. */ }
 }
@@ -72,12 +73,12 @@ function callback(id: string, type: 'fence-enter' | 'fence-exit') {
   if (!project?.skillIds?.includes('custom-fence-expert')) { ElMessage.warning('请先启用自定义围栏判断技能'); return; }
   if (!runtime.value?.connected || !runtime.value.orders.length) { ElMessage.warning('请先连接数据源并接入运单'); return; }
   tasks.simulateFenceCallback(props.projectId, id, type);
-  ElMessage.success('围栏事件已产生，匹配的日常任务已触发');
+  ElMessage.success('围栏事件已产生，匹配的任务已触发');
 }
 </script>
 
 <template>
-  <ElDialog :model-value="modelValue" title="项目区域围栏" width="min(720px, calc(100vw - 32px))" append-to-body destroy-on-close @update:model-value="emit('update:modelValue', $event)" @opened="openMap" @closed="closeMap">
+  <AppDialog :model-value="modelValue" title="项目区域围栏" width="720px" destroy-on-close @update:model-value="emit('update:modelValue', $event)" @opened="openMap" @closed="closeMap">
     <div class="dt-surface">
       <div v-if="runtime?.fences.length" class="dt-fence-list">
         <div v-for="fence in runtime.fences" :key="fence.id" class="dt-fence-row">
@@ -89,7 +90,7 @@ function callback(id: string, type: 'fence-enter' | 'fence-exit') {
           </div>
         </div>
       </div>
-      <form class="dt-form" @submit.prevent="save">
+      <form id="project-fence-form" class="dt-form" @submit.prevent="save">
         <label>围栏名称<input v-model="form.name" maxlength="40" placeholder="例如：嘉定工厂装货区" required /></label>
         <div ref="mapRef" class="dt-fence-map" aria-label="围栏中心点地图" />
         <p v-if="mapFailed" class="dt-error" role="status">底图暂不可用，可通过下方经纬度设置围栏。</p>
@@ -99,8 +100,8 @@ function callback(id: string, type: 'fence-enter' | 'fence-exit') {
           <label>半径（米）<input v-model.number="form.radius" type="number" min="100" max="50000" step="100" required /></label>
         </div>
         <p v-if="error" class="dt-error" role="alert">{{ error }}</p>
-        <div class="dt-dialog-footer"><button class="dt-button" type="button" @click="emit('update:modelValue', false)">完成</button><button class="dt-button primary" type="submit"><Icon :svg="strokeIconPaths.plus" :size="14" />保存围栏</button></div>
       </form>
     </div>
-  </ElDialog>
+    <template #footer><div class="dialog-actions"><button class="dialog-button" type="button" @click="emit('update:modelValue', false)">完成</button><button class="dialog-button dialog-primary" type="submit" form="project-fence-form"><Icon :svg="strokeIconPaths.plus" :size="14" />保存围栏</button></div></template>
+  </AppDialog>
 </template>

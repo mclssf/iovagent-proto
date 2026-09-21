@@ -10,6 +10,8 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { Icon } from '@packages/icon';
 
 import { agentWorkData, quickPrompts, rightPanelTabs } from '@/pinia/agentWork';
+import { useAgentDailyTasks } from '@/pinia/agentDailyTasks';
+import { taskRunLabels } from '../dailyTasks';
 
 import { getRiskOrders, badgeToneClass } from '../utils';
 import { strokeIconPaths } from '../strokeIconPaths';
@@ -20,6 +22,18 @@ import ProjectMonitors from '../component/projectMonitors.comp.vue';
 import '../agentWorkspace.css';
 
 const store = agentWorkData();
+const dailyTasks = useAgentDailyTasks();
+const ordinaryTask = (id: string) => dailyTasks.tasks.find((task) => task.id === id);
+function openOrdinaryTask(id: string) {
+  const task = ordinaryTask(id);
+  if (!task) return;
+  if (task.projectId && (store.workspaceMode !== 'project' || store.currentProjectId !== task.projectId)) {
+    const project = store.projects.find((item) => item.id === task.projectId);
+    if (!project) return;
+    store.switchProject(project);
+  }
+  goPage('dailyTasks', { taskId: id, scope: task.projectId ? 'project' : 'personal' });
+}
 const { agentMessages, agentInput } = storeToRefs(store);
 const { goPage, createDownload, sendAgent } = useAgentWorkNav();
 const agentMessageListRef = ref<HTMLDivElement | null>(null);
@@ -62,12 +76,14 @@ interface NewConversationGuide {
   prompt: string;
   title: string;
   upload?: boolean;
-  uploadPurpose?: 'regular' | 'waybill';
+  uploadPurpose?: 'excel' | 'regular' | 'waybill';
 }
 
 interface PendingWaybillImport {
   files: File[];
   importedCount: number;
+  preferredMode?: 'create' | 'merge';
+  preferredProjectId?: string;
   source: 'regular' | 'waybill';
 }
 
@@ -127,6 +143,7 @@ const newConversationGuides: NewConversationGuide[] = [
     icon: strokeIconPaths.fileSpreadsheet,
     iconClass: 'bg-orange-50 text-orange-600',
     upload: true,
+    uploadPurpose: 'excel',
   },
 ];
 
@@ -138,8 +155,11 @@ const composerTextareaRef = ref<HTMLTextAreaElement | null>(null);
 const uploadedFiles = ref<File[]>([]);
 const isFileDragActive = ref(false);
 const isRightPanelVisible = ref(false);
-const filePickerPurpose = ref<'regular' | 'waybill'>('regular');
+const filePickerPurpose = ref<'excel' | 'regular' | 'waybill'>('regular');
 const pendingWaybillImport = ref<PendingWaybillImport | null>(null);
+const filePickerAccept = computed(() =>
+  filePickerPurpose.value === 'excel' ? '.xls,.xlsx' : filePickerPurpose.value === 'waybill' ? '.csv,.xls,.xlsx' : undefined,
+);
 let fileDragDepth = 0;
 
 function setRightPanel(key: string) {
@@ -196,13 +216,17 @@ function addUploadedFiles(files: File[]) {
   return newFiles;
 }
 
-function openFilePicker(purpose: 'regular' | 'waybill' = 'regular') {
+function openFilePicker(purpose: 'excel' | 'regular' | 'waybill' = 'regular') {
   filePickerPurpose.value = purpose;
   fileInputRef.value?.click();
 }
 
 function isSpreadsheetFile(file: File) {
   return /\.(?:csv|xls|xlsx)$/i.test(file.name);
+}
+
+function isExcelFile(file: File) {
+  return /\.(?:xls|xlsx)$/i.test(file.name);
 }
 
 function isWaybillListFile(file: File, purpose: 'regular' | 'waybill') {
@@ -212,21 +236,62 @@ function isWaybillListFile(file: File, purpose: 'regular' | 'waybill') {
   return /(?:运单|订单|货单|发运|运输|在途|车辆|物流|tms|waybill|order|shipment)/i.test(waybillSignal);
 }
 
-function isRegionVisitQuery(value: string) {
-  return /(?:是否|有没有|有无)(?:曾经)?(?:到过|到达过|去过|经过|途经|路过|驶入过|进入过)[\u4e00-\u9fa5]{2,12}(?:省|市|区|县|自治州|地区)/.test(value);
-}
-
 function openWaybillImportGuide(files: File[], purpose: 'regular' | 'waybill') {
-  const isRegionVisitFlow = isRegionVisitQuery(agentInput.value);
-  const waybillFiles = files.filter(
-    (file) => !isRegionVisitFlow && !/(?:历史到访|地区到访|区域到访)/.test(file.name) && isWaybillListFile(file, purpose),
-  );
+  if (purpose !== 'waybill') return;
+  const waybillFiles = files.filter((file) => isWaybillListFile(file, purpose));
   if (waybillFiles.length === 0) return;
   pendingWaybillImport.value = {
     files: waybillFiles,
     importedCount: 128,
+    preferredMode: 'create',
     source: purpose,
   };
+}
+
+function isDeferredWaybillImportRequest(text: string, files: File[]) {
+  if (!files.some(isExcelFile)) return false;
+  const normalized = text.replace(/\s+/g, '');
+  const hasImportAction = /(?:导入|合并|并入|加入|追加)/.test(normalized);
+  const hasMergeDestination = /(?:合并|并入|加入|追加|导入)(?:到|至|进)|(?:项目).*(?:导入|合并|并入|加入|追加)/.test(normalized);
+  return hasImportAction && hasMergeDestination;
+}
+
+function startDeferredWaybillImport(text: string, files: File[]) {
+  const excelFiles = files.filter(isExcelFile);
+  const sourceFileNames = excelFiles.map((file) => file.name);
+  const attachmentText = `附件：${sourceFileNames.join('、')}`;
+  const raw = `${text}\n${attachmentText}`;
+  const matchedProject = store.projects.find(
+    (project) => text.includes(project.name) || text.includes(project.name.replace(/项目$/, '')),
+  );
+  store.ensureConversationStarted();
+  const next: ChatMessage[] = [...store.agentMessages, { role: 'user', text: raw }];
+  store.startDelayedAgentProcess(
+    next,
+    {
+      role: 'agent',
+      title: '运单表格解析',
+      status: '已完成',
+      text: `正在解析“${sourceFileNames[0]}”，判断表格是否包含可导入的运单数据。`,
+      progressMode: true,
+      steps: [
+        { title: '读取 Excel', text: `已读取 ${sourceFileNames.length} 个 Excel 文件，开始分析工作表和表头。` },
+        { title: '识别表格结构', text: '识别出 128 行业务数据，并完成字段类型和空值检查。' },
+        { title: '判断运单语义', text: '发现运单号、车牌号、装货地、卸货地和运单开始时间等运单字段。' },
+        { title: '校验导入条件', text: '运单语义及必填字段满足项目导入要求，准备选择保存方式。' },
+      ],
+      result: '解析完成：已识别为运单列表，可新建项目或合并到现有项目进行持续跟踪。',
+    },
+    () => {
+      pendingWaybillImport.value = {
+        files: excelFiles,
+        importedCount: 128,
+        preferredMode: 'merge',
+        preferredProjectId: matchedProject?.id,
+        source: 'regular',
+      };
+    },
+  );
 }
 
 function selectNewConversationGuide(guide: NewConversationGuide) {
@@ -242,8 +307,9 @@ function selectNewConversationGuide(guide: NewConversationGuide) {
 function handleFileSelect(event: Event) {
   const input = event.target as HTMLInputElement;
   const purpose = filePickerPurpose.value;
-  const newFiles = addUploadedFiles(Array.from(input.files ?? []));
-  openWaybillImportGuide(newFiles, purpose);
+  const selectedFiles = Array.from(input.files ?? []);
+  const newFiles = addUploadedFiles(purpose === 'excel' ? selectedFiles.filter(isExcelFile) : selectedFiles);
+  if (purpose !== 'excel') openWaybillImportGuide(newFiles, purpose);
   filePickerPurpose.value = 'regular';
   input.value = '';
 }
@@ -295,8 +361,14 @@ function sendComposerMessage() {
   isFollowingLatest.value = true;
 
   if (uploadedFiles.value.length > 0) {
+    if (text && isDeferredWaybillImportRequest(text, uploadedFiles.value)) {
+      startDeferredWaybillImport(text, uploadedFiles.value);
+      uploadedFiles.value = [];
+      agentInput.value = '';
+      return;
+    }
     const attachmentText = `附件：${uploadedFiles.value.map((file) => file.name).join('、')}`;
-    sendAgent(text ? `${text}\n${attachmentText}` : attachmentText);
+    sendAgent(text ? `${text}\n${attachmentText}` : attachmentText, uploadedFiles.value);
     uploadedFiles.value = [];
     agentInput.value = '';
     return;
@@ -836,6 +908,11 @@ onBeforeUnmount(() => {
             <template v-else>
               <span class="whitespace-pre-line">{{ m.text }}</span>
             </template>
+            <button v-if="m.dailyTaskId" type="button" class="agent-ordinary-task" :disabled="!ordinaryTask(m.dailyTaskId)" :aria-label="`查看普通任务 ${ordinaryTask(m.dailyTaskId)?.name ?? '已删除'}`" @click="openOrdinaryTask(m.dailyTaskId)">
+              <Icon :svg="strokeIconPaths.file" :size="18" />
+              <span><strong>{{ ordinaryTask(m.dailyTaskId)?.name ?? '任务已删除' }}</strong><small>普通任务 · {{ ordinaryTask(m.dailyTaskId)?.runs[0] ? taskRunLabels[ordinaryTask(m.dailyTaskId)!.runs[0]!.status] : '不可用' }}</small></span>
+              <Icon :svg="strokeIconPaths.chevron" :size="15" />
+            </button>
             <section v-if="m.role === 'agent' && m.sources?.length && m.status !== '处理中'" class="mt-3 border-t border-[#deded9] pt-3" aria-label="引用来源">
               <h3 class="mb-2 text-xs font-semibold text-slate-700">引用来源（演示）</h3>
               <ol class="space-y-2 text-xs leading-5 text-slate-500">
@@ -911,7 +988,7 @@ onBeforeUnmount(() => {
             />
             <div class="mt-1 flex items-center justify-between gap-3">
               <div class="flex min-w-0 items-center gap-1.5">
-                <input ref="fileInputRef" type="file" class="hidden" multiple @change="handleFileSelect" />
+                <input ref="fileInputRef" type="file" class="hidden" multiple :accept="filePickerAccept" @change="handleFileSelect" />
                 <button
                   type="button"
                   class="flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-slate-600 transition hover:bg-[#f3f3f1] hover:text-slate-900"
@@ -1287,7 +1364,9 @@ onBeforeUnmount(() => {
   <WaybillImportDialog
     :file-names="pendingWaybillImport?.files.map((file) => file.name) ?? []"
     :imported-count="pendingWaybillImport?.importedCount ?? 0"
+    :initial-mode="pendingWaybillImport?.preferredMode"
     :open="Boolean(pendingWaybillImport)"
+    :preferred-project-id="pendingWaybillImport?.preferredProjectId"
     :projects="store.projects"
     @cancel="cancelWaybillImport"
     @confirm="confirmWaybillImport"

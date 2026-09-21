@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue';
 import type { DeepReadonly } from 'vue';
-import { ElDialog } from 'element-plus';
+import AppDialog from '@/components/AppDialog.vue';
 import type { McpTool } from '@/pinia/agentOps';
 const open = defineModel<boolean>({ required: true });
 const props = defineProps<{ service?: DeepReadonly<McpTool> }>();
@@ -10,7 +10,7 @@ const filtered = computed(() => props.service?.methods.filter(method => `${metho
 watch(open, () => { search.value = ''; });
 </script>
 <template>
-  <ElDialog v-model="open" :title="`${service?.name ?? 'MCP'} · 工具列表`" width="960px" top="5vh" class="ops-tool-dialog" append-to-body>
+  <AppDialog v-model="open" :title="`${service?.name ?? 'MCP'} · 工具列表`" width="960px" class="ops-tool-dialog">
     <div v-if="service" class="mcp-tools-content">
       <div class="mcp-tools-toolbar"><label>搜索工具<input v-model="search" class="ops-input" placeholder="搜索工具名称或描述" /></label><span>{{ filtered.length }} / {{ service.methods.length }} 个工具</span></div>
       <p class="mcp-tools-note">{{ service.discovery === 'demo' ? '以下为示例工具，尚未从服务同步。' : service.lastSyncedAt ? `最近成功同步：${service.lastSyncedAt}。工具属性由服务提供，只读展示。` : '尚未同步工具，请先同步服务。' }}</p>
@@ -21,7 +21,7 @@ watch(open, () => { search.value = ''; });
       <p v-if="!filtered.length" class="mcp-tools-empty">{{ search ? '没有匹配的工具。' : service.discovery === 'synced' ? '服务本次返回 0 个工具。' : '暂无工具定义。' }}</p>
     </div>
     <template #footer><button class="ops-secondary" type="button" @click="open = false">关闭</button></template>
-  </ElDialog>
+  </AppDialog>
 </template>
 <style scoped>
 .mcp-tools-content { color: #334155; }

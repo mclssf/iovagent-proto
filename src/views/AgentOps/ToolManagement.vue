@@ -1,6 +1,7 @@
 <script lang="ts" setup>
 import { computed, ref } from 'vue';
-import { ElDialog, ElMessage } from 'element-plus';
+import { ElMessage } from 'element-plus';
+import AppDialog from '@/components/AppDialog.vue';
 import { Icon } from '@packages/icon';
 import { useAgentOpsStore } from '@/pinia/agentOps';
 import type { AgentCallableSkill, ManagedTool, ToolKind } from '@/pinia/agentOps';
@@ -115,7 +116,7 @@ async function syncCodeTools() {
       <div v-if="!filteredTools.length" class="px-5 py-16 text-center"><p class="text-sm text-slate-600">未找到符合条件的 Tool</p><button class="mt-3 text-xs underline" type="button" @click="search = ''">清空筛选</button></div>
     </div>
 
-    <ElDialog v-model="detailOpen" :title="selectedTool?.name" width="960px" top="5vh" class="ops-tool-dialog" :close-on-click-modal="false">
+    <AppDialog v-model="detailOpen" :title="selectedTool?.name" width="960px" class="ops-tool-dialog">
       <div v-if="selectedTool" class="space-y-6 text-slate-700">
         <div>
           <div class="flex flex-wrap items-center gap-3">
@@ -142,11 +143,11 @@ async function syncCodeTools() {
         <section><h3 class="mb-3 font-semibold">私有化加载的 Skill（{{ store.skillsForTool(selectedTool.id).length }}）</h3><div class="flex flex-wrap gap-2"><button v-for="skill in store.skillsForTool(selectedTool.id)" :key="skill.id" class="skill-link" type="button" @click="configureSkill(skill)">{{ skill.name }} · {{ skill.enabled ? '已启用' : '已禁用' }}</button></div><p v-if="!store.skillsForTool(selectedTool.id).length" class="text-xs text-slate-500">尚未关联 Skill，可在 Skill 管理中添加私有加载绑定。</p></section>
       </div>
       <template #footer><div class="flex flex-wrap justify-end gap-2"><button class="ops-secondary" type="button" @click="detailOpen = false">关闭</button><button v-if="selectedTool?.kind === 'mcp'" class="ops-secondary" type="button" @click="editService(selectedTool.id)">编辑服务</button></div></template>
-    </ElDialog>
+    </AppDialog>
 
     <McpToolsDialog v-model="toolsDialogOpen" :service="toolsService" />
     <McpServiceForm v-model="serviceFormOpen" :service-id="editingServiceId" @remove="requestDelete" />
-    <ElDialog v-model="deleteOpen" title="删除 MCP 服务" width="620px" class="ops-tool-dialog" :close-on-click-modal="false" append-to-body>
+    <AppDialog v-model="deleteOpen" title="删除 MCP 服务" width="620px" class="ops-tool-dialog">
       <div v-if="deletingService" class="space-y-4 text-sm leading-6 text-slate-700">
         <p>确定删除「{{ deletingService.name }}」？以下加载引用将一并移除：</p>
         <dl class="tool-properties"><dt>Agent 默认配置</dt><dd><ul v-if="deleteUsage.defaults.length"><li v-for="agent in deleteUsage.defaults" :key="agent.id">{{ agent.name }}</li></ul><span v-else>无默认加载</span></dd><dt>Skill 私有加载</dt><dd><ul v-if="deleteUsage.skills.length"><li v-for="skill in deleteUsage.skills" :key="skill.id">{{ skill.name }}{{ skill.enabled ? '' : '（已禁用）' }}</li></ul><span v-else>无关联 Skill</span></dd><dt>Agent 直接加载</dt><dd><ul v-if="deleteUsage.agents.length"><li v-for="agent in deleteUsage.agents" :key="agent.id">{{ agent.name }}</li></ul><span v-else>无直接加载的客户 Agent</span></dd></dl>
@@ -154,7 +155,7 @@ async function syncCodeTools() {
         <p v-if="deleteError" role="alert" class="text-red-700">{{ deleteError }}</p>
       </div>
       <template #footer><button type="button" class="ops-secondary mr-2" @click="deleteOpen = false">取消</button><button type="button" class="ops-danger" @click="deleteService">确认删除</button></template>
-    </ElDialog>
+    </AppDialog>
   </section>
 </template>
 
@@ -191,11 +192,6 @@ async function syncCodeTools() {
 </style>
 
 <style>
-.ops-tool-dialog.el-dialog { max-width: calc(100vw - 24px); border-radius: 8px; padding: 0; overflow: hidden; }
-.ops-tool-dialog .el-dialog__header { padding: 20px 24px; margin: 0; border-bottom: 1px solid #e2e2dc; }
-.ops-tool-dialog .el-dialog__title { font-size: 16px; font-weight: 600; color: #0f172a; }
-.ops-tool-dialog .el-dialog__body { max-height: 70vh; overflow: auto; padding: 24px; }
-.ops-tool-dialog .el-dialog__footer { padding: 16px 24px; border-top: 1px solid #e2e2dc; }
 .ops-input { width: 100%; height: 36px; min-width: 0; border: 1px solid #deded9; border-radius: 6px; background: #fbfbfa; padding: 0 10px; font-size: 13px; color: #334155; outline: none; }
 .ops-input.ops-search { padding-left: 36px; }
 textarea.ops-input { height: auto; padding: 8px 10px; }

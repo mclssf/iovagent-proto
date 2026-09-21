@@ -22,6 +22,9 @@ import { cargoQuoteSeedData, cargoSeedData, privateCapacitySeedData } from '@/vi
 import { extractMcpPrompt, runMcpPrompt } from '@/views/AgentWork/mcpClient';
 import { getRiskOrders, summarizeOrders } from '@/views/AgentWork/utils';
 import { ensureRequiredMonitorSkills } from '@/views/AgentWork/dailyTasks';
+import type { TaskAttachment } from '@/views/AgentWork/dailyTasks';
+import { resolveAsyncTool, extractTaskPlates } from '@/views/AgentWork/ordinaryTasks';
+import { useAgentDailyTasks } from './agentDailyTasks';
 
 const defaultOrdersDateRange = {
   start: '2026-05-09',
@@ -153,23 +156,7 @@ const projectWelcomeMessages: ChatMessage[] = [
   { role: 'agent', text: '发现 2 单非目的地物流园长停、1 单 GPS 轨迹疑似造假，建议优先复核。' },
 ];
 
-const conversationSeeds: AgentConversation[] = [
-  ['C001', '今日在途异常处理建议', '今天有哪些真正需要优先处理的在途异常？', '已汇总高风险运单，并按影响程度给出处理顺序。', '10分钟前'],
-  ['C002', '沪A12345当前位置查询', '查询沪A12345现在的位置。', '车辆最新定位在 G60 沪昆高速嘉兴服务区东侧，定位状态正常。', '26分钟前'],
-  ['C003', '华东线路高风险运单复核', '复核华东线路今天的高风险运单。', '已完成复核，建议优先人工核验 3 单。', '今天 09:42'],
-  ['C004', '8月16日在途日报', '生成昨天的在途运输日报。', '日报已生成，包含运单规模、异常分布和处理建议。', '昨天'],
-  ['C005', '承运商异常集中度分析', '分析近期异常是否集中在特定承运商。', '异常主要集中在安捷物流与远恒运输，已整理对应线路。', '昨天'],
-  ['C006', '皖K55821停车事件复盘', '复盘皖K55821的异常停车。', '该车存在一次合理休息和一次高风险非合同经停。', '8月15日'],
-  ['C007', '冷链到货时效预测', '预测冷链项目今晚的到货情况。', '预计 61 单按时到达，3 单存在延误风险。', '8月14日'],
-].map(([id, title, userText, agentText, updatedAt]) => ({
-  id,
-  title,
-  updatedAt,
-  messages: [
-    { role: 'user', text: userText },
-    { role: 'agent', text: agentText },
-  ],
-}));
+const conversationSeeds: AgentConversation[] = [];
 
 function cloneChatMessages(messages: ChatMessage[]) {
   return messages.map((message) => ({
@@ -517,7 +504,7 @@ function createSpreadsheetFillSteps(sourceFileName: string): NonNullable<ChatMes
   ];
 }
 
-function extractSpreadsheetRequest(raw: string) {
+function extractAttachmentRequest(raw: string, matches = (name: string) => Boolean(name)) {
   const attachmentMarker = '\n附件：';
   const markerIndex = raw.lastIndexOf(attachmentMarker);
   if (markerIndex <= 0) return null;
@@ -527,9 +514,13 @@ function extractSpreadsheetRequest(raw: string) {
     .slice(markerIndex + attachmentMarker.length)
     .split('、')
     .map((name) => name.trim())
-    .find(Boolean);
+    .find((name) => Boolean(name) && matches(name));
   if (!prompt || !sourceFileName) return null;
   return { prompt, sourceFileName };
+}
+
+function extractSpreadsheetRequest(raw: string) {
+  return extractAttachmentRequest(raw, (name) => /\.(?:xls|xlsx)$/i.test(name));
 }
 
 interface RegionVisitRequest {
@@ -546,8 +537,8 @@ function extractRegionVisitRegion(raw: string) {
 
 function extractRegionVisitRequest(raw: string): RegionVisitRequest | null {
   const region = extractRegionVisitRegion(raw);
-  const spreadsheetRequest = extractSpreadsheetRequest(raw);
-  if (!region || !spreadsheetRequest || !/\.(?:csv|xls|xlsx)$/i.test(spreadsheetRequest.sourceFileName)) return null;
+  const spreadsheetRequest = extractAttachmentRequest(raw, (name) => /\.(?:csv|xls|xlsx)$/i.test(name));
+  if (!region || !spreadsheetRequest) return null;
   return { region, sourceFileName: spreadsheetRequest.sourceFileName };
 }
 
@@ -1872,12 +1863,33 @@ export const agentWorkData = defineStore('agentWork', {
       this.ordersEndDate = defaultOrdersDateRange.end;
     },
     /** 智能体对话：由调用方传入 `navigate`，避免 store 依赖 router */
-    async appendAgentExchange(text: string | undefined, navigate: (page: PageId) => void) {
+    async appendAgentExchange(text: string | undefined, navigate: (page: PageId) => void, attachments: TaskAttachment[] = []) {
       clearAgentProcessTimers();
       const raw = text ?? this.agentInput;
       if (!raw.trim()) return;
       this.ensureConversationStarted();
       const next: ChatMessage[] = [...this.agentMessages, { role: 'user', text: raw }];
+      const pendingPrompt = this.agentMessages[this.agentMessages.length - 1]?.pendingAsyncPrompt;
+      const inputPrompt = raw.split('\n附件：')[0]!.trim();
+      const isPlateAnswer = /^(?:车牌(?:号)?[是为：:\s]*)?[京津沪渝冀豫云辽黑湘皖鲁新苏浙赣鄂桂甘晋蒙陕吉闽贵粤青藏川宁琼][A-Z][A-Z0-9]{5,6}$/i.test(inputPrompt);
+      const asyncPrompt = pendingPrompt && (isPlateAnswer || (attachments.length && /^附件：/.test(inputPrompt))) ? `${pendingPrompt}\n${isPlateAnswer ? inputPrompt : ''}` : inputPrompt;
+      const asyncTool = resolveAsyncTool(asyncPrompt);
+      if (asyncTool) {
+        if (!extractTaskPlates(asyncPrompt).length && !attachments.length) {
+          this.agentMessages = [...next, { role: 'agent', text: `查询 ${asyncTool.date} 的历史轨迹需要调用异步归档工具。请补充车牌号，或上传包含车牌号的文件，我会创建普通任务执行一次。`, pendingAsyncPrompt: asyncPrompt }];
+        } else {
+          try {
+            const taskId = useAgentDailyTasks().saveTask(this.workspaceMode === 'project' ? this.currentProjectId : '', {
+              name: '', trigger: 'once', eventType: 'parking', threshold: 30, fenceId: '', time: '18:00', prompt: asyncPrompt, confirmBeforeSend: true, attachments,
+            }, undefined, { origin: 'workbench', conversationId: this.workspaceMode === 'conversation' ? this.currentConversationId : undefined });
+            this.agentMessages = [...next, { role: 'agent', text: `已识别需要调用“${asyncTool.name}”异步工具，已创建普通任务，仅执行一次。\n任务将独立处理，完成后的文字结果和下载文件会出现在任务运行事件中，你可以继续当前对话。`, dailyTaskId: taskId }];
+          } catch (error) {
+            this.agentMessages = [...next, { role: 'agent', text: `普通任务未创建：${(error as Error).message}。` }];
+          }
+        }
+        this.agentInput = '';
+        return;
+      }
       const regionVisitRegion = extractRegionVisitRegion(raw);
       const regionVisitRequest = extractRegionVisitRequest(raw);
       const spreadsheetRequest = regionVisitRequest ? null : extractSpreadsheetRequest(raw);

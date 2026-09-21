@@ -1,19 +1,16 @@
 <script lang="ts" setup>
-import { computed, ref } from 'vue';
+import { computed } from 'vue';
 import { Icon } from '@packages/icon';
 import { useAgentDailyTasks } from '@/pinia/agentDailyTasks';
 import type { DailyTask } from '../dailyTasks';
-import { eventLabel, formatTaskTime, monitorDefinitions, triggerLabel, waybillPhases } from '../dailyTasks';
+import { formatTaskTime, getTaskStatus, monitorDefinitions, triggerLabel, waybillPhases, taskStatusLabels } from '../dailyTasks';
 import { strokeIconPaths } from '../strokeIconPaths';
 import { useAgentWorkNav } from '../useAgentWorkNav';
-import GeofenceDialog from './geofence.dialog.vue';
 import '../dailyTasks.css';
 
 const props = defineProps<{ projectId: string }>();
 const tasks = useAgentDailyTasks();
 const { goPage } = useAgentWorkNav();
-const showFences = ref(false);
-const showEvents = ref(false);
 const runtime = computed(() => tasks.projects[props.projectId]);
 const monitors = computed(() => monitorDefinitions.map((definition) => {
   const running = runtime.value?.monitors.find((item) => item.id === definition.id);
@@ -23,14 +20,11 @@ const monitors = computed(() => monitorDefinitions.map((definition) => {
 }));
 const enabledMonitors = computed(() => monitors.value.filter((item) => item.enabled));
 const dailyTasks = computed(() => tasks.tasks.filter((task) => task.projectId === props.projectId));
-const visibleTasks = computed(() => dailyTasks.value.filter((task) => task.enabled || task.runs.some((run) => run.status === 'waiting')).slice(0, 4));
+const visibleTasks = computed(() => dailyTasks.value.filter((task) => task.trigger === 'once' ? task.runs[0]?.status === 'running' : task.enabled || task.runs.some((run) => run.status === 'waiting')).slice(0, 4));
 const pendingCount = computed(() => dailyTasks.value.reduce((total, task) => total + task.runs.filter((run) => run.status === 'waiting').length, 0));
 
 function dailyStatus(task: DailyTask) {
-  if (task.runs.some((run) => run.status === 'waiting')) return '待确认';
-  if (task.runs.some((run) => run.status === 'running')) return '执行中';
-  if (!task.enabled) return '已暂停';
-  return tasks.unavailableReason(task) || (task.trigger === 'schedule' ? '已计划' : '监听中');
+  return taskStatusLabels[getTaskStatus(task)];
 }
 </script>
 
@@ -50,24 +44,15 @@ function dailyStatus(task: DailyTask) {
       </div>
       <details class="dt-monitor-phases"><summary>运单状态流转</summary><div class="dt-phase-flow"><template v-for="(phase, index) in waybillPhases" :key="phase"><Icon v-if="index" :svg="strokeIconPaths.chevron" :size="10" /><span>{{ phase }}</span></template></div></details>
     </section>
-    <section class="dt-monitor-group" aria-label="日常任务摘要">
-      <div class="dt-monitor-group-title"><h3>日常任务 <span>{{ dailyTasks.length }}</span></h3><button type="button" class="dt-icon" title="管理日常任务" aria-label="管理日常任务" @click="goPage('dailyTasks')"><Icon :svg="strokeIconPaths.chevron" :size="14" /></button></div>
+    <section class="dt-monitor-group" aria-label="做任务摘要">
+      <div class="dt-monitor-group-title"><h3>做任务 <span>{{ dailyTasks.length }}</span></h3><button type="button" class="dt-icon" title="管理做任务" aria-label="管理做任务" @click="goPage('dailyTasks')"><Icon :svg="strokeIconPaths.chevron" :size="14" /></button></div>
       <button v-for="task in visibleTasks" :key="task.id" type="button" class="dt-monitor-row dt-monitor-task" :title="task.name" @click="goPage('dailyTasks', { taskId: task.id })">
-        <Icon :svg="task.trigger === 'schedule' ? strokeIconPaths.alarmClock : strokeIconPaths.zap" :size="15" />
+        <Icon :svg="task.trigger === 'once' ? strokeIconPaths.file : task.trigger === 'schedule' ? strokeIconPaths.alarmClock : strokeIconPaths.zap" :size="15" />
         <div class="dt-monitor-name"><strong>{{ task.name }}</strong><small>{{ triggerLabel(task, runtime.fences) }}</small></div>
-        <span class="dt-task-status" :class="{ pending: dailyStatus(task) === '待确认' }">{{ dailyStatus(task) }}</span>
+        <span class="dt-task-status">{{ dailyStatus(task) }}</span>
       </button>
-      <button v-if="!visibleTasks.length" type="button" class="dt-text-button" @click="goPage('dailyTasks')">{{ dailyTasks.length ? '查看已暂停任务' : '创建日常任务' }}<Icon :svg="strokeIconPaths.chevron" :size="12" /></button>
+      <button v-if="!visibleTasks.length" type="button" class="dt-text-button" @click="goPage('dailyTasks')">{{ dailyTasks.length ? '查看全部任务' : '创建任务' }}<Icon :svg="strokeIconPaths.chevron" :size="12" /></button>
       <button v-if="dailyTasks.length > visibleTasks.length && visibleTasks.length" type="button" class="dt-text-button" @click="goPage('dailyTasks')">查看全部 {{ dailyTasks.length }} 项</button>
     </section>
-    <footer class="dt-monitor-footer">
-      <button type="button" class="dt-text-button" :aria-expanded="showEvents" @click="showEvents = !showEvents">事件流 <span>{{ runtime.events.length }}</span><Icon :svg="strokeIconPaths.chevron" :size="12" :svg-class="showEvents ? 'rotate-90' : ''" /></button>
-      <button type="button" class="dt-text-button" @click="showFences = true"><Icon :svg="strokeIconPaths.locate" :size="14" />区域围栏</button>
-    </footer>
-    <div v-if="showEvents" class="dt-event-list">
-      <p v-if="!runtime.events.length">暂无新事件，判断任务正在等待下一轮执行。</p>
-      <div v-for="event in runtime.events.slice(0, 6)" :key="event.id"><strong>{{ eventLabel(event.type) }}</strong><span>{{ event.order.plate }} · {{ formatTaskTime(event.occurredAt) }}</span><p>{{ event.detail }}</p></div>
-    </div>
-    <GeofenceDialog v-model="showFences" :project-id="projectId" />
   </section>
 </template>

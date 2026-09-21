@@ -5,6 +5,7 @@ import App from './App.vue';
 import { handleRouter } from './router';
 
 import './styles/tailwind.css';
+import './styles/dialogs.css';
 import 'animate.css';
 
 async function bootstrap(_namespace = 'iovagent') {

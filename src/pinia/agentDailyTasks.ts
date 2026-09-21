@@ -1,7 +1,8 @@
 import { defineStore } from 'pinia';
 import type { Order, Project } from '@/views/AgentWork/interface';
 import type { DailyTask, DailyTaskDraft, EventType, MonitorId, ProjectFence, ProjectTaskRuntime, TaskRun, WaybillEvent, WaybillPhase } from '@/views/AgentWork/dailyTasks';
-import { createMonitoredOrders, ensureRequiredMonitorSkills, eventDefinitions, eventLabel, isThresholdEvent, monitorDefinitions } from '@/views/AgentWork/dailyTasks';
+import { createMonitoredOrders, ensureRequiredMonitorSkills, eventDefinitions, eventLabel, hasTaskResult, isThresholdEvent, monitorDefinitions } from '@/views/AgentWork/dailyTasks';
+import { extractTaskPlates, makeOrdinaryRun, mergeTaskAttachments, ordinaryStepDelay, ordinaryTaskName, ordinaryTaskResult, resolveAsyncTool } from '@/views/AgentWork/ordinaryTasks';
 
 const newId = (prefix: string) => `${prefix}-${crypto.randomUUID()}`;
 const stepDelay = () => 1600 + Math.round(Math.random() * 1000);
@@ -18,9 +19,9 @@ function sampleEvent(runtime: ProjectTaskRuntime, type: EventType, source: Waybi
   return { id: newId('event'), projectId: runtime.projectId, type, occurredAt: Date.now(), source, order: { ...order }, detail, value, fenceId };
 }
 
-function makeRun(task: DailyTask, runtime: ProjectTaskRuntime, source: TaskRun['source'], event?: WaybillEvent): TaskRun {
-  const subject = event ? `${event.order.id} · ${event.order.plate}` : `本项目 ${runtime.total} 条运单`;
-  const context = event ? event.detail : `已汇总本项目在途运单与 ${runtime.events.length} 条近期事件。`;
+function makeRun(task: DailyTask, runtime: ProjectTaskRuntime | undefined, source: TaskRun['source'], event?: WaybillEvent): TaskRun {
+  const subject = event ? `${event.order.id} · ${event.order.plate}` : runtime ? `本项目 ${runtime.total} 条运单` : '个人定时任务';
+  const context = event ? event.detail : runtime ? `已汇总本项目在途运单与 ${runtime.events.length} 条近期事件。` : '当前任务未绑定项目，不读取项目运单、事件或企业私有数据。';
   const channel = /短信/.test(task.prompt) ? '短信' : /邮件|邮箱/.test(task.prompt) ? '邮件' : null;
   const recipient = channel === '邮件' ? task.prompt.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i)?.[0] ?? '项目物流负责人'
     : /负责人|调度/.test(task.prompt) ? '项目物流负责人 · 139****8000' : `${event?.order.driver ?? '项目值班司机'} · ${event?.order.phone ?? '138****6200'}`;
@@ -29,9 +30,9 @@ function makeRun(task: DailyTask, runtime: ProjectTaskRuntime, source: TaskRun['
     id: newId('run'), startedAt: Date.now(), source, status: 'running', event, prompt: task.prompt,
     activeStep: 0, nextStepAt: Date.now() + stepDelay(), result: '',
     steps: [
-      { title: '接收触发上下文', text: `${source === 'test' ? '使用本项目样例事件测试' : source === 'schedule' ? '到达计划执行时间' : '收到运单事件'}：${subject}。` },
+      { title: '接收触发上下文', text: `${source === 'test' ? runtime ? '使用本项目样例事件测试' : '按当前个人任务配置测试执行' : source === 'schedule' ? '到达计划执行时间' : '收到运单事件'}：${subject}。` },
       { title: '理解指令并规划', text: `任务要求：${task.prompt}` },
-      { title: '读取运单与核验证据', text: context, tool: event?.type === 'offline' ? '车辆定位查询' : event?.type.startsWith('fence-') ? '围栏事件查询、轨迹查询' : '运单查询、轨迹查询' },
+      { title: runtime ? '读取运单与核验证据' : '读取可用上下文', text: context, tool: runtime ? event?.type === 'offline' ? '车辆定位查询' : event?.type.startsWith('fence-') ? '围栏事件查询、轨迹查询' : '运单查询、轨迹查询' : '个人知识库、通用工具' },
       { title: channel ? `生成${channel}内容` : '整理执行结果', text: channel ? `已取得通知对象：${recipient}，正在结合事件生成正文。` : `按指令整理${subject}的事件事实、影响范围和处置建议。`, tool: channel ? `${channel}草稿生成` : '经营分析参谋' },
       { title: '校验并提交结果', text: channel && task.confirmBeforeSend ? '核对通知对象与内容，提交待确认操作。' : '核对运单标识、事件时间与返回内容，记录执行结果。' },
     ],
@@ -45,7 +46,20 @@ export const useAgentDailyTasks = defineStore('agentDailyTasks', {
     tasks: [] as DailyTask[],
     now: Date.now(),
   }),
+  getters: {
+    unreadResultsByTask: (state): Record<string, number> => Object.fromEntries(state.tasks.map((task) => [task.id, task.runs.filter((run) => hasTaskResult(run) && run.readAt === undefined).length])),
+    unreadResultsByProject(state): Record<string, number> {
+      return state.tasks.reduce<Record<string, number>>((counts, task) => {
+        counts[task.projectId] = (counts[task.projectId] ?? 0) + (this.unreadResultsByTask[task.id] ?? 0);
+        return counts;
+      }, {});
+    },
+  },
   actions: {
+    markResultRead(taskId: string, runId: string) {
+      const run = this.tasks.find((task) => task.id === taskId)?.runs.find((item) => item.id === runId);
+      if (run && hasTaskResult(run) && run.readAt === undefined) run.readAt = Date.now();
+    },
     syncProjects(projects: Project[], orders: Order[]) {
       for (const project of projects) {
         let runtime = this.projects[project.id];
@@ -72,7 +86,7 @@ export const useAgentDailyTasks = defineStore('agentDailyTasks', {
       }
       const ids = new Set(projects.map((project) => project.id));
       for (const id of Object.keys(this.projects)) if (!ids.has(id)) delete this.projects[id];
-      this.tasks = this.tasks.filter((task) => ids.has(task.projectId));
+      this.tasks = this.tasks.filter((task) => !task.projectId || ids.has(task.projectId));
     },
     seedTasks(runtime: ProjectTaskRuntime) {
       const base: DailyTaskDraft = { name: '', trigger: 'event', eventType: 'parking', threshold: 30, fenceId: '', time: '18:00', prompt: '', confirmBeforeSend: true };
@@ -93,6 +107,7 @@ export const useAgentDailyTasks = defineStore('agentDailyTasks', {
           }
           if (event) event.occurredAt = run.startedAt;
           run.finishedAt = run.startedAt + 11000;
+          if (day === 2) run.readAt = run.finishedAt;
           run.activeStep = run.steps.length;
           run.status = index === 0 && day === 1 ? 'waiting' : 'complete';
           if (run.action) run.action.status = run.status === 'waiting' ? 'pending' : 'sent';
@@ -105,6 +120,8 @@ export const useAgentDailyTasks = defineStore('agentDailyTasks', {
       }
     },
     unavailableReason(task: DailyTaskDraft & { projectId: string }) {
+      if (!task.projectId) return task.trigger === 'event' ? '条件触发任务需要项目运单事件' : '';
+      if (task.trigger === 'once') return !this.projects[task.projectId] ? '项目不存在' : '';
       const runtime = this.projects[task.projectId];
       if (!runtime) return '项目不存在';
       if (!runtime.connected) return '等待数据源连接';
@@ -115,20 +132,26 @@ export const useAgentDailyTasks = defineStore('agentDailyTasks', {
       if (task.eventType.startsWith('fence-') && !runtime.fences.some((fence) => fence.id === task.fenceId)) return '等待配置有效围栏';
       return '';
     },
-    saveTask(projectId: string, draft: DailyTaskDraft, taskId?: string) {
-      if (!this.projects[projectId]) throw new Error('项目不存在');
-      if (!draft.name.trim() || !draft.prompt.trim()) throw new Error('请填写任务名称和执行指令');
+    saveTask(projectId: string, draft: DailyTaskDraft, taskId?: string, source?: { origin: 'workbench'; conversationId?: string }) {
+      if (projectId && !this.projects[projectId]) throw new Error('项目不存在');
+      if (!projectId && draft.trigger === 'event') throw new Error('条件触发任务需要在项目中创建');
+      if (!draft.prompt.trim() || (draft.trigger !== 'once' && !draft.name.trim())) throw new Error('请填写任务名称和执行指令');
+      if (draft.name.trim().length > 40 || draft.prompt.trim().length > 2000) throw new Error('任务名称最多 40 字，执行指令最多 2000 字');
+      const attachments = mergeTaskAttachments([], draft.attachments ?? []);
+      if (draft.trigger === 'once' && resolveAsyncTool(draft.prompt) && !extractTaskPlates(draft.prompt).length && !attachments.length) throw new Error('请补充需要查询的车牌号，或上传包含车牌号的文件');
       if (draft.trigger === 'schedule' && !/^([01]\d|2[0-3]):[0-5]\d$/.test(draft.time)) throw new Error('请选择有效执行时间');
       if (draft.trigger === 'event' && isThresholdEvent(draft.eventType) && (!Number.isFinite(draft.threshold) || draft.threshold <= 0)) throw new Error('阈值必须大于 0');
       if (draft.trigger === 'event' && draft.eventType.startsWith('fence-') && !this.projects[projectId]!.fences.some((fence) => fence.id === draft.fenceId)) throw new Error('请选择一个有效围栏');
       const existing = this.tasks.find((task) => task.id === taskId && task.projectId === projectId);
       if (taskId && !existing) throw new Error('任务已删除');
+      if (existing && (existing.trigger === 'once' || draft.trigger === 'once')) throw new Error('已提交的任务不能改为或编辑为普通任务，请新建任务');
       if (existing?.runs.some((run) => run.status === 'running')) throw new Error('请等待本轮执行结束后再编辑');
       if (existing) {
-        Object.assign(existing, draft, { name: draft.name.trim(), prompt: draft.prompt.trim() });
+        Object.assign(existing, draft, { name: draft.name.trim(), prompt: draft.prompt.trim(), attachments });
         return existing.id;
       }
-      const task: DailyTask = { ...draft, name: draft.name.trim(), prompt: draft.prompt.trim(), id: newId('task'), projectId, enabled: true, createdAt: Date.now(), lastScheduledDay: '', runs: [] };
+      const task: DailyTask = { ...draft, name: draft.name.trim() || ordinaryTaskName(draft.prompt), prompt: draft.prompt.trim(), attachments, id: newId('task'), projectId, enabled: draft.trigger !== 'once', createdAt: Date.now(), lastScheduledDay: '', runs: [], origin: source?.origin ?? 'manual', conversationId: source?.conversationId };
+      if (task.trigger === 'once') task.runs.push(makeOrdinaryRun(task));
       this.tasks.unshift(task);
       return task.id;
     },
@@ -137,7 +160,19 @@ export const useAgentDailyTasks = defineStore('agentDailyTasks', {
     },
     toggleTask(taskId: string) {
       const task = this.tasks.find((item) => item.id === taskId);
+      if (task?.trigger === 'once') throw new Error('普通任务仅执行一次，不支持暂停或启动');
       if (task) task.enabled = !task.enabled;
+    },
+    receiveOrdinaryResult(taskId: string, jobId: string, result: { text: string; files: NonNullable<TaskRun['files']> }) {
+      const task = this.tasks.find((item) => item.id === taskId);
+      const run = task?.runs[0];
+      if (task?.trigger !== 'once' || !run || run.status !== 'running' || run.toolJobId !== jobId) return;
+      if (!result.text.trim() && !result.files.length) return;
+      run.status = 'complete';
+      run.activeStep = run.steps.length;
+      run.finishedAt = this.now;
+      run.result = result.text;
+      run.files = result.files;
     },
     saveFence(projectId: string, fence: Omit<ProjectFence, 'id'>) {
       const runtime = this.projects[projectId];
@@ -182,11 +217,12 @@ export const useAgentDailyTasks = defineStore('agentDailyTasks', {
     testTask(taskId: string) {
       const task = this.tasks.find((item) => item.id === taskId);
       if (!task) return;
+      if (task.trigger === 'once') throw new Error('普通任务提交后只执行一次，不支持重复测试');
       const reason = this.unavailableReason(task);
       if (reason) throw new Error(reason);
       if (task.runs.some((run) => run.status === 'running')) throw new Error('本轮正在执行，请稍后再试');
-      const runtime = this.projects[task.projectId]!;
-      const event = task.trigger === 'event' ? sampleEvent(runtime, task.eventType, 'test', task.fenceId) ?? undefined : undefined;
+      const runtime = this.projects[task.projectId];
+      const event = task.trigger === 'event' ? sampleEvent(runtime!, task.eventType, 'test', task.fenceId) ?? undefined : undefined;
       if (event && isThresholdEvent(task.eventType)) {
         event.value = Math.max(event.value, task.threshold);
         event.detail = `${eventLabel(task.eventType)}已达到测试阈值：${event.value} ${task.eventType === 'deviation' ? '公里' : '分钟'}。`;
@@ -239,7 +275,7 @@ export const useAgentDailyTasks = defineStore('agentDailyTasks', {
       const time = `${value('hour')}:${value('minute')}`;
       for (const task of this.tasks) {
         const runtime = this.projects[task.projectId];
-        if (!runtime) continue;
+        if (!runtime && task.trigger === 'event') continue;
         if (task.enabled && task.trigger === 'schedule' && task.time === time && task.lastScheduledDay !== day && !this.unavailableReason(task)) {
           task.lastScheduledDay = day;
           task.runs.unshift(makeRun(task, runtime, 'schedule'));
@@ -247,8 +283,12 @@ export const useAgentDailyTasks = defineStore('agentDailyTasks', {
         for (const run of task.runs) {
           if (run.status !== 'running' || now < run.nextStepAt) continue;
           run.activeStep++;
-          run.nextStepAt = now + stepDelay();
+          run.nextStepAt = now + (task.trigger === 'once' ? ordinaryStepDelay() : stepDelay());
           if (run.activeStep < run.steps.length) continue;
+          if (task.trigger === 'once') {
+            this.receiveOrdinaryResult(task.id, run.toolJobId!, ordinaryTaskResult(task, run));
+            continue;
+          }
           run.finishedAt = now;
           if (run.action) {
             run.status = task.confirmBeforeSend ? 'waiting' : 'complete';
@@ -256,7 +296,8 @@ export const useAgentDailyTasks = defineStore('agentDailyTasks', {
             run.result = `${run.event?.order.id ?? '项目运单'}：已完成事件核验与${run.action.channel}内容生成。${task.confirmBeforeSend ? '等待确认发送。' : '发送成功（演示回执）。'}`;
           } else {
             run.status = 'complete';
-            run.result = `${run.event ? `${run.event.order.id} · ${run.event.order.plate}\n${run.event.detail}` : `本项目 ${runtime.total} 条运单已完成汇总，近期产生 ${runtime.events.length} 条运单事件。`}\n已按指令“${run.prompt}”完成处理。${run.event?.type === 'unloading-end' ? '卸货结束节点已归档。' : '建议优先复核未闭环异常，并持续关注在途状态变化。'}`;
+            const summary = run.event ? `${run.event.order.id} · ${run.event.order.plate}\n${run.event.detail}` : runtime ? `本项目 ${runtime.total} 条运单已完成汇总，近期产生 ${runtime.events.length} 条运单事件。` : '个人定时任务已按计划执行，本次未读取任何项目运单或条件事件数据。';
+            run.result = `${summary}\n已按指令“${run.prompt}”完成处理。${run.event?.type === 'unloading-end' ? '卸货结束节点已归档。' : runtime ? '建议优先复核未闭环异常，并持续关注在途状态变化。' : '结果已写入本任务，可继续在会话中处理。'}`;
           }
         }
       }

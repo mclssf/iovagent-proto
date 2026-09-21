@@ -1,6 +1,7 @@
 <script lang="ts" setup>
 import { reactive, ref, watch } from 'vue';
-import { ElDialog, ElMessage } from 'element-plus';
+import { ElMessage } from 'element-plus';
+import AppDialog from '@/components/AppDialog.vue';
 import { useAgentOpsStore } from '@/pinia/agentOps';
 import McpKeyValueRows from './McpKeyValueRows.vue';
 import type { McpConfig } from './mcpConfig';
@@ -36,7 +37,7 @@ function save() {
 </script>
 
 <template>
-  <ElDialog v-model="open" :title="serviceId ? '编辑 MCP 服务' : '新增 MCP 服务'" width="880px" top="4vh" class="ops-tool-dialog mcp-form-dialog" :close-on-click-modal="false" append-to-body>
+  <AppDialog v-model="open" :title="serviceId ? '编辑 MCP 服务' : '新增 MCP 服务'" width="880px" class="ops-tool-dialog mcp-form-dialog">
     <form id="mcp-service-form" class="mcp-form" @submit.prevent="save">
       <label class="ops-field">名称<input v-model="draft.name" class="ops-input" maxlength="60" placeholder="MCP 服务名称" required /></label>
       <label class="ops-field">Description<textarea v-model="draft.description" class="ops-input" rows="2" placeholder="说明服务用途与适用场景" /></label>
@@ -49,7 +50,7 @@ function save() {
       <p v-if="error" class="mcp-error" role="alert">{{ error }}</p>
     </form>
     <template #footer><div class="mcp-form-footer"><button v-if="serviceId" type="button" class="ops-danger" @click="emit('remove', serviceId)">删除服务</button><div><button type="button" class="ops-secondary" @click="open = false">取消</button><button type="submit" form="mcp-service-form" class="ops-primary">保存</button></div></div></template>
-  </ElDialog>
+  </AppDialog>
 </template>
 
 <style scoped>
