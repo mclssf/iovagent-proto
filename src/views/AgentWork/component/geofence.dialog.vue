@@ -2,11 +2,10 @@
 import { computed, nextTick, onBeforeUnmount, reactive, ref, watch } from 'vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import AppDialog from '@/components/AppDialog.vue';
-import L from 'leaflet';
-import 'leaflet/dist/leaflet.css';
 import { Icon } from '@packages/icon';
 import { agentWorkData } from '@/pinia/agentWork';
 import { useAgentDailyTasks } from '@/pinia/agentDailyTasks';
+import { loadAMap } from '@/utils/amap';
 import { strokeIconPaths } from '../strokeIconPaths';
 import '../dailyTasks.css';
 
@@ -19,12 +18,13 @@ const form = reactive({ name: '', latitude: 31.2857, longitude: 121.1668, radius
 const error = ref('');
 const mapFailed = ref(false);
 const mapRef = ref<HTMLDivElement | null>(null);
-let map: L.Map | undefined;
-let circle: L.Circle | undefined;
+let map: AMap.Map | undefined;
+let circle: AMap.Circle | undefined;
 
 function updateCircle() {
   if (!map || !Number.isFinite(form.latitude) || !Number.isFinite(form.longitude) || Math.abs(form.latitude) > 90 || Math.abs(form.longitude) > 180 || form.radius < 100 || form.radius > 50000) return;
-  circle?.setLatLng([form.latitude, form.longitude]).setRadius(form.radius);
+  circle?.setCenter([form.longitude, form.latitude]);
+  circle?.setRadius(form.radius);
 }
 
 async function openMap() {
@@ -32,18 +32,34 @@ async function openMap() {
   mapFailed.value = false;
   await nextTick();
   if (!mapRef.value || map) return;
-  map = L.map(mapRef.value).setView([form.latitude, form.longitude], 12);
-  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { attribution: '&copy; OpenStreetMap', maxZoom: 19 })
-    .on('tileerror', () => { mapFailed.value = true; }).addTo(map);
-  circle = L.circle([form.latitude, form.longitude], { radius: form.radius, color: '#2563eb', fillOpacity: 0.12, weight: 2 }).addTo(map);
-  map.on('click', (event: L.LeafletMouseEvent) => {
-    form.latitude = Number(event.latlng.lat.toFixed(6));
-    form.longitude = Number(event.latlng.lng.toFixed(6));
-  });
-  map.invalidateSize();
+  try {
+    const amap = await loadAMap(['AMap.ToolBar']);
+    map = new amap.Map(mapRef.value, {
+      center: [form.longitude, form.latitude],
+      mapStyle: 'amap://styles/normal',
+      viewMode: '2D',
+      zoom: 12,
+    });
+    map.addControl(new amap.ToolBar({ position: 'RB' }));
+    circle = new amap.Circle({
+      center: [form.longitude, form.latitude],
+      fillColor: '#2563eb',
+      fillOpacity: 0.12,
+      radius: form.radius,
+      strokeColor: '#2563eb',
+      strokeWeight: 2,
+    });
+    map.add(circle);
+    map.on('click', (event: { lnglat: AMap.LngLat }) => {
+      form.latitude = Number(event.lnglat.getLat().toFixed(6));
+      form.longitude = Number(event.lnglat.getLng().toFixed(6));
+    });
+  } catch {
+    mapFailed.value = true;
+  }
 }
 
-function closeMap() { map?.remove(); map = undefined; circle = undefined; }
+function closeMap() { map?.destroy(); map = undefined; circle = undefined; }
 watch(() => [form.latitude, form.longitude, form.radius], updateCircle);
 watch(() => props.projectId, () => { emit('update:modelValue', false); closeMap(); });
 onBeforeUnmount(closeMap);
@@ -93,7 +109,7 @@ function callback(id: string, type: 'fence-enter' | 'fence-exit') {
       <form id="project-fence-form" class="dt-form" @submit.prevent="save">
         <label>围栏名称<input v-model="form.name" maxlength="40" placeholder="例如：嘉定工厂装货区" required /></label>
         <div ref="mapRef" class="dt-fence-map" aria-label="围栏中心点地图" />
-        <p v-if="mapFailed" class="dt-error" role="status">底图暂不可用，可通过下方经纬度设置围栏。</p>
+        <p v-if="mapFailed" class="dt-error" role="status">高德地图暂不可用，可通过下方经纬度设置围栏。</p>
         <div class="dt-form-grid three">
           <label>中心经度<input v-model.number="form.longitude" type="number" min="-180" max="180" step="0.000001" required /></label>
           <label>中心纬度<input v-model.number="form.latitude" type="number" min="-90" max="90" step="0.000001" required /></label>

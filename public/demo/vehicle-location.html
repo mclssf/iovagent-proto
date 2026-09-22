@@ -4,7 +4,6 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>车辆实时位置</title>
-    <link rel="stylesheet" href="/demo/leaflet.css" />
     <style>
       :root {
         color-scheme: light;
@@ -259,10 +258,6 @@
         font-weight: 750;
       }
 
-      .leaflet-control-attribution {
-        font-size: 9px;
-      }
-
       @media (max-width: 720px) {
         .page {
           padding: 12px;
@@ -327,11 +322,8 @@
       <div class="coordinate">经纬度：<span id="coordinate">--</span> · 数据为演示仿真结果</div>
     </main>
 
-    <script
-      src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
-      integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
-      crossorigin=""
-    ></script>
+    <script src="/demo/amap-config.js"></script>
+    <script src="/demo/amap-runtime.js"></script>
     <script>
       const params = new URLSearchParams(window.location.search);
       const numberParam = (name, fallback, min, max) => {
@@ -380,27 +372,40 @@
         return root;
       };
 
-      if (window.L) {
-        const map = L.map("map", { zoomControl: true }).setView([data.lat, data.lng], 13);
-        L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
-          attribution: "&copy; OpenStreetMap contributors",
-          maxZoom: 19,
-        }).addTo(map);
-        const icon = L.divIcon({
-          className: "vehicle-map-icon",
-          html: '<div class="vehicle-marker">车</div>',
-          iconSize: [38, 38],
-          iconAnchor: [19, 19],
-          popupAnchor: [0, -22],
-        });
-        L.marker([data.lat, data.lng], { icon })
-          .addTo(map)
-          .bindPopup(safePopup(`${data.plate} · 定位正常`, [data.poi, `${data.direction} · ${data.speed}`, `最后定位 ${data.time}`]))
-          .openPopup();
-        fallback.hidden = true;
-      } else {
-        fallback.textContent = "地图资源加载失败，请稍后刷新。车辆定位数据仍可在下方查看。";
+      async function drawMap() {
+        try {
+          const AMap = await IovAmap.load(["AMap.ToolBar"]);
+          const [position] = await IovAmap.convertGps(AMap, [[data.lng, data.lat]]);
+          const map = new AMap.Map("map", {
+            center: position,
+            mapStyle: "amap://styles/normal",
+            viewMode: "2D",
+            zoom: 13,
+          });
+          map.addControl(new AMap.ToolBar({ position: "RB" }));
+          const markerContent = document.createElement("div");
+          markerContent.className = "vehicle-map-icon";
+          markerContent.innerHTML = '<div class="vehicle-marker">车</div>';
+          const marker = new AMap.Marker({
+            anchor: "center",
+            content: markerContent,
+            position,
+            zIndex: 120,
+          });
+          map.add(marker);
+          const infoWindow = new AMap.InfoWindow({
+            anchor: "bottom-center",
+            content: safePopup(`${data.plate} · 定位正常`, [data.poi, `${data.direction} · ${data.speed}`, `最后定位 ${data.time}`]),
+            offset: new AMap.Pixel(0, -24),
+          });
+          marker.on("click", () => infoWindow.open(map, position));
+          infoWindow.open(map, position);
+          fallback.hidden = true;
+        } catch {
+          fallback.textContent = "高德地图加载失败，请稍后刷新。车辆定位数据仍可在下方查看。";
+        }
       }
+      drawMap();
     </script>
   </body>
 </html>

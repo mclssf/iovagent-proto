@@ -4,6 +4,10 @@
   "outputDirectory": "dist",
   "rewrites": [
     {
+      "source": "/_AMapService/:path*",
+      "destination": "/api/amap/:path*"
+    },
+    {
       "source": "/(.*)",
       "destination": "/index.html"
     }

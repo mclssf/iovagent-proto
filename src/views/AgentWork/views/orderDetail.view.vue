@@ -1,13 +1,11 @@
 <script lang="ts" setup>
 import type { TimelineEvent } from '../interface';
-import type { LatLngExpression, LatLngTuple } from 'leaflet';
 
 import { Icon } from '@packages/icon';
-import L from 'leaflet';
-import 'leaflet/dist/leaflet.css';
 import { nextTick, onBeforeUnmount, onMounted, ref } from 'vue';
 
 import { agentWorkData } from '@/pinia/agentWork';
+import { convertGpsCoordinates, loadAMap, searchDrivingRoute, type AMapCoordinate } from '@/utils/amap';
 
 import { strokeIconPaths } from '../strokeIconPaths';
 import { badgeToneClass } from '../utils';
@@ -17,18 +15,20 @@ const mapRef = ref<HTMLDivElement | null>(null);
 const routeDistance = ref('--');
 const routeDuration = ref('--');
 
-let mapInstance: L.Map | null = null;
+let mapInstance: AMap.Map | null = null;
+
+type GpsCoordinate = [number, number];
 
 type MapTone = 'current' | 'end' | 'risk' | 'start' | 'stop' | 'warn';
 
 interface MapPoint {
-  coord: LatLngTuple;
+  coord: GpsCoordinate;
   desc: string;
   name: string;
   tone: MapTone;
 }
 
-const routeWaypoints: LatLngTuple[] = [
+const routeWaypoints: GpsCoordinate[] = [
   [31.2304, 121.4737],
   [30.743, 120.758],
   [29.1157, 119.6483],
@@ -40,7 +40,7 @@ const routeWaypoints: LatLngTuple[] = [
   [23.158, 113.48],
 ];
 
-const fallbackRoute: LatLngTuple[] = [
+const fallbackRoute: GpsCoordinate[] = [
   [31.2304, 121.4737],
   [30.86, 121.05],
   [30.743, 120.758],
@@ -111,21 +111,30 @@ function formatDuration(seconds: number) {
   return `${hours}h ${minutes}m`;
 }
 
-function markerIcon(tone: MapTone) {
-  return L.divIcon({
-    className: 'agent-map-marker',
-    html: `<div class="agent-map-pin agent-map-pin--${tone}"></div>`,
-    iconAnchor: [11, 11],
-    iconSize: [22, 22],
-  });
+function markerContent(tone: MapTone) {
+  const root = document.createElement('div');
+  root.className = 'agent-map-marker';
+  const pin = document.createElement('div');
+  pin.className = `agent-map-pin agent-map-pin--${tone}`;
+  root.append(pin);
+  return root;
 }
 
-function popupHtml(point: MapPoint) {
+function popupContent(point: MapPoint) {
   const [lat, lng] = point.coord;
-  return `<div class="agent-map-popup"><b>${point.name}</b><p>${point.desc}</p><span>${lat.toFixed(4)}, ${lng.toFixed(4)}</span></div>`;
+  const root = document.createElement('div');
+  root.className = 'agent-map-popup';
+  const title = document.createElement('b');
+  const desc = document.createElement('p');
+  const coordinate = document.createElement('span');
+  title.textContent = point.name;
+  desc.textContent = point.desc;
+  coordinate.textContent = `${lat.toFixed(4)}, ${lng.toFixed(4)}`;
+  root.append(title, desc, coordinate);
+  return root;
 }
 
-function nearestRouteIndex(route: LatLngTuple[], target: LatLngTuple) {
+function nearestRouteIndex(route: AMapCoordinate[], target: AMapCoordinate) {
   let nearest = 0;
   let minDistance = Number.POSITIVE_INFINITY;
 
@@ -140,68 +149,58 @@ function nearestRouteIndex(route: LatLngTuple[], target: LatLngTuple) {
   return nearest;
 }
 
-async function fetchRoadRoute() {
-  const coordText = routeWaypoints.map(([lat, lng]) => `${lng},${lat}`).join(';');
-  const response = await fetch(`https://router.project-osrm.org/route/v1/driving/${coordText}?overview=full&geometries=geojson`);
-  if (!response.ok) throw new Error('OSRM request failed');
-  const data = await response.json();
-  const route = data.routes?.[0];
-  const coordinates = route?.geometry?.coordinates as [number, number][] | undefined;
-  if (!coordinates?.length) throw new Error('OSRM route is empty');
-
-  routeDistance.value = `${Math.round(route.distance / 1000).toLocaleString()} km`;
-  routeDuration.value = formatDuration(route.duration);
-  return coordinates.map(([lng, lat]) => [lat, lng] as LatLngTuple);
-}
-
-function drawRoute(route: LatLngTuple[]) {
+function drawRoute(amap: typeof AMap, route: AMapCoordinate[], riskPoints: AMapCoordinate[]) {
   if (!mapInstance) return;
 
-  const routeShadow = L.polyline(route as LatLngExpression[], {
-    color: '#ffffff',
-    opacity: 0.9,
-    weight: 9,
-  }).addTo(mapInstance);
+  const routeShadow = new amap.Polyline({ path: route, strokeColor: '#ffffff', strokeOpacity: 0.9, strokeWeight: 9 });
+  const routeLine = new amap.Polyline({ path: route, strokeColor: '#0f172a', strokeOpacity: 0.9, strokeWeight: 5 });
+  mapInstance.add([routeShadow, routeLine]);
 
-  const routeLine = L.polyline(route as LatLngExpression[], {
-    color: '#0f172a',
-    opacity: 0.9,
-    weight: 5,
-  }).addTo(mapInstance);
-
-  const riskStart = nearestRouteIndex(route, [28.2282, 112.9388]);
-  const riskEnd = nearestRouteIndex(route, [27.6229, 113.8546]);
+  const riskStart = nearestRouteIndex(route, riskPoints[0]!);
+  const riskEnd = nearestRouteIndex(route, riskPoints[1]!);
   const [from, to] = riskStart < riskEnd ? [riskStart, riskEnd] : [riskEnd, riskStart];
   const riskSegment = route.slice(from, to + 1);
 
   if (riskSegment.length > 1) {
-    L.polyline(riskSegment as LatLngExpression[], {
-      color: '#7c3aed',
-      dashArray: '10 8',
-      opacity: 0.95,
-      weight: 7,
-    }).addTo(mapInstance);
+    mapInstance.add(new amap.Polyline({
+      path: riskSegment,
+      strokeColor: '#7c3aed',
+      strokeDasharray: [10, 8],
+      strokeOpacity: 0.95,
+      strokeStyle: 'dashed',
+      strokeWeight: 7,
+    }));
   }
 
-  routeLine.bringToFront();
-  mapInstance.fitBounds(routeShadow.getBounds(), { padding: [34, 34] });
+  mapInstance.setFitView([routeShadow], false, [34, 34, 34, 34]);
 }
 
-function drawMarkers() {
+function drawMarkers(amap: typeof AMap, coordinates: AMapCoordinate[]) {
   if (!mapInstance) return;
 
-  mapPoints.forEach((point) => {
-    const marker = L.marker(point.coord, { icon: markerIcon(point.tone) }).addTo(mapInstance!);
-    marker.bindPopup(popupHtml(point), { closeButton: false, offset: [0, -6] });
-
+  mapPoints.forEach((point, index) => {
+    const marker = new amap.Marker({
+      anchor: 'center',
+      content: markerContent(point.tone),
+      position: coordinates[index],
+      title: point.name,
+      zIndex: point.tone === 'current' ? 120 : 100,
+    });
     if (['start', 'current', 'end', 'stop', 'warn'].includes(point.tone)) {
-      marker.bindTooltip(point.name, {
-        className: 'agent-map-tooltip',
+      marker.setLabel({
+        content: point.name,
         direction: 'top',
-        offset: [0, -10],
-        permanent: true,
+        offset: new amap.Pixel(0, -8),
       });
     }
+    marker.on('click', () => {
+      new amap.InfoWindow({
+        anchor: 'bottom-center',
+        content: popupContent(point),
+        offset: new amap.Pixel(0, -14),
+      }).open(mapInstance!, coordinates[index]!);
+    });
+    mapInstance!.add(marker);
   });
 }
 
@@ -209,33 +208,36 @@ async function initMap() {
   await nextTick();
   if (!mapRef.value || mapInstance) return;
 
-  mapInstance = L.map(mapRef.value, {
-    attributionControl: false,
-    center: [27.35, 117.15],
-    zoom: 6,
-    zoomControl: false,
-  });
-
-  L.control.zoom({ position: 'bottomright' }).addTo(mapInstance);
-  L.control
-    .attribution({ position: 'bottomleft', prefix: false })
-    .addAttribution('&copy; OpenStreetMap contributors')
-    .addTo(mapInstance);
-  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-    maxZoom: 19,
-  }).addTo(mapInstance);
-
   try {
-    const roadRoute = await fetchRoadRoute();
-    drawRoute(roadRoute);
-  } catch {
-    routeDistance.value = '约 1,650 km';
-    routeDuration.value = '约 22h';
-    drawRoute(fallbackRoute);
-  }
+    const amap = await loadAMap(['AMap.Driving', 'AMap.ToolBar']);
+    const convertedWaypoints = await convertGpsCoordinates(amap, routeWaypoints.map(([lat, lng]) => [lng, lat]));
+    const convertedFallback = await convertGpsCoordinates(amap, fallbackRoute.map(([lat, lng]) => [lng, lat]));
+    const convertedMarkers = await convertGpsCoordinates(amap, mapPoints.map(({ coord: [lat, lng] }) => [lng, lat]));
+    const riskPoints = await convertGpsCoordinates(amap, [[112.9388, 28.2282], [113.8546, 27.6229]]);
 
-  drawMarkers();
-  setTimeout(() => mapInstance?.invalidateSize(), 80);
+    mapInstance = new amap.Map(mapRef.value, {
+      center: [117.15, 27.35],
+      mapStyle: 'amap://styles/normal',
+      viewMode: '2D',
+      zoom: 6,
+    });
+    mapInstance.addControl(new amap.ToolBar({ position: 'RB' }));
+
+    try {
+      const roadRoute = await searchDrivingRoute(amap, convertedWaypoints);
+      routeDistance.value = `${Math.round(roadRoute.distance / 1000).toLocaleString()} km`;
+      routeDuration.value = formatDuration(roadRoute.duration);
+      drawRoute(amap, roadRoute.path, riskPoints);
+    } catch {
+      routeDistance.value = '约 1,650 km';
+      routeDuration.value = '约 22h';
+      drawRoute(amap, convertedFallback, riskPoints);
+    }
+    drawMarkers(amap, convertedMarkers);
+  } catch {
+    routeDistance.value = '地图加载失败';
+    routeDuration.value = '请稍后重试';
+  }
 }
 
 onMounted(() => {
@@ -244,7 +246,7 @@ onMounted(() => {
 });
 
 onBeforeUnmount(() => {
-  mapInstance?.remove();
+  mapInstance?.destroy();
   mapInstance = null;
 });
 </script>
@@ -289,7 +291,7 @@ onBeforeUnmount(() => {
             <div class="mt-1 flex gap-3 text-slate-500">
               <span>{{ routeDistance }}</span>
               <span>{{ routeDuration }}</span>
-              <span>WGS84</span>
+              <span>高德坐标</span>
             </div>
           </div>
         </div>
@@ -364,16 +366,10 @@ onBeforeUnmount(() => {
 </template>
 
 <style lang="scss" scoped>
-:deep(.leaflet-container) {
+:deep(.amap-container) {
   background: #e2e8f0;
   color: #0f172a;
   font-family: inherit;
-}
-
-:deep(.leaflet-control-attribution) {
-  border-radius: 4px;
-  color: #64748b;
-  font-size: 10px;
 }
 
 :deep(.agent-map-marker) {
@@ -416,7 +412,7 @@ onBeforeUnmount(() => {
   animation: mapPulse 1.8s ease-out infinite;
 }
 
-:deep(.agent-map-tooltip) {
+:deep(.amap-marker-label) {
   border: 1px solid #e2e8f0;
   border-radius: 4px;
   box-shadow: 0 10px 24px rgb(15 23 42 / 12%);

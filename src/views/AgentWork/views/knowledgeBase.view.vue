@@ -2,12 +2,10 @@
 import { nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { useRouter } from 'vue-router';
 
-import L from 'leaflet';
-import 'leaflet/dist/leaflet.css';
-
 import { Icon } from '@packages/icon';
 
 import { agentWorkData } from '@/pinia/agentWork';
+import { convertGpsCoordinates, loadAMap, type AMapCoordinate } from '@/utils/amap';
 
 import { agentWorkRouteName } from '../useAgentWorkNav';
 import { strokeIconPaths } from '../strokeIconPaths';
@@ -229,23 +227,23 @@ function selectAssetTab(tab: 'vehicle' | 'line' | 'poi') {
 let mapRefreshTimer: ReturnType<typeof setTimeout> | undefined;
 const mapTileError = ref(false);
 const platformMapRef = ref<HTMLDivElement | null>(null);
-let platformMapInstance: L.Map | null = null;
+let platformMapInstance: AMap.Map | null = null;
 
-const assetLayers: Record<string, L.Layer> = {};
+type AssetLayer = AMap.CircleMarker | AMap.Marker | AMap.Polyline;
+const assetLayers: Record<string, AssetLayer> = {};
+const platformLineCoordinates: Record<string, { from: AMapCoordinate; to: AMapCoordinate }> = {};
 
 function clearAssetLayers() {
-  Object.values(assetLayers).forEach((layer) => {
-    if (platformMapInstance) platformMapInstance.removeLayer(layer);
-  });
+  if (platformMapInstance) platformMapInstance.remove(Object.values(assetLayers));
   Object.keys(assetLayers).forEach((key) => delete assetLayers[key]);
 }
 
 function buildLineTooltipHtml(line: PlatformLine) {
-  return `<div class="line-tooltip-content">
+  return `<div class="line-tooltip"><div class="line-tooltip-content">
     <div class="line-tooltip-title">${line.from} → ${line.to}</div>
     <div class="line-tooltip-row"><span>运单数</span><b>${line.waybillCount} 单</b></div>
     <div class="line-tooltip-row"><span>承运车辆数</span><b>${line.carrierVehicleCount} 辆</b></div>
-  </div>`;
+  </div></div>`;
 }
 
 const LINE_TIER_STYLES: Record<'low' | 'mid' | 'high', { color: string; weight: number }> = {
@@ -274,19 +272,23 @@ function getLineTierStyles() {
 }
 
 // 精致箭头：实心三角，与线同色，白边加粗，方向感强
-function createArrowIcon(color: string) {
+function createArrowContent(color: string, angle: number) {
   const svg = encodeURIComponent(
     `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="12" viewBox="0 0 16 12"><path d="M1 6 L13 2 L11 6 L13 10 Z" fill="${color}" stroke="#ffffff" stroke-width="1.5" stroke-linejoin="round"/></svg>`,
   );
-  return L.divIcon({
-    className: 'leaflet-arrow-icon',
-    html: `<img src="data:image/svg+xml,${svg}" style="width:16px;height:12px;display:block;" />`,
-    iconSize: [16, 12],
-    iconAnchor: [8, 6],
-  });
+  const root = document.createElement('div');
+  root.className = 'amap-route-arrow';
+  const image = document.createElement('img');
+  image.src = `data:image/svg+xml,${svg}`;
+  image.alt = '';
+  image.style.transform = `rotate(${angle}deg)`;
+  root.append(image);
+  return root;
 }
 
-function buildArcPoints(fromLat: number, fromLng: number, toLat: number, toLng: number, segments = 64): L.LatLngExpression[] {
+function buildArcPoints(from: AMapCoordinate, to: AMapCoordinate, segments = 64): AMapCoordinate[] {
+  const [fromLng, fromLat] = from;
+  const [toLng, toLat] = to;
   const midLat = (fromLat + toLat) / 2;
   const midLng = (fromLng + toLng) / 2;
   const dx = toLng - fromLng;
@@ -295,13 +297,13 @@ function buildArcPoints(fromLat: number, fromLng: number, toLat: number, toLng: 
   const bulge = dist * 0.18;
   const ctrlLat = midLat + (-dy / dist) * bulge;
   const ctrlLng = midLng + (dx / dist) * bulge;
-  const points: L.LatLngExpression[] = [];
+  const points: AMapCoordinate[] = [];
   for (let i = 0; i <= segments; i += 1) {
     const t = i / segments;
     const a = (1 - t) ** 2;
     const b = 2 * (1 - t) * t;
     const c = t * t;
-    points.push([a * fromLat + b * ctrlLat + c * toLat, a * fromLng + b * ctrlLng + c * toLng]);
+    points.push([a * fromLng + b * ctrlLng + c * toLng, a * fromLat + b * ctrlLat + c * toLat]);
   }
   return points;
 }
@@ -310,19 +312,19 @@ function fitBoundsToLines() {
   if (!platformMapInstance || platformLines.value.length === 0) return;
   if (platformLines.value.length === 1) {
     const only = platformLines.value[0]!;
-    platformMapInstance.setView([(only.fromLat + only.toLat) / 2, (only.fromLng + only.toLng) / 2], 8);
+    const coordinates = platformLineCoordinates[only.id];
+    if (coordinates) {
+      platformMapInstance.setZoomAndCenter(8, [
+        (coordinates.from[0] + coordinates.to[0]) / 2,
+        (coordinates.from[1] + coordinates.to[1]) / 2,
+      ]);
+    }
     return;
   }
-  const bounds = L.latLngBounds(
-    platformLines.value.flatMap((line) => [
-      [line.fromLat, line.fromLng] as [number, number],
-      [line.toLat, line.toLng] as [number, number],
-    ]),
-  );
-  platformMapInstance.fitBounds(bounds, { padding: [48, 48] });
+  platformMapInstance.setFitView(Object.values(assetLayers), false, [48, 48, 48, 48]);
 }
 
-function drawPlatformMapLayers() {
+function drawPlatformMapLayers(amap: typeof AMap) {
   if (!platformMapInstance) return;
   clearAssetLayers();
 
@@ -331,7 +333,9 @@ function drawPlatformMapLayers() {
   platformLines.value.forEach((line) => {
     const tierStyle = tierStyles[line.id] ?? LINE_TIER_STYLES.mid;
     const isHighlighted = highlightedAssetId.value === line.id;
-    const arcPoints = buildArcPoints(line.fromLat, line.fromLng, line.toLat, line.toLng);
+    const coordinates = platformLineCoordinates[line.id];
+    if (!coordinates) return;
+    const arcPoints = buildArcPoints(coordinates.from, coordinates.to);
 
     // 渐变线：SVG 分段，段间重叠消除节点，透明度变化更明显
     const lineColor = tierStyle.color;
@@ -349,127 +353,132 @@ function drawPlatformMapLayers() {
       const t = i / SEGMENTS;
       const opacity = 0.05 + 0.9 * t;
 
-      const segLine = L.polyline(segPoints, {
-        color: lineColor,
-        weight: lineWeight,
-        opacity: isHighlighted ? Math.min(opacity + 0.1, 1) : opacity,
-        lineCap: 'round',
-        lineJoin: 'round',
-        interactive: false,
-      }).addTo(platformMapInstance!);
+      const segLine = new amap.Polyline({
+        path: segPoints,
+        strokeColor: lineColor,
+        strokeOpacity: isHighlighted ? Math.min(opacity + 0.1, 1) : opacity,
+        strokeWeight: lineWeight,
+        zIndex: isHighlighted ? 120 : 100,
+      });
+      platformMapInstance!.add(segLine);
       assetLayers[`${line.id}-seg-${i}`] = segLine;
     }
 
     // 交互层（透明粗线，用于 hover 和 tooltip）
-    const hitLine = L.polyline(arcPoints, {
-      color: tierStyle.color,
-      weight: Math.max(tierStyle.weight + 6, 12),
-      opacity: 0,
-      interactive: true,
-    }).addTo(platformMapInstance!);
-    hitLine.bindTooltip(buildLineTooltipHtml(line), {
-      direction: 'top',
-      sticky: true,
-      opacity: 1,
-      className: 'line-tooltip',
-      offset: [0, -8],
+    const hitLine = new amap.Polyline({
+      path: arcPoints,
+      strokeColor: tierStyle.color,
+      strokeOpacity: 0.01,
+      strokeWeight: Math.max(tierStyle.weight + 8, 14),
+      zIndex: 140,
     });
-    hitLine.on('mouseover', () => {
+    platformMapInstance.add(hitLine);
+    const tooltip = new amap.InfoWindow({
+      anchor: 'bottom-center',
+      closeWhenClickMap: true,
+      content: buildLineTooltipHtml(line),
+      isCustom: true,
+      offset: new amap.Pixel(0, -8),
+    });
+    hitLine.on('mouseover', (event: { lnglat: AMap.LngLat }) => {
+      tooltip.open(platformMapInstance!, event.lnglat.toArray());
       for (let i = 0; i < SEGMENTS; i += 1) {
-        const seg = assetLayers[`${line.id}-seg-${i}`] as L.Polyline | undefined;
-        seg?.setStyle({ weight: tierStyle.weight + 1, opacity: 0.95 });
+        const seg = assetLayers[`${line.id}-seg-${i}`] as AMap.Polyline | undefined;
+        seg?.setOptions({ strokeOpacity: 0.95, strokeWeight: tierStyle.weight + 1 });
       }
-      (assetLayers[`${line.id}-from`] as L.CircleMarker | undefined)?.setStyle({ radius: 4, weight: 2 });
-      (assetLayers[`${line.id}-to`] as L.CircleMarker | undefined)?.setStyle({ radius: 5, weight: 2 });
+      (assetLayers[`${line.id}-from`] as AMap.CircleMarker | undefined)?.setOptions({ radius: 4, strokeWeight: 2 });
+      (assetLayers[`${line.id}-to`] as AMap.CircleMarker | undefined)?.setOptions({ radius: 5, strokeWeight: 2 });
     });
     hitLine.on('mouseout', () => {
+      tooltip.close();
       if (highlightedAssetId.value === line.id) return;
       for (let i = 0; i < SEGMENTS; i += 1) {
-        const seg = assetLayers[`${line.id}-seg-${i}`] as L.Polyline | undefined;
+        const seg = assetLayers[`${line.id}-seg-${i}`] as AMap.Polyline | undefined;
         const t = i / SEGMENTS;
         const opacity = 0.05 + 0.9 * t;
-        seg?.setStyle({ weight: tierStyle.weight, opacity });
+        seg?.setOptions({ strokeOpacity: opacity, strokeWeight: tierStyle.weight });
       }
-      (assetLayers[`${line.id}-from`] as L.CircleMarker | undefined)?.setStyle({ radius: 3, weight: 1.5 });
-      (assetLayers[`${line.id}-to`] as L.CircleMarker | undefined)?.setStyle({ radius: 3.5, weight: 1.5 });
+      (assetLayers[`${line.id}-from`] as AMap.CircleMarker | undefined)?.setOptions({ radius: 3, strokeWeight: 1.5 });
+      (assetLayers[`${line.id}-to`] as AMap.CircleMarker | undefined)?.setOptions({ radius: 3.5, strokeWeight: 1.5 });
     });
     assetLayers[line.id] = hitLine;
 
     // 方向箭头：位于飞线中点，指向终点
     const midIdx = Math.floor(arcPoints.length / 2);
-    const midPoint = arcPoints[midIdx] as [number, number];
-    const dLat = line.toLat - line.fromLat;
-    const dLng = line.toLng - line.fromLng;
+    const midPoint = arcPoints[midIdx]!;
+    const dLat = coordinates.to[1] - coordinates.from[1];
+    const dLng = coordinates.to[0] - coordinates.from[0];
     const angle = (Math.atan2(-dLat, dLng) * 180) / Math.PI;
-    const arrowMarker = L.marker(midPoint, {
-      icon: createArrowIcon(tierStyle.color),
-      interactive: false,
-    }).addTo(platformMapInstance!);
-    const img = (arrowMarker.getElement()?.querySelector('img') as HTMLImageElement | null);
-    if (img) {
-      img.style.transform = `rotate(${angle}deg)`;
-      img.style.transformOrigin = 'center';
-    }
+    const arrowMarker = new amap.Marker({
+      anchor: 'center',
+      content: createArrowContent(tierStyle.color, angle),
+      position: midPoint,
+      zIndex: 160,
+    });
+    platformMapInstance.add(arrowMarker);
     assetLayers[`${line.id}-arrow`] = arrowMarker;
 
     // 起点：实心圆点 + 细白边
-    const fromMarker = L.circleMarker([line.fromLat, line.fromLng], {
+    const fromMarker = new amap.CircleMarker({
+      center: coordinates.from,
       radius: isHighlighted ? 4 : 3,
-      color: '#ffffff',
+      strokeColor: '#ffffff',
       fillColor: tierStyle.color,
       fillOpacity: 1,
-      weight: 1.5,
-    }).addTo(platformMapInstance!);
+      strokeWeight: 1.5,
+      zIndex: 170,
+    });
+    platformMapInstance.add(fromMarker);
     assetLayers[`${line.id}-from`] = fromMarker;
 
     // 终点：实心圆点 + 细白边（略大）
-    const toMarker = L.circleMarker([line.toLat, line.toLng], {
+    const toMarker = new amap.CircleMarker({
+      center: coordinates.to,
       radius: isHighlighted ? 5 : 3.5,
-      color: '#ffffff',
+      strokeColor: '#ffffff',
       fillColor: tierStyle.color,
       fillOpacity: 1,
-      weight: 1.5,
-    }).addTo(platformMapInstance!);
+      strokeWeight: 1.5,
+      zIndex: 170,
+    });
+    platformMapInstance.add(toMarker);
     assetLayers[`${line.id}-to`] = toMarker;
   });
 }
 
-function initPlatformMap() {
+async function initPlatformMap() {
   if (props.emptyMode || !platformMapRef.value || platformMapInstance) return;
-  platformMapInstance = L.map(platformMapRef.value, {
-    attributionControl: false,
-    center: [32.5, 118.8],
-    zoom: 5,
-    zoomControl: false,
-    zoomSnap: 0.5,
-    zoomDelta: 0.5,
-    wheelPxPerZoomLevel: 90,
-    fadeAnimation: true,
-    zoomAnimation: true,
-    markerZoomAnimation: true,
-  });
-  L.control.zoom({ position: 'bottomright' }).addTo(platformMapInstance);
-  // 原型阶段使用高德栅格底图（GCJ-02 坐标系），与 WGS-84 业务数据存在偏移，仅作演示
-  const baseLayer = L.tileLayer('https://webrd0{s}.is.autonavi.com/appmaptile?lang=zh_cn&size=1&scale=1&style=8&x={x}&y={y}&z={z}', {
-    maxZoom: 19,
-    subdomains: '1234',
-    className: 'platform-map-tiles',
-  }).addTo(platformMapInstance);
-  baseLayer.on('tileerror', () => { mapTileError.value = true; });
-  baseLayer.on('tileload', () => { baseLayer.getContainer()?.classList.add('tiles-loaded'); });
-  baseLayer.on('load', () => baseLayer.getContainer()?.classList.add('tiles-loaded'));
-
-  drawPlatformMapLayers();
-  mapRefreshTimer = setTimeout(() => {
-    platformMapInstance?.invalidateSize();
-    fitBoundsToLines();
-  }, 80);
+  try {
+    const amap = await loadAMap(['AMap.ToolBar']);
+    const sourceCoordinates = platformLines.value.flatMap((line) => [[line.fromLng, line.fromLat], [line.toLng, line.toLat]] as AMapCoordinate[]);
+    const convertedCoordinates = await convertGpsCoordinates(amap, sourceCoordinates);
+    platformLines.value.forEach((line, index) => {
+      platformLineCoordinates[line.id] = {
+        from: convertedCoordinates[index * 2]!,
+        to: convertedCoordinates[index * 2 + 1]!,
+      };
+    });
+    platformMapInstance = new amap.Map(platformMapRef.value, {
+      center: [118.8, 32.5],
+      mapStyle: 'amap://styles/normal',
+      viewMode: '2D',
+      zoom: 5,
+    });
+    platformMapInstance.addControl(new amap.ToolBar({ position: 'RB' }));
+    platformMapInstance.on('complete', () => { mapTileError.value = false; });
+    drawPlatformMapLayers(amap);
+    mapRefreshTimer = setTimeout(() => {
+      fitBoundsToLines();
+    }, 80);
+  } catch {
+    mapTileError.value = true;
+  }
 }
 
 function clearPlatformMap() {
   clearTimeout(mapRefreshTimer);
   clearAssetLayers();
-  platformMapInstance?.remove();
+  platformMapInstance?.destroy();
   platformMapInstance = null;
 }
 
@@ -480,7 +489,6 @@ watch(
       nextTick(() => {
         if (!platformMapInstance) initPlatformMap();
         else mapRefreshTimer = setTimeout(() => {
-          platformMapInstance?.invalidateSize();
           fitBoundsToLines();
         }, 80);
       });
@@ -502,12 +510,12 @@ function maskPlate(plate: string) {
 
 function highlightAsset(id: string) {
   highlightedAssetId.value = id;
-  drawPlatformMapLayers();
+  if (window.AMap) drawPlatformMapLayers(window.AMap);
 }
 
 function clearHighlightAsset() {
   highlightedAssetId.value = '';
-  drawPlatformMapLayers();
+  if (window.AMap) drawPlatformMapLayers(window.AMap);
 }
 
 function goToAgentConversation() {
@@ -895,53 +903,22 @@ onBeforeUnmount(() => {
 </style>
 
 <style lang="scss">
-// ===== 底图滤镜：去灰提清透 =====
-// 高德 style=8 默认偏灰，加一层非常轻的处理让蓝色海面更干净、陆地更暖
-.platform-map-tiles {
-  filter: saturate(1.08) contrast(1.03) brightness(1.01);
-  transition: opacity 0.4s ease;
-}
-.platform-map-tiles:not(.tiles-loaded) {
-  opacity: 0;
-}
-
 // ===== 缩放控件 =====
-.platform-map .leaflet-control-zoom {
-  border: none !important;
-  box-shadow: 0 4px 14px rgba(15, 23, 42, 0.12), 0 1px 3px rgba(15, 23, 42, 0.08) !important;
-  border-radius: 10px !important;
-  overflow: hidden;
-  margin-right: 14px !important;
-  margin-bottom: 14px !important;
-
-  a {
-    width: 30px !important;
-    height: 30px !important;
-    line-height: 30px !important;
-    border: none !important;
-    background: rgba(255, 255, 255, 0.95) !important;
-    color: #334155 !important;
-    font-weight: 600;
-    transition: all 0.15s ease;
-    backdrop-filter: blur(6px);
-
-    &:hover {
-      background: #ffffff !important;
-      color: #0f172a !important;
-    }
-    &:first-child {
-      border-bottom: 1px solid #f1f5f9 !important;
-      border-radius: 0 !important;
-    }
-    &:last-child {
-      border-radius: 0 !important;
-    }
-  }
+.platform-map .amap-toolbar {
+  margin-right: 14px;
+  margin-bottom: 14px;
 }
 
 // ===== 鼠标悬停时飞线加粗过渡 =====
-.platform-map .leaflet-overlay-pane path {
+.platform-map canvas {
   transition: stroke-width 0.18s ease, opacity 0.18s ease;
+}
+
+.amap-route-arrow img {
+  display: block;
+  height: 12px;
+  transform-origin: center;
+  width: 16px;
 }
 
 // ===== Tooltip =====

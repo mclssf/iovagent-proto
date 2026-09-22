@@ -1,9 +1,6 @@
 <script lang="ts" setup>
 import type { AgentResultLink, ChatMessage, TimelineEvent } from '../interface';
-import type { LatLngExpression, LatLngTuple } from 'leaflet';
 
-import L from 'leaflet';
-import 'leaflet/dist/leaflet.css';
 import { storeToRefs } from 'pinia';
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 
@@ -11,6 +8,7 @@ import { Icon } from '@packages/icon';
 
 import { agentWorkData, quickPrompts, rightPanelTabs } from '@/pinia/agentWork';
 import { useAgentDailyTasks } from '@/pinia/agentDailyTasks';
+import { convertGpsCoordinates, loadAMap, searchDrivingRoute, type AMapCoordinate } from '@/utils/amap';
 import { taskRunLabels } from '../dailyTasks';
 
 import { getRiskOrders, badgeToneClass } from '../utils';
@@ -49,12 +47,14 @@ const panelMapRef = ref<HTMLDivElement | null>(null);
 const panelRouteDistance = ref('约 175 km');
 const panelRouteDuration = ref('约 2h 40m');
 
-let panelMapInstance: L.Map | null = null;
+let panelMapInstance: AMap.Map | null = null;
+
+type GpsCoordinate = [number, number];
 
 type MapTone = 'current' | 'end' | 'risk' | 'start' | 'stop' | 'warn';
 
 interface MapPoint {
-  coord: LatLngTuple;
+  coord: GpsCoordinate;
   desc: string;
   name: string;
   tone: MapTone;
@@ -506,7 +506,7 @@ const clearedLowRiskWarnings = [
   { id: 'WB20260509020', plate: '粤B90877', reason: '收费站拥堵导致低速滞留，轨迹连续且未偏离主线路。' },
 ];
 
-const eventPanelRoute: LatLngTuple[] = [
+const eventPanelRoute: GpsCoordinate[] = [
   [31.8206, 117.2272],
   [31.92, 117.72],
   [32.02, 118.12],
@@ -586,6 +586,12 @@ const eventPanelVisibleTimeline = computed(() => {
   return eventPanelTimeline;
 });
 
+function formatMapDuration(seconds: number) {
+  const hours = Math.floor(seconds / 3600);
+  const minutes = Math.round((seconds % 3600) / 60);
+  return `${hours}h ${minutes}m`;
+}
+
 function eventCardClass(event: TimelineEvent) {
   if (event.type === 'risk') return 'border-purple-200 bg-purple-50';
   if (event.type === 'stop' && store.detailView === 'agent' && event.agentTone === 'green') return 'border-emerald-200 bg-emerald-50';
@@ -593,58 +599,84 @@ function eventCardClass(event: TimelineEvent) {
   return 'border-[#deded9] bg-white';
 }
 
-function markerIcon(tone: MapTone) {
-  return L.divIcon({
-    className: 'agent-map-marker',
-    html: `<div class="agent-map-pin agent-map-pin--${tone}"></div>`,
-    iconAnchor: [11, 11],
-    iconSize: [22, 22],
-  });
+function markerContent(tone: MapTone) {
+  const root = document.createElement('div');
+  root.className = 'agent-map-marker';
+  const pin = document.createElement('div');
+  pin.className = `agent-map-pin agent-map-pin--${tone}`;
+  root.append(pin);
+  return root;
 }
 
-function popupHtml(point: MapPoint) {
+function popupContent(point: MapPoint) {
   const [lat, lng] = point.coord;
-  return `<div class="agent-map-popup"><b>${point.name}</b><p>${point.desc}</p><span>${lat.toFixed(4)}, ${lng.toFixed(4)}</span></div>`;
+  const root = document.createElement('div');
+  root.className = 'agent-map-popup';
+  const title = document.createElement('b');
+  const desc = document.createElement('p');
+  const coordinate = document.createElement('span');
+  title.textContent = point.name;
+  desc.textContent = point.desc;
+  coordinate.textContent = `${lat.toFixed(4)}, ${lng.toFixed(4)}`;
+  root.append(title, desc, coordinate);
+  return root;
 }
 
-function drawEventPanelRoute() {
-  if (!panelMapInstance) return;
-
-  const routeShadow = L.polyline(eventPanelRoute as LatLngExpression[], {
-    color: '#ffffff',
-    opacity: 0.9,
-    weight: 8,
-  }).addTo(panelMapInstance);
-
-  const routeLine = L.polyline(eventPanelRoute as LatLngExpression[], {
-    color: '#0f172a',
-    opacity: 0.9,
-    weight: 4,
-  }).addTo(panelMapInstance);
-
-  L.polyline(eventPanelRoute.slice(4, 6) as LatLngExpression[], {
-    color: '#dc2626',
-    dashArray: '8 7',
-    opacity: 0.95,
-    weight: 6,
-  }).addTo(panelMapInstance);
-
-  routeLine.bringToFront();
-  panelMapInstance.fitBounds(routeShadow.getBounds(), { padding: [28, 28] });
+function nearestRouteIndex(route: AMapCoordinate[], target: AMapCoordinate) {
+  let nearest = 0;
+  let minDistance = Number.POSITIVE_INFINITY;
+  route.forEach((coord, index) => {
+    const distance = (coord[0] - target[0]) ** 2 + (coord[1] - target[1]) ** 2;
+    if (distance < minDistance) {
+      nearest = index;
+      minDistance = distance;
+    }
+  });
+  return nearest;
 }
 
-function drawEventPanelMarkers() {
+function drawEventPanelRoute(amap: typeof AMap, route: AMapCoordinate[], riskPoints: AMapCoordinate[]) {
   if (!panelMapInstance) return;
 
-  eventPanelMapPoints.forEach((point) => {
-    const marker = L.marker(point.coord, { icon: markerIcon(point.tone) }).addTo(panelMapInstance!);
-    marker.bindPopup(popupHtml(point), { closeButton: false, offset: [0, -6] });
-    marker.bindTooltip(point.name, {
-      className: 'agent-map-tooltip',
-      direction: 'top',
-      offset: [0, -10],
-      permanent: ['start', 'end', 'warn', 'stop'].includes(point.tone),
+  const routeShadow = new amap.Polyline({ path: route, strokeColor: '#ffffff', strokeOpacity: 0.9, strokeWeight: 8 });
+  const routeLine = new amap.Polyline({ path: route, strokeColor: '#0f172a', strokeOpacity: 0.9, strokeWeight: 4 });
+  const riskStart = nearestRouteIndex(route, riskPoints[0]!);
+  const riskEnd = nearestRouteIndex(route, riskPoints[1]!);
+  const [from, to] = riskStart < riskEnd ? [riskStart, riskEnd] : [riskEnd, riskStart];
+  const riskLine = new amap.Polyline({
+    path: route.slice(from, to + 1),
+    strokeColor: '#dc2626',
+    strokeDasharray: [8, 7],
+    strokeOpacity: 0.95,
+    strokeStyle: 'dashed',
+    strokeWeight: 6,
+  });
+  panelMapInstance.add([routeShadow, routeLine, riskLine]);
+  panelMapInstance.setFitView([routeShadow], false, [28, 28, 28, 28]);
+}
+
+function drawEventPanelMarkers(amap: typeof AMap, coordinates: AMapCoordinate[]) {
+  if (!panelMapInstance) return;
+
+  eventPanelMapPoints.forEach((point, index) => {
+    const marker = new amap.Marker({
+      anchor: 'center',
+      content: markerContent(point.tone),
+      position: coordinates[index],
+      title: point.name,
+      zIndex: point.tone === 'current' ? 120 : 100,
     });
+    if (['start', 'end', 'warn', 'stop'].includes(point.tone)) {
+      marker.setLabel({ content: point.name, direction: 'top', offset: new amap.Pixel(0, -8) });
+    }
+    marker.on('click', () => {
+      new amap.InfoWindow({
+        anchor: 'bottom-center',
+        content: popupContent(point),
+        offset: new amap.Pixel(0, -14),
+      }).open(panelMapInstance!, coordinates[index]!);
+    });
+    panelMapInstance!.add(marker);
   });
 }
 
@@ -652,29 +684,35 @@ async function initEventPanelMap() {
   await nextTick();
   if (!panelMapRef.value || panelMapInstance) return;
 
-  panelMapInstance = L.map(panelMapRef.value, {
-    attributionControl: false,
-    center: [32.02, 118.2],
-    zoom: 9,
-    zoomControl: false,
-  });
-
-  L.control.zoom({ position: 'bottomright' }).addTo(panelMapInstance);
-  L.control
-    .attribution({ position: 'bottomleft', prefix: false })
-    .addAttribution('&copy; OpenStreetMap contributors')
-    .addTo(panelMapInstance);
-  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-    maxZoom: 19,
-  }).addTo(panelMapInstance);
-
-  drawEventPanelRoute();
-  drawEventPanelMarkers();
-  setTimeout(() => panelMapInstance?.invalidateSize(), 80);
+  try {
+    const amap = await loadAMap(['AMap.Driving', 'AMap.ToolBar']);
+    const routePoints = await convertGpsCoordinates(amap, eventPanelRoute.map(([lat, lng]) => [lng, lat]));
+    const markerPoints = await convertGpsCoordinates(amap, eventPanelMapPoints.map(({ coord: [lat, lng] }) => [lng, lat]));
+    const riskPoints = await convertGpsCoordinates(amap, [[118.52, 32.103], [118.68, 32.071]]);
+    panelMapInstance = new amap.Map(panelMapRef.value, {
+      center: [118.2, 32.02],
+      mapStyle: 'amap://styles/normal',
+      viewMode: '2D',
+      zoom: 9,
+    });
+    panelMapInstance.addControl(new amap.ToolBar({ position: 'RB' }));
+    try {
+      const route = await searchDrivingRoute(amap, routePoints);
+      panelRouteDistance.value = `约 ${Math.round(route.distance / 1000)} km`;
+      panelRouteDuration.value = formatMapDuration(route.duration);
+      drawEventPanelRoute(amap, route.path, riskPoints);
+    } catch {
+      drawEventPanelRoute(amap, routePoints, riskPoints);
+    }
+    drawEventPanelMarkers(amap, markerPoints);
+  } catch {
+    panelRouteDistance.value = '地图加载失败';
+    panelRouteDuration.value = '请稍后重试';
+  }
 }
 
 function clearEventPanelMap() {
-  panelMapInstance?.remove();
+  panelMapInstance?.destroy();
   panelMapInstance = null;
 }
 
@@ -1178,7 +1216,7 @@ onBeforeUnmount(() => {
                 <div class="mt-1 flex gap-3 text-slate-500">
                   <span>{{ panelRouteDistance }}</span>
                   <span>{{ panelRouteDuration }}</span>
-                  <span>WGS84</span>
+                  <span>高德坐标</span>
                 </div>
               </div>
               <div class="pointer-events-none absolute top-3 right-3 z-[1000] flex gap-2">
@@ -1374,16 +1412,10 @@ onBeforeUnmount(() => {
 </template>
 
 <style lang="scss" scoped>
-:deep(.leaflet-container) {
+:deep(.amap-container) {
   background: #e2e8f0;
   color: #0f172a;
   font-family: inherit;
-}
-
-:deep(.leaflet-control-attribution) {
-  border-radius: 4px;
-  color: #64748b;
-  font-size: 10px;
 }
 
 :deep(.agent-map-marker) {
@@ -1426,7 +1458,7 @@ onBeforeUnmount(() => {
   animation: mapPulse 1.8s ease-out infinite;
 }
 
-:deep(.agent-map-tooltip) {
+:deep(.amap-marker-label) {
   border: 1px solid #e2e8f0;
   border-radius: 4px;
   box-shadow: 0 10px 24px rgb(15 23 42 / 12%);
