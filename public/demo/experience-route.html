@@ -80,7 +80,7 @@
           const AMap = await IovAmap.load(['AMap.Driving', 'AMap.ToolBar']);
           const converted = await IovAmap.convertGps(AMap, [[data.originLng, data.originLat], [data.destinationLng, data.destinationLat]]);
           const origin = converted[0]; const destination = converted[1];
-          const map = new AMap.Map('map', { center: origin, mapStyle: 'amap://styles/normal', viewMode: '2D', zoom: 6 });
+          const map = new AMap.Map('map', { center: origin, mapStyle: 'amap://styles/whitesmoke', viewMode: '2D', zoom: 6 });
           map.addControl(new AMap.ToolBar({ position: 'RB' }));
           const drivingPolicy = data.policy === '不走高速'
             ? (AMap.DrivingPolicy?.AVOID_HIGHWAY ?? 3)

@@ -460,7 +460,7 @@ async function initPlatformMap() {
     });
     platformMapInstance = new amap.Map(platformMapRef.value, {
       center: [118.8, 32.5],
-      mapStyle: 'amap://styles/normal',
+      mapStyle: 'amap://styles/whitesmoke',
       viewMode: '2D',
       zoom: 5,
     });

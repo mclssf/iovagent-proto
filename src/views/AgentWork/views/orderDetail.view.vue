@@ -217,7 +217,7 @@ async function initMap() {
 
     mapInstance = new amap.Map(mapRef.value, {
       center: [117.15, 27.35],
-      mapStyle: 'amap://styles/normal',
+      mapStyle: 'amap://styles/whitesmoke',
       viewMode: '2D',
       zoom: 6,
     });

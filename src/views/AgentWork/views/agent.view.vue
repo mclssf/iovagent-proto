@@ -691,7 +691,7 @@ async function initEventPanelMap() {
     const riskPoints = await convertGpsCoordinates(amap, [[118.52, 32.103], [118.68, 32.071]]);
     panelMapInstance = new amap.Map(panelMapRef.value, {
       center: [118.2, 32.02],
-      mapStyle: 'amap://styles/normal',
+      mapStyle: 'amap://styles/whitesmoke',
       viewMode: '2D',
       zoom: 9,
     });

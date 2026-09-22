@@ -71,7 +71,7 @@
         try {
           const AMap = await IovAmap.load(['AMap.Driving', 'AMap.ToolBar']);
           const [origin, destination, declared, middle] = await IovAmap.convertGps(AMap, [[120.374,36.087],[117.121,36.709],[117.315,36.655],[118.72,36.42]]);
-          const map = new AMap.Map('map', { center: middle, mapStyle: 'amap://styles/normal', viewMode: '2D', zoom: 8 });
+          const map = new AMap.Map('map', { center: middle, mapStyle: 'amap://styles/whitesmoke', viewMode: '2D', zoom: 8 });
           map.addControl(new AMap.ToolBar({ position: 'RB' }));
           let route = [origin,middle,destination];
           try { route = (await IovAmap.drivingRoute(AMap, route)).path; } catch {}

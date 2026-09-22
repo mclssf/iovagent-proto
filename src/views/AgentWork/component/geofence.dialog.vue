@@ -36,7 +36,7 @@ async function openMap() {
     const amap = await loadAMap(['AMap.ToolBar']);
     map = new amap.Map(mapRef.value, {
       center: [form.longitude, form.latitude],
-      mapStyle: 'amap://styles/normal',
+      mapStyle: 'amap://styles/whitesmoke',
       viewMode: '2D',
       zoom: 12,
     });
