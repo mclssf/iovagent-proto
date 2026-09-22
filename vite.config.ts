@@ -9,7 +9,7 @@ import { defineConfig, loadEnv, type Plugin } from 'vite';
 function createAmapConfigScript(env: Record<string, string>) {
   return `window.__IOV_AMAP_CONFIG__=${JSON.stringify({
     key: env.VITE_AMAP_KEY || '',
-    serviceHost: env.VITE_AMAP_SERVICE_HOST || '/_AMapService',
+    serviceHost: '/_AMapService',
   })};\n`;
 }
 

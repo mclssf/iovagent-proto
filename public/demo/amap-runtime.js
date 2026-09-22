@@ -15,14 +15,14 @@
     return loaderPromise;
   }
 
-  function serviceHost(value) {
-    return new URL(value || '/_AMapService', window.location.origin).toString().replace(/\/$/, '');
+  function serviceHost() {
+    return new URL('/_AMapService', window.location.origin).toString();
   }
 
   async function load(plugins) {
     var config = window.__IOV_AMAP_CONFIG__ || {};
     if (!config.key) throw new Error('缺少高德地图 API Key');
-    window._AMapSecurityConfig = { serviceHost: serviceHost(config.serviceHost) };
+    window._AMapSecurityConfig = { serviceHost: serviceHost() };
     await loadLoader();
     return window.AMapLoader.load({ key: config.key, version: '2.0', plugins: plugins || [] });
   }

@@ -1,6 +1,16 @@
 const REST_API_ORIGIN = 'https://restapi.amap.com/';
 const WEB_API_ORIGIN = 'https://webapi.amap.com/';
 
+function resolveUpstreamPath(requestUrl) {
+  const configuredPath = requestUrl.searchParams.get('path');
+  const pathname = configuredPath || requestUrl.pathname.replace(/^\/api\/amap\/?/, '');
+  return pathname.replace(/^\/+/, '');
+}
+
+function isSafeUpstreamPath(pathname) {
+  return Boolean(pathname) && !pathname.includes('..') && !pathname.includes('://');
+}
+
 export default async function handler(request, response) {
   const securityCode = process.env.AMAP_SECURITY_CODE;
   if (!securityCode) {
@@ -9,9 +19,15 @@ export default async function handler(request, response) {
   }
 
   const requestUrl = new URL(request.url, 'https://localhost');
-  const upstreamPath = requestUrl.pathname.replace(/^\/(?:api\/amap|_AMapService)\/?/, '');
+  const upstreamPath = resolveUpstreamPath(requestUrl);
+  if (!isSafeUpstreamPath(upstreamPath)) {
+    response.status(400).json({ info: 'Invalid AMap service path', status: '0' });
+    return;
+  }
+
   const origin = upstreamPath.startsWith('v4/map/styles') ? WEB_API_ORIGIN : REST_API_ORIGIN;
   const upstreamUrl = new URL(upstreamPath, origin);
+  requestUrl.searchParams.delete('path');
   requestUrl.searchParams.forEach((value, key) => upstreamUrl.searchParams.append(key, value));
   upstreamUrl.searchParams.set('jscode', securityCode);
 

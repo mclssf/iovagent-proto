@@ -25,9 +25,7 @@ type AMapWithDriving = typeof AMap & {
 };
 
 function resolveServiceHost() {
-  const env = import.meta.env as Record<string, string | undefined>;
-  const configured = env.VITE_AMAP_SERVICE_HOST?.trim() || '/_AMapService';
-  return new URL(configured, window.location.origin).toString().replace(/\/$/, '');
+  return new URL('/_AMapService', window.location.origin).toString();
 }
 
 function loadLoaderScript() {

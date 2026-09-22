@@ -2,14 +2,17 @@
   "installCommand": "pnpm install --frozen-lockfile",
   "buildCommand": "pnpm build",
   "outputDirectory": "dist",
-  "rewrites": [
+  "routes": [
     {
-      "source": "/_AMapService/:path*",
-      "destination": "/api/amap/:path*"
+      "src": "/_AMapService/(?<path>.*)",
+      "dest": "/api/amap?path=$path"
     },
     {
-      "source": "/(.*)",
-      "destination": "/index.html"
+      "handle": "filesystem"
+    },
+    {
+      "src": "/(.*)",
+      "dest": "/index.html"
     }
   ]
 }
