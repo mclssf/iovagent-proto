@@ -210,6 +210,8 @@ export interface ChatMessage {
   progressMode?: boolean;
   dailyTaskId?: string;
   pendingAsyncPrompt?: string;
+  pendingCompliancePrompt?: string;
+  pendingExperienceRoutePrompt?: string;
   sources?: { name: string; summary: string; format?: string }[];
   steps?: {
     title: string;

@@ -5,6 +5,7 @@ import { Icon } from '@packages/icon';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { agentWorkData } from '@/pinia/agentWork';
 import { useAgentDailyTasks } from '@/pinia/agentDailyTasks';
+import { createDataEmployeeSkills } from '@/pinia/dataEmployeeSkills';
 import type { DailyTask, TaskRun } from '../dailyTasks';
 import { formatTaskTime, getTaskStatus, hasTaskResult, taskDuration, triggerLabel, taskTypeLabels, taskStatusLabels } from '../dailyTasks';
 import { downloadTaskResult } from '../ordinaryTasks';
@@ -46,6 +47,12 @@ const filteredTasks = computed(() => projectTasks.value.filter((task) => {
 const results = computed(() => (selected.value?.runs ?? []).filter(hasTaskResult).sort((a, b) => (b.finishedAt ?? b.startedAt) - (a.finishedAt ?? a.startedAt)));
 const activeRuns = computed(() => (selected.value?.runs ?? []).filter((run) => run.status === 'running'));
 const sourceLabels: Record<TaskRun['source'], string> = { test: '测试执行', event: '事件触发', schedule: '定时执行', manual: '手动创建', workbench: '智能体工作台' };
+const dataEmployeeNames = Object.fromEntries(createDataEmployeeSkills().map((skill) => [skill.id, skill.name]));
+function smartOrderEntryFlow(task: DailyTask) {
+  const sources = (task.sourceDataEmployeeIds ?? []).map((id) => dataEmployeeNames[id] ?? id).join('、');
+  const target = dataEmployeeNames[task.targetDataEmployeeId ?? ''] ?? task.targetDataEmployeeId ?? '未配置';
+  return `${sources || '未配置'} → ${target}`;
+}
 watch([projectId, () => route.query.taskId], () => {
   selectedId.value = projectTasks.value.find((task) => task.id === route.query.taskId)?.id ?? projectTasks.value[0]?.id ?? '';
   search.value = ''; filter.value = 'all'; typeFilter.value = 'all'; showForm.value = false;
@@ -198,6 +205,7 @@ async function remove(task: DailyTask) {
                 <div v-if="selected.trigger !== 'once'" class="dt-summary-trigger"><dt>通知确认</dt><dd>{{ selected.confirmBeforeSend ? '发送前确认' : '自动发送' }}</dd></div>
                 <div v-else class="dt-summary-trigger"><dt>任务来源</dt><dd>{{ selected.origin === 'workbench' ? '智能体工作台' : '手动创建' }}</dd></div>
               </dl>
+              <div v-if="selected.taskTemplate === 'smart-order-entry'" class="dt-summary-description"><h3>系统流向</h3><p>{{ smartOrderEntryFlow(selected) }}</p></div>
               <div class="dt-summary-description"><h3>任务描述</h3><p>{{ selected.prompt }}</p></div>
               <div v-if="selected.attachments?.length" class="dt-summary-description dt-summary-attachments"><h3>输入附件 · {{ selected.attachments.length }}</h3><p v-for="(file, index) in selected.attachments" :key="index">{{ file.name }}</p></div>
             </section>

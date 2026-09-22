@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>装卸货还原</title>
+    <link rel="stylesheet" href="/demo/leaflet.css" />
+    <style>
+      :root { color-scheme: light; font-family: Inter, "PingFang SC", "Microsoft YaHei", system-ui, sans-serif; color: #202733; background: #f7f7f5; }
+      * { box-sizing: border-box; }
+      body { min-width: 320px; min-height: 100vh; margin: 0; background: #f7f7f5; }
+      .page { width: min(100%, 1080px); min-height: 100vh; margin: 0 auto; padding: 18px; }
+      .topbar { display: flex; min-height: 40px; align-items: center; justify-content: space-between; border-bottom: 1px solid #e1e3e6; font-size: 12px; }
+      .brand { display: flex; align-items: center; gap: 8px; font-weight: 650; }
+      .mark { display: grid; width: 25px; height: 25px; place-items: center; border-radius: 7px; background: #172033; color: white; font-size: 11px; }
+      .status { color: #18764d; }
+      .summary { padding: 21px 0 15px; }
+      .summary h1 { margin: 0; font-size: 23px; color: #101828; }
+      .summary p { margin: 6px 0 0; color: #667085; font-size: 12px; }
+      .metrics { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 1px; overflow: hidden; border: 1px solid #e0e3e7; border-radius: 8px; background: #e0e3e7; }
+      .metric { padding: 12px 14px; background: white; }
+      .metric span { color: #7a8495; font-size: 10px; }
+      .metric strong { display: block; margin-top: 5px; font-size: 14px; }
+      .metric.risk strong { color: #b54708; }
+      .map-shell { position: relative; height: 390px; margin-top: 14px; overflow: hidden; border: 1px solid #dde1e6; border-radius: 8px; background: #e9edf2; }
+      #map { position: absolute; inset: 0; }
+      .fallback { position: absolute; inset: 0; z-index: 1; display: grid; place-items: center; color: #667085; }
+      .fallback[hidden] { display: none; }
+      .legend { position: absolute; right: 12px; bottom: 12px; z-index: 500; display: flex; flex-wrap: wrap; gap: 9px 14px; width: min(330px, calc(100% - 24px)); padding: 10px 12px; border: 1px solid #dde1e6; border-radius: 8px; background: rgba(255,255,255,.96); color: #596579; font-size: 10px; box-shadow: 0 12px 28px -22px #101828aa; }
+      .legend span { display: flex; align-items: center; gap: 5px; }
+      .legend i { width: 8px; height: 8px; border-radius: 50%; background: #2463db; }
+      .legend .actual { background: #18a56f; } .legend .declared { background: #d99a29; }
+      .grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; margin-top: 14px; }
+      .panel { border: 1px solid #e0e3e7; border-radius: 8px; background: white; padding: 14px; }
+      .panel h2 { margin: 0 0 12px; font-size: 13px; }
+      .evidence { position: relative; padding: 0 0 16px 25px; }
+      .evidence:last-child { padding-bottom: 0; }
+      .evidence::before { position: absolute; top: 4px; left: 4px; width: 9px; height: 9px; border: 2px solid white; border-radius: 50%; background: #2463db; box-shadow: 0 0 0 2px #bcd0f2; content: ""; }
+      .evidence:not(:last-child)::after { position: absolute; top: 15px; bottom: 1px; left: 8px; width: 1px; background: #dde3ea; content: ""; }
+      .evidence strong { display: block; font-size: 12px; }
+      .evidence p { margin: 3px 0 0; color: #697586; font-size: 11px; line-height: 1.6; }
+      .compare { display: grid; grid-template-columns: 72px 1fr; gap: 8px; padding: 9px 0; border-top: 1px solid #eceef0; font-size: 11px; }
+      .compare:first-of-type { border-top: 0; }
+      .compare span { color: #7a8495; }
+      .compare strong { font-weight: 600; line-height: 1.6; }
+      .risk-box { margin-top: 11px; padding: 10px; border-radius: 6px; background: #fff6e8; color: #8a570b; font-size: 11px; line-height: 1.65; }
+      .pin { display: grid; width: 30px; height: 30px; place-items: center; border: 3px solid white; border-radius: 50% 50% 50% 8px; box-shadow: 0 4px 10px #10182838; color: white; font-size: 10px; font-weight: 700; transform: rotate(-45deg); }
+      .pin span { transform: rotate(45deg); } .pin.actual { background: #18a56f; } .pin.declared { background: #d99a29; } .pin.vehicle { background: #2463db; }
+      .leaflet-control-attribution { font-size: 9px; }
+      @media (max-width: 720px) { .metrics, .grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } .grid { grid-template-columns: 1fr; } .map-shell { height: 340px; } }
+    </style>
+  </head>
+  <body>
+    <main class="page">
+      <header class="topbar"><div class="brand"><span class="mark">证</span><span>物流通用智能体 · 装卸货还原</span></div><span class="status">证据核验完成</span></header>
+      <section class="summary"><h1 id="title">WB20260922018 · 装卸货还原</h1><p id="subtitle">车辆 皖K55821 · 轨迹、停车、POI 与申报信息交叉验证</p></section>
+      <section class="metrics"><div class="metric"><span>有效轨迹覆盖</span><strong>98.7%</strong></div><div class="metric"><span>关键停车点</span><strong>6 个</strong></div><div class="metric"><span>装货置信度</span><strong>96%</strong></div><div class="metric risk"><span>卸货地点偏差</span><strong>18.6 km</strong></div></section>
+      <section class="map-shell"><div id="fallback" class="fallback">正在加载轨迹证据…</div><div id="map"></div><div class="legend"><span><i class="actual"></i>还原地点</span><span><i class="declared"></i>申报地点</span><span><i></i>道路拟合轨迹</span></div></section>
+      <section class="grid"><div class="panel"><h2>关键证据时间线</h2><div class="evidence"><strong>08:16 进入装货候选区域</strong><p>上海嘉定综合物流园 3 号库，定位连续，低速聚集后停车 46 分钟。</p></div><div class="evidence"><strong>09:02 离开并形成发车轨迹</strong><p>车辆驶离园区后连续上报定位，方向与南京方向一致，判定装货完成。</p></div><div class="evidence"><strong>16:48 到达卸货候选区域</strong><p>进入南京江宁食品产业园 B2 仓，停车 49 分钟并发生熄火。</p></div><div class="evidence"><strong>17:37 离场并结束运输</strong><p>驶离后运单状态更新为卸货完成，未发现后续同等级长停。</p></div></div><div class="panel"><h2>申报与还原对比</h2><div class="compare"><span>装货还原</span><strong>上海嘉定综合物流园 3 号库<br />距申报点 1.2 km</strong></div><div class="compare"><span>卸货还原</span><strong>南京江宁食品产业园 B2 仓<br />距申报点 18.6 km</strong></div><div class="compare"><span>匹配依据</span><strong>连续轨迹、停车 49 分钟、仓库 POI、到离场顺序</strong></div><div class="risk-box">卸货点跨出申报围栏，存在错卸或非计划中转可能。建议补充签收回单并向司机核验现场位置。</div></div></section>
+    </main>
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+    <script>
+      const params = new URLSearchParams(location.search); const plate = params.get('plate') || '皖K55821'; const waybill = params.get('waybill') || 'WB20260922018';
+      document.getElementById('title').textContent = `${waybill} · 装卸货还原`; document.getElementById('subtitle').textContent = `车辆 ${plate} · 轨迹、停车、POI 与申报信息交叉验证`; document.title = `${waybill} 装卸货还原`;
+      const pin = (label, tone) => L.divIcon({ className: '', html: `<div class="pin ${tone}"><span>${label}</span></div>`, iconSize: [30,30], iconAnchor: [15,28] });
+      async function drawMap() { const fallback = document.getElementById('fallback'); if (!window.L) { fallback.textContent = '地图加载失败，请检查网络后重试。'; return; } fallback.hidden = true; const origin = [31.338,121.265], destination = [31.9537,118.839], declaredDestination = [32.035,119.025], middle = [31.57,120.18]; const map = L.map('map', { attributionControl: false }).setView(middle, 8); L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19 }).addTo(map); L.control.attribution({ position: 'bottomleft', prefix: false }).addAttribution('© OpenStreetMap contributors').addTo(map); let route = [origin,middle,destination]; try { const coordinates = route.map(([lat,lng]) => `${lng},${lat}`).join(';'); const response = await fetch(`https://router.project-osrm.org/route/v1/driving/${coordinates}?overview=full&geometries=geojson`); const result = await response.json(); const geometry = result.routes?.[0]?.geometry?.coordinates; if (geometry?.length > 1) route = geometry.map(([lng,lat]) => [lat,lng]); } catch {} const line = L.polyline(route, { color: '#2463db', weight: 5, opacity: .9 }).addTo(map); L.polyline([destination,declaredDestination], { color: '#d99a29', weight: 3, dashArray: '6 6' }).addTo(map); map.fitBounds(line.getBounds(), { padding: [30,30] }); L.marker(origin, { icon: pin('装','actual') }).addTo(map).bindPopup('还原装货点：上海嘉定综合物流园 3 号库'); L.marker(destination, { icon: pin('卸','actual') }).addTo(map).bindPopup('还原卸货点：南京江宁食品产业园 B2 仓').openPopup(); L.marker(declaredDestination, { icon: pin('报','declared') }).addTo(map).bindPopup('申报卸货点 · 与实际点相距 18.6 km'); L.marker(middle, { icon: pin('车','vehicle') }).addTo(map).bindPopup(`${plate} 历史轨迹节点`); }
+      drawMap();
+    </script>
+  </body>
+</html>

@@ -49,6 +49,21 @@
 .dt-form input, .dt-form select, .dt-form textarea { width: 100%; min-width: 0; border: 1px solid #dcdedb; border-radius: 6px; padding: 9px 10px; background: white; color: #22262c; font: inherit; font-weight: 400; outline: 0; caret-color: #2463db; }
 .dt-form textarea { resize: vertical; min-height: 130px; line-height: 1.75; }
 .dt-form input::placeholder, .dt-form textarea::placeholder { color: #6b717a; }
+.dt-system-config { display: flex; flex-direction: column; gap: 10px; padding: 12px; border: 1px solid #e2e4e1; border-radius: 7px; background: #f8f9f7; }
+.dt-system-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.dt-system-heading strong { display: block; color: #30343a; font-size: 12px; font-weight: 600; }
+.dt-system-heading span { display: block; margin-top: 2px; color: #747a81; font-size: 11px; font-weight: 400; }
+.dt-system-heading > small { flex-shrink: 0; color: #2c63b7; font-size: 11px; font-variant-numeric: tabular-nums; }
+.dt-system-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; }
+.dt-system-option { display: flex; min-width: 0; align-items: center; gap: 8px; padding: 8px; border: 1px solid #dfe2df; border-radius: 6px; background: #fff; color: #5c6570; text-align: left; }
+.dt-system-option:hover { border-color: #bfcbe0; background: #fbfcff; }
+.dt-system-option.selected { border-color: #7da5e8; background: #edf4ff; color: #245db4; }
+.dt-system-option > svg { flex-shrink: 0; }
+.dt-system-option > span { min-width: 0; flex: 1; }
+.dt-system-option strong, .dt-system-option small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dt-system-option strong { color: #343940; font-size: 11px; font-weight: 500; }
+.dt-system-option small { margin-top: 1px; color: #7b8188; font-size: 10px; font-weight: 400; }
+.dt-system-flow { padding: 7px 9px; border-radius: 5px; background: #eef3f9; color: #526579; font-size: 11px; overflow-wrap: anywhere; }
 .dt-form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
 .dt-form-grid.three { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 .dt-form .dt-checkbox { flex-direction: row; align-items: center; gap: 8px; }
@@ -189,6 +204,7 @@
   .dt-run-scroll { padding: 16px; }
   .dt-fence-row { align-items: flex-start; flex-direction: column; gap: 6px; }
   .dt-form-grid.three { grid-template-columns: 1fr; }
+  .dt-system-grid { grid-template-columns: 1fr; }
   .dt-monitor-meta, .dt-monitor-header { padding-right: 12px; padding-left: 12px; }
   .dt-monitors { padding: 0 12px; }
   .dt-phase-flow { gap: 6px; justify-content: flex-start; }

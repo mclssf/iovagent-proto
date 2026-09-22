@@ -70,10 +70,14 @@ export interface WaybillEvent {
 export interface DailyTaskDraft {
   name: string;
   trigger: 'once' | 'event' | 'schedule';
+  taskTemplate?: 'general' | 'smart-order-entry';
   eventType: EventType;
   threshold: number;
   fenceId: string;
   time: string;
+  intervalMinutes?: number;
+  sourceDataEmployeeIds?: string[];
+  targetDataEmployeeId?: string;
   prompt: string;
   confirmBeforeSend: boolean;
   attachments?: TaskAttachment[];
@@ -98,6 +102,7 @@ export interface DailyTask extends DailyTaskDraft {
   enabled: boolean;
   createdAt: number;
   lastScheduledDay: string;
+  lastScheduledAt?: number;
   runs: TaskRun[];
   origin?: 'manual' | 'workbench';
   conversationId?: string;
@@ -148,6 +153,7 @@ export const isThresholdEvent = (type: EventType) => ['parking', 'offline', 'dev
 
 export function triggerLabel(task: DailyTaskDraft, fences: ProjectFence[] = []) {
   if (task.trigger === 'once') return '普通任务 · 提交后执行一次';
+  if (task.trigger === 'schedule' && task.taskTemplate === 'smart-order-entry') return `每 ${task.intervalMinutes ?? 10} 分钟 · 智能录单`;
   if (task.trigger === 'schedule') return `每天 ${task.time}`;
   const threshold = isThresholdEvent(task.eventType) ? ` ≥ ${task.threshold} ${task.eventType === 'deviation' ? '公里' : '分钟'}` : '';
   const fence = task.eventType.startsWith('fence-') ? ` · ${fences.find((item) => item.id === task.fenceId)?.name ?? '未配置围栏'}` : '';

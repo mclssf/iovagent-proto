@@ -966,6 +966,226 @@ function createTransportStatusProcessMessage(plate: string, waybill: string, loc
   };
 }
 
+type HighwayPolicy = 'highway' | 'avoid-highway';
+type RoutePreference = 'popular' | 'shortest';
+
+interface ExperienceRouteRequest {
+  destination: string;
+  highwayPolicy?: HighwayPolicy;
+  origin: string;
+  preference?: RoutePreference;
+}
+
+interface DemoRoutePoint {
+  lat: number;
+  lng: number;
+  name: string;
+}
+
+const routePlanningIntentPattern = /(?:经验路线|路线规划|规划路线|推荐路线|老司机路线|怎么走|走哪条路|选择路线)/;
+const demoRoutePoints: Array<DemoRoutePoint & { terms: string[] }> = [
+  { name: '上海嘉定工厂', lat: 31.338, lng: 121.265, terms: ['上海', '嘉定'] },
+  { name: '广州黄埔仓', lat: 23.158, lng: 113.48, terms: ['广州', '黄埔'] },
+  { name: '合肥经开仓', lat: 31.787, lng: 117.205, terms: ['合肥'] },
+  { name: '南京江宁仓', lat: 31.9537, lng: 118.839, terms: ['南京', '江宁'] },
+  { name: '青岛市北配送中心', lat: 36.087, lng: 120.374, terms: ['青岛'] },
+  { name: '济南历城仓', lat: 36.709, lng: 117.121, terms: ['济南', '历城'] },
+  { name: '北京顺义仓', lat: 40.1289, lng: 116.6546, terms: ['北京', '顺义'] },
+  { name: '石家庄栾城仓', lat: 37.9002, lng: 114.6483, terms: ['石家庄', '栾城'] },
+  { name: '成都龙泉工厂', lat: 30.5728, lng: 104.269, terms: ['成都', '龙泉'] },
+  { name: '重庆江北仓', lat: 29.6205, lng: 106.694, terms: ['重庆', '江北'] },
+];
+
+function cleanRoutePlace(value: string) {
+  return value
+    .replace(/^(?:请|帮我|给我|想要|需要)/, '')
+    .replace(/^(?:规划一条|规划一下|规划)/, '')
+    .replace(/(?:规划|怎么走|走哪条|经验路线|推荐路线|路线方案|路线).*$/, '')
+    .replace(/(?:的|之间)$/, '')
+    .trim();
+}
+
+function extractRouteEndpoints(raw: string) {
+  const fromMatch = raw.match(/从\s*([^，。；,;\n]{2,24}?)\s*(?:到|至)\s*([^，。；,;\n]{2,32})/);
+  const directMatch = raw.match(/([\u4e00-\u9fa5A-Z0-9]{2,18})\s*(?:到|至)\s*([\u4e00-\u9fa5A-Z0-9]{2,24})(?:的)?(?:经验|推荐|规划)?路线/);
+  const conversationalMatch = raw.match(/([\u4e00-\u9fa5A-Z0-9]{2,18})\s*(?:到|至)\s*([\u4e00-\u9fa5A-Z0-9]{2,24}?)(?=(?:怎么走|走哪条|规划|路线|，|,|。|？|\?|$))/);
+  const match = fromMatch ?? directMatch ?? conversationalMatch;
+  return {
+    origin: cleanRoutePlace(match?.[1] ?? ''),
+    destination: cleanRoutePlace(match?.[2] ?? ''),
+  };
+}
+
+function extractExperienceRouteRequest(raw: string): ExperienceRouteRequest | null {
+  if (!routePlanningIntentPattern.test(raw)) return null;
+  const endpoints = extractRouteEndpoints(raw);
+  const highwayPolicy: HighwayPolicy | undefined = /(?:不走高速|避开高速|不上高速|国道优先|省道优先)/.test(raw)
+    ? 'avoid-highway'
+    : /(?:走高速|高速优先|优先高速)/.test(raw)
+      ? 'highway'
+      : undefined;
+  const preference: RoutePreference | undefined = /(?:最多人选|多数人选|老司机常走|常跑路线|热门路线|经验优先)/.test(raw)
+    ? 'popular'
+    : /(?:最短路线|距离最短|路程最短|最短距离)/.test(raw)
+      ? 'shortest'
+      : undefined;
+  return { ...endpoints, highwayPolicy, preference };
+}
+
+function resolveDemoRoutePoint(name: string, fallbackIndex: number): DemoRoutePoint {
+  const matched = demoRoutePoints.find((point) => point.terms.some((term) => name.includes(term)));
+  const fallback = demoRoutePoints[fallbackIndex] ?? demoRoutePoints[0]!;
+  return { lat: matched?.lat ?? fallback.lat, lng: matched?.lng ?? fallback.lng, name: name || matched?.name || fallback.name };
+}
+
+function routeDistanceKm(origin: DemoRoutePoint, destination: DemoRoutePoint, policy: HighwayPolicy, preference: RoutePreference) {
+  const radians = (degree: number) => (degree * Math.PI) / 180;
+  const latDelta = radians(destination.lat - origin.lat);
+  const lngDelta = radians(destination.lng - origin.lng);
+  const a = Math.sin(latDelta / 2) ** 2 + Math.cos(radians(origin.lat)) * Math.cos(radians(destination.lat)) * Math.sin(lngDelta / 2) ** 2;
+  const straightDistance = 6371 * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  const factor = policy === 'highway' ? 1.16 : 1.28;
+  return Math.round(straightDistance * factor * (preference === 'popular' ? 1.025 : 1));
+}
+
+function createExperienceRouteProcessMessage(request: Required<ExperienceRouteRequest>): ChatMessage {
+  const origin = resolveDemoRoutePoint(request.origin, 0);
+  const destination = resolveDemoRoutePoint(request.destination, 1);
+  const distance = routeDistanceKm(origin, destination, request.highwayPolicy, request.preference);
+  const averageSpeed = request.highwayPolicy === 'highway' ? 76 : 53;
+  const durationHours = Math.max(1, distance / averageSpeed + (request.preference === 'popular' ? 0.25 : 0));
+  const hours = Math.floor(durationHours);
+  const minutes = Math.round((durationHours - hours) * 60);
+  const policyLabel = request.highwayPolicy === 'highway' ? '走高速' : '不走高速';
+  const preferenceLabel = request.preference === 'popular' ? '最多人选' : '最短路线';
+  const routeName = request.highwayPolicy === 'highway' ? '经验主干线方案' : '经验国省道方案';
+  const params = new URLSearchParams({
+    origin: origin.name,
+    destination: destination.name,
+    originLat: String(origin.lat),
+    originLng: String(origin.lng),
+    destinationLat: String(destination.lat),
+    destinationLng: String(destination.lng),
+    policy: policyLabel,
+    preference: preferenceLabel,
+    distance: String(distance),
+    duration: `${hours} 小时 ${minutes} 分钟`,
+    routeName,
+  });
+  return {
+    role: 'agent',
+    title: '经验路线规划',
+    status: '已完成',
+    text: `正在按“${policyLabel}、${preferenceLabel}”规划 ${origin.name} 至 ${destination.name} 的经验路线。`,
+    progressMode: true,
+    steps: [
+      { title: '识别运输要求', text: `起点：${origin.name}；终点：${destination.name}；策略：${policyLabel}、${preferenceLabel}。` },
+      { title: '汇聚历史路线', text: '读取同线路历史运单、车辆实际轨迹、收费站与司机常走道路。', skill: '轨迹查询' },
+      { title: '生成候选路线', text: '综合道路等级、历史通行次数、里程和运输耗时，生成 3 条可选路线。', skill: '物流路线规划' },
+      { title: '执行策略筛选', text: `按“${policyLabel}、${preferenceLabel}”排序，选出匹配度最高的经验路线。`, skill: '物流路线规划' },
+      { title: '校验车辆通行', text: '核验货车限行、道路通行条件与关键节点，完成路线版本记录。', skill: '物流路线规划' },
+      { title: '生成路线页面', text: '在真实底图上拟合规划路线，并展示里程、耗时、关键道路与候选方案。' },
+    ],
+    result: `推荐方案：${routeName}\n线路：${origin.name} → ${destination.name}\n规划策略：${policyLabel} · ${preferenceLabel}\n预计里程：${distance} km\n预计耗时：${hours} 小时 ${minutes} 分钟\n历史参考：近 90 天同方向 286 次运输，当前方案匹配 132 次有效轨迹。`,
+    link: {
+      kind: 'externalH5',
+      label: `查看 ${origin.name} 至 ${destination.name} 规划路线`,
+      title: `${origin.name} → ${destination.name} · 经验路线`,
+      description: `${policyLabel} · ${preferenceLabel} · 约 ${distance} km`,
+      url: `/demo/experience-route.html?${params.toString()}`,
+    },
+  };
+}
+
+interface ShipmentEvidenceRequest {
+  plate: string;
+  waybill: string;
+}
+
+function extractShipmentEvidenceRequest(raw: string): ShipmentEvidenceRequest | null {
+  if (!/(?:装卸货.{0,8}(?:还原|核验|真实|实际)|(?:还原|核验|确认).{0,16}(?:装货|卸货)|(?:真实|实际).{0,16}(?:装货|卸货)|运短骗长|虚报目的地|错卸)/.test(raw)) return null;
+  const reference = extractLogisticsReference(raw);
+  return { plate: reference.plate || '皖K55821', waybill: reference.waybill || 'WB20260922018' };
+}
+
+function createShipmentEvidenceProcessMessage(request: ShipmentEvidenceRequest): ChatMessage {
+  const params = new URLSearchParams({ plate: request.plate, waybill: request.waybill });
+  return {
+    role: 'agent',
+    title: '装卸货还原',
+    status: '已完成',
+    text: `正在还原运单 ${request.waybill}（${request.plate}）的真实装货地和卸货地。`,
+    progressMode: true,
+    steps: [
+      { title: '读取运单计划', text: '获取申报装卸货地、计划时间、车辆与司机绑定关系。', skill: '运单补充' },
+      { title: '查询历史轨迹', text: '调取发车前后及运输结束前后的连续定位点，检查轨迹完整性。', skill: '轨迹查询' },
+      { title: '识别关键停车', text: '提取长时间停车、熄火和低速聚集点，形成装卸货候选地点。', skill: '异常停车专家' },
+      { title: '匹配地点语义', text: '将候选点与工厂、园区、仓库和经销商 POI 及围栏进行交叉匹配。', skill: '车辆定位查询' },
+      { title: '还原装卸节点', text: '结合停车时长、到离场顺序和轨迹方向，判断真实装货与卸货地点。', skill: '在途风险专家' },
+      { title: '复核异常风险', text: '计算申报地点偏差，筛查虚报目的地、错卸和运短骗长风险。', skill: '运单纠错' },
+    ],
+    result: `运单：${request.waybill} · 车辆：${request.plate}\n装货还原：上海嘉定综合物流园 3 号库，08:16 到达、09:02 离开，置信度 96%\n卸货还原：南京江宁食品产业园 B2 仓，16:48 到达、17:37 离开，置信度 93%\n申报差异：实际装货点距申报点 1.2 km；实际卸货点距申报点 18.6 km\n风险判断：卸货地点跨出申报围栏，建议复核是否存在错卸或非计划中转。`,
+    link: {
+      kind: 'externalH5',
+      label: `查看 ${request.waybill} 装卸货还原证据`,
+      title: `${request.waybill} · 装卸货还原`,
+      description: '轨迹 · 停车 · POI · 申报地点差异',
+      url: `/demo/shipment-reconstruction.html?${params.toString()}`,
+    },
+  };
+}
+
+interface WaybillComplianceRequest {
+  plate: string;
+  sourceFileName?: string;
+  waybill: string;
+}
+
+function hasWaybillComplianceIntent(raw: string) {
+  return /(?:运单合规校准|运单合规校验|合规校准|合规核验|校准运单|批量校准|核验运单合规)/.test(raw);
+}
+
+function extractWaybillComplianceRequest(raw: string): WaybillComplianceRequest | null {
+  if (!hasWaybillComplianceIntent(raw)) return null;
+  const reference = extractLogisticsReference(raw);
+  const attachment = extractAttachmentRequest(raw, (name) => /\.(?:csv|xls|xlsx)$/i.test(name));
+  if (!attachment && !reference.plate && !reference.waybill) return null;
+  return { plate: reference.plate || '鲁B3M579', waybill: reference.waybill || 'WB20260922027', sourceFileName: attachment?.sourceFileName };
+}
+
+function createWaybillComplianceProcessMessage(request: WaybillComplianceRequest): ChatMessage {
+  const source = request.sourceFileName ? `“${request.sourceFileName}”` : `运单 ${request.waybill}`;
+  const params = new URLSearchParams({ plate: request.plate, waybill: request.waybill, source: request.sourceFileName ?? '单笔运单' });
+  return {
+    role: 'agent',
+    title: '运单合规校准',
+    status: '已完成',
+    text: `正在校准${source}中的装卸货、线路、里程与关键时间。`,
+    progressMode: true,
+    steps: [
+      { title: '解析运单字段', text: '识别运单号、车辆、承运商、装卸货地、坐标、计划时间、线路和申报里程。', skill: '运单补充' },
+      { title: '检查必填与格式', text: '校验关键字段完整性、时间先后关系、坐标范围和车牌格式。', skill: '运单纠错' },
+      { title: '调用轨迹证据', text: '查询有效定位、停车点、离线区间与道路拟合轨迹。', skill: '轨迹查询' },
+      { title: '校准装卸地点', text: '依据到离场、停车和 POI 证据修正实际装卸货地及时间。', skill: '车辆定位查询' },
+      { title: '核验线路与里程', text: '比较申报线路、实际行驶路线和合理道路里程，识别绕行与里程偏差。', skill: '物流路线规划' },
+      { title: '生成校准结果', text: '输出校准字段、证据来源、差异说明、风险等级和可下载结果表。' },
+    ],
+    result: `校准完成：共核验 12 条运单，8 条合规，3 条需修正，1 条需人工复核。\n字段修正：装卸货地址 3 处、到离场时间 4 处、申报里程 2 处。\n重点记录：${request.waybill}（${request.plate}）实际卸货点距申报点 18.6 km，判定为中风险。\n数据覆盖：有效轨迹 100%，关键停车点 23 个，定位离线区间 2 段。`,
+    file: {
+      description: 'CSV 表格 · 12 条运单合规校准结果',
+      name: `运单合规校准结果_${formatFileTimestamp(new Date())}.csv`,
+      url: '/demo/waybill-compliance-result.csv',
+    },
+    link: {
+      kind: 'externalH5',
+      label: '查看运单合规校准报告',
+      title: `${request.waybill} · 合规校准报告`,
+      description: '轨迹证据 · 地点偏差 · 时间线 · 风险结论',
+      url: `/demo/waybill-compliance.html?${params.toString()}`,
+    },
+  };
+}
+
 interface AnalysisReportRequest {
   prompt: string;
   title: string;
@@ -1869,7 +2089,10 @@ export const agentWorkData = defineStore('agentWork', {
       if (!raw.trim()) return;
       this.ensureConversationStarted();
       const next: ChatMessage[] = [...this.agentMessages, { role: 'user', text: raw }];
-      const pendingPrompt = this.agentMessages[this.agentMessages.length - 1]?.pendingAsyncPrompt;
+      const pendingMessage = this.agentMessages[this.agentMessages.length - 1];
+      const pendingPrompt = pendingMessage?.pendingAsyncPrompt;
+      const pendingRoutePrompt = pendingMessage?.pendingExperienceRoutePrompt;
+      const pendingCompliancePrompt = pendingMessage?.pendingCompliancePrompt;
       const inputPrompt = raw.split('\n附件：')[0]!.trim();
       const isPlateAnswer = /^(?:车牌(?:号)?[是为：:\s]*)?[京津沪渝冀豫云辽黑湘皖鲁新苏浙赣鄂桂甘晋蒙陕吉闽贵粤青藏川宁琼][A-Z][A-Z0-9]{5,6}$/i.test(inputPrompt);
       const asyncPrompt = pendingPrompt && (isPlateAnswer || (attachments.length && /^附件：/.test(inputPrompt))) ? `${pendingPrompt}\n${isPlateAnswer ? inputPrompt : ''}` : inputPrompt;
@@ -1890,15 +2113,66 @@ export const agentWorkData = defineStore('agentWork', {
         this.agentInput = '';
         return;
       }
+      const routePrompt = pendingRoutePrompt ? `${pendingRoutePrompt}\n${inputPrompt}` : inputPrompt;
+      const experienceRouteRequest = extractExperienceRouteRequest(routePrompt);
+      const compliancePrompt = pendingCompliancePrompt ? `${pendingCompliancePrompt}\n${raw}` : raw;
+      const waybillComplianceRequest = extractWaybillComplianceRequest(compliancePrompt);
+      const shipmentEvidenceRequest = extractShipmentEvidenceRequest(raw);
       const regionVisitRegion = extractRegionVisitRegion(raw);
       const regionVisitRequest = extractRegionVisitRequest(raw);
-      const spreadsheetRequest = regionVisitRequest ? null : extractSpreadsheetRequest(raw);
+      const spreadsheetRequest = regionVisitRequest || hasWaybillComplianceIntent(compliancePrompt) ? null : extractSpreadsheetRequest(raw);
       const mcpPrompt = extractMcpPrompt(raw);
       const emailDeliveryRequest = extractEmailDeliveryRequest(raw, this.agentMessages);
       const analysisReportRequest = extractAnalysisReportRequest(raw);
       const transportStatusRequest = extractTransportStatusRequest(raw);
       const vehiclePositionRequest = transportStatusRequest ? null : extractVehiclePositionRequest(raw);
       let replyMessage: ChatMessage = { role: 'agent', text: '已处理你的请求。你可以继续补充需要关注的范围。' };
+      if (experienceRouteRequest) {
+        const missing: string[] = [];
+        if (!experienceRouteRequest.origin || !experienceRouteRequest.destination) missing.push('起点和终点');
+        if (!experienceRouteRequest.highwayPolicy) missing.push('走高速或不走高速');
+        if (!experienceRouteRequest.preference) missing.push('最多人选或最短路线');
+        if (missing.length) {
+          this.agentMessages = [
+            ...next,
+            {
+              role: 'agent',
+              text: `我会基于历史真实行驶经验规划路线。还需要你选择：${missing.join('、')}。\n可以直接回复，例如“从上海嘉定工厂到广州黄埔仓，走高速，最多人选”或“不走高速，最短路线”。`,
+              pendingExperienceRoutePrompt: routePrompt,
+            },
+          ];
+          this.agentInput = '';
+          return;
+        }
+        const processMessage = createExperienceRouteProcessMessage(experienceRouteRequest as Required<ExperienceRouteRequest>);
+        this.startDelayedAgentProcess(next, processMessage, () => this.openExternalH5(processMessage.link!.url, processMessage.link!.title));
+        this.agentInput = '';
+        return;
+      }
+      if (hasWaybillComplianceIntent(compliancePrompt) && !waybillComplianceRequest) {
+        this.agentMessages = [
+          ...next,
+          {
+            role: 'agent',
+            text: '请上传需要校准的 Excel / CSV 运单表，或补充运单号、车牌号。我会校验装卸货地、时间、线路和申报里程，并返回校准结果与证据报告。',
+            pendingCompliancePrompt: compliancePrompt,
+          },
+        ];
+        this.agentInput = '';
+        return;
+      }
+      if (waybillComplianceRequest) {
+        const processMessage = createWaybillComplianceProcessMessage(waybillComplianceRequest);
+        this.startDelayedAgentProcess(next, processMessage, () => this.openExternalH5(processMessage.link!.url, processMessage.link!.title));
+        this.agentInput = '';
+        return;
+      }
+      if (shipmentEvidenceRequest) {
+        const processMessage = createShipmentEvidenceProcessMessage(shipmentEvidenceRequest);
+        this.startDelayedAgentProcess(next, processMessage, () => this.openExternalH5(processMessage.link!.url, processMessage.link!.title));
+        this.agentInput = '';
+        return;
+      }
       if (regionVisitRequest) {
         this.startRegionVisitProcess(next, regionVisitRequest);
         this.agentInput = '';
@@ -2122,6 +2396,7 @@ export const agentWorkData = defineStore('agentWork', {
           activeStepIndex: 0,
           result: '',
           link: undefined,
+          file: undefined,
         },
       ];
 
@@ -2137,6 +2412,7 @@ export const agentWorkData = defineStore('agentWork', {
               activeStepIndex: isComplete ? steps.length : stepIndex,
               result: isComplete ? finalMessage.result : '',
               link: isComplete ? finalMessage.link : undefined,
+              file: isComplete ? finalMessage.file : undefined,
             };
           });
 
