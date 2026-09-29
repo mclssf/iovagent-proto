@@ -1,4 +1,4 @@
-import type { Order } from './interface';
+import type { EmailOrderResult, Order } from './interface';
 
 export type MonitorId = 'loading' | 'unloading' | 'parking' | 'offline' | 'deviation' | 'fence';
 export type WaybillPhase = '装货前' | '装货开始' | '装货结束' | '行程在途' | '卸货开始' | '卸货结束';
@@ -70,7 +70,7 @@ export interface WaybillEvent {
 export interface DailyTaskDraft {
   name: string;
   trigger: 'once' | 'event' | 'schedule';
-  taskTemplate?: 'general' | 'smart-order-entry';
+  taskTemplate?: 'general' | 'smart-order-entry' | 'email-order';
   eventType: EventType;
   threshold: number;
   fenceId: string;
@@ -106,13 +106,14 @@ export interface DailyTask extends DailyTaskDraft {
   runs: TaskRun[];
   origin?: 'manual' | 'workbench';
   conversationId?: string;
+  mailbox?: { address: string; status: 'bound' };
 }
 
 export interface TaskRun {
   id: string;
   startedAt: number;
   finishedAt?: number;
-  source: 'event' | 'schedule' | 'test' | 'manual' | 'workbench';
+  source: 'event' | 'schedule' | 'test' | 'manual' | 'workbench' | 'email';
   status: 'running' | 'waiting' | 'complete' | 'cancelled';
   event?: WaybillEvent;
   prompt: string;
@@ -123,6 +124,7 @@ export interface TaskRun {
   readAt?: number;
   toolJobId?: string;
   files?: TaskResultFile[];
+  emailOrder?: EmailOrderResult;
   action?: { channel: '短信' | '邮件'; recipient: string; content: string; status: 'pending' | 'sent' | 'cancelled' };
 }
 
@@ -152,6 +154,7 @@ export const eventLabel = (type: EventType) => eventDefinitions.find((event) => 
 export const isThresholdEvent = (type: EventType) => ['parking', 'offline', 'deviation'].includes(type);
 
 export function triggerLabel(task: DailyTaskDraft, fences: ProjectFence[] = []) {
+  if (task.taskTemplate === 'email-order') return '持续监听邮箱 · 收到订单邮件后自动处理';
   if (task.trigger === 'once') return '普通任务 · 提交后执行一次';
   if (task.trigger === 'schedule' && task.taskTemplate === 'smart-order-entry') return `每 ${task.intervalMinutes ?? 10} 分钟 · 智能录单`;
   if (task.trigger === 'schedule') return `每天 ${task.time}`;

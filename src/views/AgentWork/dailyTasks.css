@@ -186,6 +186,50 @@
 .dt-result-file strong { display: block; font-size: 12px; font-weight: 500; overflow-wrap: anywhere; }
 .dt-result-file small { font-size: 11px; color: #63746a; }
 .dt-summary-attachments { margin-top: 14px; }
+.dt-email-address { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 8px; margin-top: 6px !important; color: #53657c; font-size: 11px; overflow-wrap: anywhere; }
+.dt-email-address span { color: #287244; }
+.dt-email-connection { margin-bottom: 22px; padding: 14px; border: 1px solid #e0e2de; border-radius: 8px; background: #f6f7f5; }
+.dt-email-connection header { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.dt-email-connection h3 { font-size: 13px; font-weight: 600; }
+.dt-email-connection h3 > span { margin-left: 8px; font-size: 11px; font-weight: 400; color: #5c6673; }
+.dt-email-mailbox { margin-top: 6px !important; font-size: 13px; font-weight: 500; overflow-wrap: anywhere; }
+.dt-email-controls { display: flex; align-items: flex-end; flex-wrap: wrap; gap: 10px; margin-top: 12px; }
+.dt-email-controls label { display: flex; flex: 1; min-width: 180px; flex-direction: column; gap: 4px; font-size: 11px; color: #53657c; }
+.dt-email-controls select { min-width: 0; width: 100%; min-height: 34px; padding: 5px 7px; border: 1px solid #dcdedb; border-radius: 6px; color: #38424f; background: white; font-size: 12px; }
+.dt-email-controls .dt-button { min-height: 34px; }
+.email-result { margin-top: 14px; color: #38424f; font-size: 12px; line-height: 1.8; overflow-wrap: anywhere; }
+.email-order-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px 16px; margin: 0; }
+.email-order-fields > div { min-width: 0; }
+.email-order-fields dt, .email-market dt, .email-message-meta dt { color: #626b76; font-size: 11px; }
+.email-order-fields dd, .email-market dd, .email-message-meta dd { margin: 2px 0 0; }
+.email-full { grid-column: 1 / -1; }
+.email-cargo { width: 100%; margin-top: 16px; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+.email-cargo caption { text-align: left; padding-bottom: 6px; font-weight: 500; }
+.email-cargo th, .email-cargo td { padding: 6px 4px; text-align: right; border-bottom: 1px solid #eeefec; }
+.email-cargo th:first-child, .email-cargo td:first-child { text-align: left; padding-left: 0; }
+.email-cargo th { color: #626b76; font-size: 11px; font-weight: 400; }
+.email-cargo tfoot { font-weight: 500; }
+.email-note, .email-order-fields small { margin-top: 5px !important; color: #626b76; font-size: 11px; line-height: 1.8; }
+.email-assessment, .email-timing { margin-top: 18px; }
+.email-assessment h3, .email-timing h3 { margin-bottom: 6px; font-size: 12px; font-weight: 600; }
+.email-market { display: grid; gap: 5px; margin: 10px 0 0; }
+.email-market > div { display: grid; grid-template-columns: 68px minmax(0, 1fr); gap: 10px; }
+.email-market dd { margin-top: 0; }
+.email-details { margin-top: 10px; font-size: 12px; }
+.email-details summary { cursor: pointer; color: #526378; }
+.email-details summary:focus-visible { outline: 2px solid #4f8af0; outline-offset: 3px; }
+.email-details p { margin-top: 8px; }
+.email-latest { margin-top: 6px !important; font-weight: 500; }
+.email-message { padding-top: 12px; border-top: 1px solid #eeefec; }
+.email-message summary > span { display: block; margin: 3px 0 0 14px; color: #626b76; font-size: 11px; }
+.email-message-meta { display: grid; gap: 5px; margin: 12px 0; }
+.email-message-meta > div { display: grid; grid-template-columns: 52px minmax(0, 1fr); gap: 8px; }
+.email-message-meta dd { margin-top: 0; }
+.email-body { white-space: pre-line; line-height: 1.9; }
+@container task-run (max-width: 380px) {
+  .email-order-fields { grid-template-columns: minmax(0, 1fr); }
+  .dt-email-controls .dt-button { width: 100%; }
+}
 @container task-run (max-width: 720px) {
   .dt-run-body { grid-template-columns: minmax(0, 1fr); }
   .dt-background-toggle { display: inline-flex; }

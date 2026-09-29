@@ -1,9 +1,10 @@
 import { defineStore } from 'pinia';
-import type { Order, Project } from '@/views/AgentWork/interface';
+import type { EmailOrderScenario, Order, Project } from '@/views/AgentWork/interface';
 import type { DailyTask, DailyTaskDraft, EventType, MonitorId, ProjectFence, ProjectTaskRuntime, TaskRun, WaybillEvent, WaybillPhase } from '@/views/AgentWork/dailyTasks';
 import { createMonitoredOrders, ensureRequiredMonitorSkills, eventDefinitions, eventLabel, hasTaskResult, isThresholdEvent, monitorDefinitions } from '@/views/AgentWork/dailyTasks';
 import { extractTaskPlates, makeOrdinaryRun, mergeTaskAttachments, ordinaryStepDelay, ordinaryTaskName, ordinaryTaskResult, resolveAsyncTool } from '@/views/AgentWork/ordinaryTasks';
 import { createDataEmployeeSkills } from './dataEmployeeSkills';
+import { completeEmailRun, createEmailDemoTask, createEmailRun, emailDemoStepDelay } from '@/views/AgentWork/emailOrderDemo';
 
 const newId = (prefix: string) => `${prefix}-${crypto.randomUUID()}`;
 const stepDelay = () => 1600 + Math.round(Math.random() * 1000);
@@ -89,7 +90,10 @@ export const useAgentDailyTasks = defineStore('agentDailyTasks', {
             fences: [], orders: project.total > 0 ? createMonitoredOrders(orders) : [], events: [], processedEventIds: [],
           };
           this.projects[project.id] = runtime;
-          if (project.id === 'P001') this.seedTasks(runtime);
+          if (project.id === 'P001') {
+            this.seedTasks(runtime);
+            this.tasks.unshift(createEmailDemoTask(project.id));
+          }
         }
         const resumed = !runtime.connected && project.status === '已连接';
         const previousSkills = runtime.skillIds;
@@ -142,6 +146,7 @@ export const useAgentDailyTasks = defineStore('agentDailyTasks', {
       if (task.trigger === 'once') return !this.projects[task.projectId] ? '项目不存在' : '';
       const runtime = this.projects[task.projectId];
       if (!runtime) return '项目不存在';
+      if (task.taskTemplate === 'email-order') return '';
       if (!runtime.connected) return '等待数据源连接';
       if (!runtime.orders.length) return '等待接入运单';
       if (task.trigger === 'schedule') return '';
@@ -170,6 +175,7 @@ export const useAgentDailyTasks = defineStore('agentDailyTasks', {
       const existing = this.tasks.find((task) => task.id === taskId && task.projectId === projectId);
       if (taskId && !existing) throw new Error('任务已删除');
       if (existing && (existing.trigger === 'once' || draft.trigger === 'once')) throw new Error('已提交的任务不能改为或编辑为普通任务，请新建任务');
+      if (existing?.taskTemplate === 'email-order' || draft.taskTemplate === 'email-order') throw new Error('邮件处理订单为固定演示任务');
       if (existing?.runs.some((run) => run.status === 'running')) throw new Error('请等待本轮执行结束后再编辑');
       if (existing) {
         Object.assign(existing, draft, { name: draft.name.trim(), prompt: draft.prompt.trim(), attachments, sourceDataEmployeeIds: [...(draft.sourceDataEmployeeIds ?? [])] });
@@ -185,6 +191,7 @@ export const useAgentDailyTasks = defineStore('agentDailyTasks', {
       return task.id;
     },
     deleteTask(taskId: string) {
+      if (this.tasks.find((task) => task.id === taskId)?.taskTemplate === 'email-order') return;
       this.tasks = this.tasks.filter((task) => task.id !== taskId);
     },
     toggleTask(taskId: string) {
@@ -246,6 +253,7 @@ export const useAgentDailyTasks = defineStore('agentDailyTasks', {
     testTask(taskId: string) {
       const task = this.tasks.find((item) => item.id === taskId);
       if (!task) return;
+      if (task.taskTemplate === 'email-order') { this.receiveDemoEmail(taskId, 'both'); return; }
       if (task.trigger === 'once') throw new Error('普通任务提交后只执行一次，不支持重复测试');
       const reason = this.unavailableReason(task);
       if (reason) throw new Error(reason);
@@ -257,6 +265,13 @@ export const useAgentDailyTasks = defineStore('agentDailyTasks', {
         event.detail = `${eventLabel(task.eventType)}已达到测试阈值：${event.value} ${task.eventType === 'deviation' ? '公里' : '分钟'}。`;
       }
       task.runs.unshift(makeRun(task, runtime, 'test', event));
+    },
+    receiveDemoEmail(taskId: string, scenario: EmailOrderScenario) {
+      const task = this.tasks.find((item) => item.id === taskId);
+      if (!task || task.taskTemplate !== 'email-order') return;
+      if (!task.enabled) throw new Error('请先启动邮件处理任务');
+      if (task.runs.some((run) => run.status === 'running')) throw new Error('本封邮件正在处理，请稍后再试');
+      task.runs.unshift(createEmailRun(task, scenario));
     },
     resolveAction(taskId: string, runId: string, send: boolean) {
       const run = this.tasks.find((task) => task.id === taskId)?.runs.find((item) => item.id === runId);
@@ -306,7 +321,7 @@ export const useAgentDailyTasks = defineStore('agentDailyTasks', {
         const runtime = this.projects[task.projectId];
         if (!runtime && task.trigger === 'event') continue;
         const intervalDue = task.taskTemplate === 'smart-order-entry' && now - (task.lastScheduledAt ?? 0) >= (task.intervalMinutes ?? 10) * 60000;
-        const dailyDue = task.taskTemplate !== 'smart-order-entry' && task.time === time && task.lastScheduledDay !== day;
+        const dailyDue = task.taskTemplate !== 'smart-order-entry' && task.taskTemplate !== 'email-order' && task.time === time && task.lastScheduledDay !== day;
         if (task.enabled && task.trigger === 'schedule' && (intervalDue || dailyDue) && !this.unavailableReason(task) && !task.runs.some((run) => run.status === 'running')) {
           task.lastScheduledDay = day;
           task.lastScheduledAt = now;
@@ -315,8 +330,9 @@ export const useAgentDailyTasks = defineStore('agentDailyTasks', {
         for (const run of task.runs) {
           if (run.status !== 'running' || now < run.nextStepAt) continue;
           run.activeStep++;
-          run.nextStepAt = now + (task.trigger === 'once' ? ordinaryStepDelay() : stepDelay());
+          run.nextStepAt = now + (run.emailOrder ? emailDemoStepDelay : task.trigger === 'once' ? ordinaryStepDelay() : stepDelay());
           if (run.activeStep < run.steps.length) continue;
+          if (run.emailOrder) { completeEmailRun(run, now); continue; }
           if (task.trigger === 'once') {
             this.receiveOrdinaryResult(task.id, run.toolJobId!, ordinaryTaskResult(task, run));
             continue;

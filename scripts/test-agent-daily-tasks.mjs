@@ -71,6 +71,8 @@ try {
   store.tick(now);
   store.tick(now + 1000);
   assert.equal(scheduled.runs.length, 1, 'schedule fires once per Beijing calendar day');
+  // Finish this run before checking whether the following day can start another.
+  for (let step = 1; step <= scheduled.runs[0].steps.length; step++) store.tick(now + step * 3000);
   store.toggleTask(scheduleId);
   now += 86400000;
   store.tick(now);

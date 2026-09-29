@@ -241,3 +241,51 @@ export interface DownloadTask {
   status: string;
   progress: number;
 }
+export type EmailOrderScenario = 'both' | 'arrival' | 'loading' | 'flexible';
+
+export interface EmailOrderResult {
+  scenario: EmailOrderScenario;
+  subject: string;
+  sender: string;
+  senderName: string;
+  mailbox: string;
+  receivedAt: number;
+  originalBody: string;
+  order: {
+    number?: string;
+    origin: string;
+    destination: string;
+    cargo: { name: string; quantity: number; unit: string; weight: number; volume: number }[];
+    handling: string;
+    loadingTime?: string;
+    arrivalRequirement?: string;
+  };
+  dispatch: {
+    vehicle: string;
+    count: number;
+    totalWeight: number;
+    totalVolume: number;
+    allocation: string;
+    reason: string;
+  };
+  market: {
+    availableCount: number;
+    radius: number;
+    supply: string;
+    difficulty: string;
+    supplyReason: string;
+    price: string;
+    priceReason: string;
+  };
+  timing: {
+    loadingStart: number;
+    loadingEnd: number;
+    arrivalStart: number;
+    arrivalEnd: number;
+    latestLoadingAt?: number;
+    loadingSource: '客户要求' | '预计安排';
+    arrivalSource: '客户要求' | '预计安排';
+    basis: string;
+  };
+  reply: { subject: string; body: string; sentAt?: number };
+}
