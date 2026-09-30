@@ -1,4 +1,5 @@
 import { migrateCapacitySkillIds } from './capacitySkills';
+import { mailboxSkill } from './projectMailboxes';
 import { defineStore } from 'pinia';
 import { computed, readonly, ref } from 'vue';
 import type { DeepReadonly } from 'vue';
@@ -150,9 +151,11 @@ const skillSeed: Array<{
   { id: 'capacity-quote-collection', name: '报价抢单', category: '运力与货源' },
   { id: 'capacity-cargo-normalization', name: '货源解析', category: '运力与货源' },
   { id: 'capacity-private-fleet', name: '私有运力池', category: '运力与货源' },
+  { id: mailboxSkill.id, name: mailboxSkill.name, category: '运营助手' },
 ];
 
 const skillDescriptions: Record<string, string> = {
+  [mailboxSkill.id]: mailboxSkill.description,
   'route-risk-expert': '结合线路、时效和历史履约表现，识别高优先级在途风险。',
   'gps-trace-expert': '分析轨迹断点、速度跳变和定位漂移，辅助判断GPS造假风险。',
   'parking-event-expert': '识别服务区、物流园、中转仓等停靠点，区分合理休息和高风险长停。',

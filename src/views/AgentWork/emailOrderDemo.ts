@@ -1,13 +1,15 @@
 import type { DailyTask, TaskRun } from './dailyTasks';
 import type { EmailOrderResult, EmailOrderScenario } from './interface';
+import { emailDemoMailbox } from '@/pinia/projectMailboxes';
 
-export const emailDemoMailbox = 'orders@iov-demo.example.com';
+export { emailDemoMailbox } from '@/pinia/projectMailboxes';
 export const emailDemoStepDelay = 1800;
 export const emailDemoScenarios: { id: EmailOrderScenario; label: string }[] = [
   { id: 'both', label: '装货、到达时间都有' },
   { id: 'arrival', label: '只有到达时间 · 倒推装货' },
   { id: 'loading', label: '只有装货时间 · 推算到达' },
   { id: 'flexible', label: '未指定时间 · 建议安排' },
+  { id: 'duration', label: '装货后 24 小时内到达' },
 ];
 
 const hour = 3600000;
@@ -38,7 +40,7 @@ interface MailExample {
   market: EmailOrderResult['market'];
 }
 
-const examples: Record<EmailOrderScenario, MailExample> = {
+const examples: Record<Exclude<EmailOrderScenario, 'duration'>, MailExample> = {
   both: {
     subject: '苏州至杭州日用品运输安排', senderName: '陈琳 · 华东商贸', sender: 'chen.lin@customer.example.com',
     origin: '江苏省苏州市相城区 · 华东商贸仓', destination: '浙江省杭州市余杭区 · 良渚配送中心',
@@ -74,7 +76,7 @@ const examples: Record<EmailOrderScenario, MailExample> = {
 };
 
 export function createEmailOrder(scenario: EmailOrderScenario, receivedAt: number, sequence: number, mailbox = emailDemoMailbox): EmailOrderResult {
-  const example = examples[scenario];
+  const example = scenario === 'duration' ? { ...examples.loading, subject: '上海至南京服装运输，装货后 24 小时内到达' } : examples[scenario];
   const tomorrow = new Date(`${dateFormat.format(receivedAt + day)}T00:00:00+08:00`).getTime();
   const durationHours = example.loadingHours + example.drivingHours + example.bufferHours;
   const deadline = tomorrow + 20 * hour;
@@ -84,10 +86,11 @@ export function createEmailOrder(scenario: EmailOrderScenario, receivedAt: numbe
     loadingStart, loadingEnd,
     arrivalStart: scenario === 'both' ? deadline : loadingStart + durationHours * hour,
     arrivalEnd: scenario === 'both' ? deadline : loadingEnd + durationHours * hour,
-    loadingSource: scenario === 'both' || scenario === 'loading' ? '客户要求' : '预计安排',
+    loadingSource: scenario === 'both' || scenario === 'loading' || scenario === 'duration' ? '客户要求' : '预计安排',
     arrivalSource: scenario === 'both' || scenario === 'arrival' ? '客户要求' : '预计安排',
     latestLoadingAt: scenario === 'arrival' ? loadingEnd : undefined,
     basis: scenario === 'both' ? '按客户约定的装货时段和最晚到达时间安排车辆。'
+      : scenario === 'duration' ? `按客户要求，装货后 24 小时内到达；以 ${timeFormat.format(loadingStart)} 开始装货计算，最晚 ${timeFormat.format(loadingStart + day)} 到达。预计装货 ${example.loadingHours} 小时、运输 ${example.drivingHours} 小时、途中停留及机动预留 ${example.bufferHours} 小时，共 ${durationHours} 小时。`
       : `${scenario === 'arrival' ? '从最晚到达时间倒推：' : scenario === 'flexible' ? '按附近车辆次日上午可到场安排：' : '从客户装货时段顺推：'}装货 ${example.loadingHours} 小时，运输 ${example.drivingHours} 小时，途中停留及机动预留 ${example.bufferHours} 小时，共 ${durationHours} 小时。`,
   };
   const totalWeight = Number(example.cargo.reduce((sum, item) => sum + item.weight, 0).toFixed(1));
@@ -98,16 +101,18 @@ export function createEmailOrder(scenario: EmailOrderScenario, receivedAt: numbe
     number: scenario === 'loading' || scenario === 'flexible' ? undefined : `KH-${dateFormat.format(receivedAt).replace(/-/g, '')}-${String(sequence).padStart(3, '0')}`,
     origin: example.origin, destination: example.destination, cargo: example.cargo.map(item => ({ ...item })), handling: example.handling,
     loadingTime: timing.loadingSource === '客户要求' ? emailTimeRange(loadingStart, loadingEnd) : undefined,
-    arrivalRequirement: timing.arrivalSource === '客户要求' ? `${timeFormat.format(deadline)} 前到达` : undefined,
+    arrivalRequirement: scenario === 'duration' ? '装货后 24 小时内到达' : timing.arrivalSource === '客户要求' ? `${timeFormat.format(deadline)} 前到达` : undefined,
   };
   const dispatch: EmailOrderResult['dispatch'] = {
     vehicle: example.vehicle, count, totalWeight, totalVolume,
     allocation: count === 1 ? `全部货物由 1 辆车承运，共 ${totalWeight} 吨 / ${totalVolume} 立方米。` : `每车装 ${example.cargo[0]!.quantity / count} 木箱，约 ${totalWeight / count} 吨 / ${totalVolume / count} 立方米。`,
     reason: `按演示车型单车可装 ${example.maxWeight} 吨、${example.maxVolume} 立方米测算，货物可堆码，${count} 辆可满足重量和容积要求；封闭车厢便于防雨防潮。`,
   };
-  const originalBody = `您好，\n\n请安排以下运输${order.number ? `，订单号：${order.number}` : ''}。\n装货地：${order.origin}\n卸货地：${order.destination}\n货物：${cargoText}。\n${order.handling}\n${order.loadingTime ? `装货时间：${order.loadingTime}。\n` : ''}${order.arrivalRequirement ? `到达要求：${order.arrivalRequirement}。\n` : ''}\n请回复用车和运输安排，谢谢。\n${example.senderName}`;
+  const originalLoading = order.loadingTime ? `明天 ${clockFormat.format(loadingStart)}–${clockFormat.format(loadingEnd)}` : '';
+  const originalArrival = scenario === 'duration' ? order.arrivalRequirement : order.arrivalRequirement ? `明天 ${clockFormat.format(deadline)} 前到达` : '';
+  const originalBody = `您好，\n\n请安排以下运输${order.number ? `，订单号：${order.number}` : ''}。\n装货地：${order.origin}\n卸货地：${order.destination}\n货物：${cargoText}。\n${order.handling}\n${originalLoading ? `装货时间：${originalLoading}。\n` : ''}${originalArrival ? `到达要求：${originalArrival}。\n` : ''}\n请回复用车和运输安排，谢谢。\n${example.senderName}`;
   const loadingText = `${timing.loadingSource === '客户要求' ? '按您要求，装货时间为' : '建议装货时间为'} ${emailTimeRange(loadingStart, loadingEnd)}${timing.latestLoadingAt ? `，最晚请于 ${timeFormat.format(timing.latestLoadingAt)} 开始装货` : ''}。`;
-  const arrivalText = order.arrivalRequirement ? `已记录到达要求：${order.arrivalRequirement}，将按此要求安排。` : `预计 ${emailTimeRange(timing.arrivalStart, timing.arrivalEnd)} 到达。`;
+  const arrivalText = scenario === 'duration' ? `已收到装货后 24 小时内到达的要求，将按此安排车辆；预计 ${emailTimeRange(timing.arrivalStart, timing.arrivalEnd)} 到达。` : order.arrivalRequirement ? `已记录到达要求：${order.arrivalRequirement}，将按此要求安排。` : `预计 ${emailTimeRange(timing.arrivalStart, timing.arrivalEnd)} 到达。`;
   const reply = `您好，\n\n已收到${order.number ? `订单 ${order.number}` : '本次运输需求'}：从${order.origin}发往${order.destination}。\n货物为${cargoText}，合计 ${totalWeight} 吨、${totalVolume} 立方米。\n\n拟安排 ${count} 辆${dispatch.vehicle}。${dispatch.allocation}\n${dispatch.reason.replace('按演示车型', '按车型')}\n\n装货地附近车源${example.market.supply}，${example.market.difficulty}。${example.market.supplyReason}\n预计运价${example.market.price}，比较口径为相近线路、相同车型近期常规时段运价。${example.market.priceReason}\n\n${loadingText}\n${arrivalText}\n${timing.basis}\n\n派车确定后，我们会通过邮件告知车牌号、司机姓名、联系电话及预计到场时间，方便安排进场装货。\n\n物流运营团队`;
   return { scenario, subject: example.subject, sender: example.sender, senderName: example.senderName, mailbox, receivedAt, originalBody, order, dispatch, market: { ...example.market }, timing, reply: { subject: `Re: ${example.subject}`, body: reply } };
 }
@@ -139,13 +144,14 @@ export function completeEmailRun(run: TaskRun, finishedAt: number) {
   run.result = `${email.order.origin} → ${email.order.destination}\n拟安排 ${email.dispatch.count} 辆${email.dispatch.vehicle}，承运 ${email.dispatch.totalWeight} 吨 / ${email.dispatch.totalVolume} 立方米。\n附近车源${email.market.supply}，${email.market.difficulty}；运价${email.market.price}。\n装货：${emailTimeRange(email.timing.loadingStart, email.timing.loadingEnd)}；到达：${email.order.arrivalRequirement ?? emailTimeRange(email.timing.arrivalStart, email.timing.arrivalEnd)}。\n已回复客户（演示），派车确定后通过邮件通知车辆信息。`;
 }
 
-export function createEmailDemoTask(projectId: string, now = Date.now()): DailyTask {
+export function createEmailDemoTask(projectId: string, now = Date.now(), includeHistory = true): DailyTask {
   const task: DailyTask = {
     id: `email-order-${projectId}`, projectId, name: '邮件处理订单', trigger: 'schedule', taskTemplate: 'email-order',
     eventType: 'parking', threshold: 0, fenceId: '', time: '', confirmBeforeSend: false,
-    prompt: '接收订单邮件，识别货物和装卸货要求，判断车型、车辆数、附近车源与运价，补充时间安排并自动回复客户。',
-    enabled: true, createdAt: now - day, lastScheduledDay: '', runs: [], mailbox: { address: emailDemoMailbox, status: 'bound' },
+    prompt: '接收客户订单邮件，提取装卸货地、货物和时间要求，给出车型、车辆数、车源和运价判断，补充预计装货或到达时间，并通过邮件回复客户。',
+    enabled: true, createdAt: includeHistory ? now - day : now, lastScheduledDay: '', runs: [], mailbox: { address: emailDemoMailbox, status: 'bound' },
   };
+  if (!includeHistory) return task;
   for (const [index, scenario] of (['both', 'arrival', 'loading'] as const).entries()) {
     const run = createEmailRun(task, scenario, now - (3 - index) * hour);
     completeEmailRun(run, run.startedAt + emailDemoStepDelay * run.steps.length);

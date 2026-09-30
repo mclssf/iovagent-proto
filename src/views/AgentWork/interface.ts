@@ -10,6 +10,13 @@ export interface Project {
   keyword: string;
   statusFilter: string;
   skillIds?: string[];
+  mailbox?: ProjectMailbox;
+}
+
+export interface ProjectMailbox {
+  address: string;
+  status: 'bound';
+  boundAt: number;
 }
 
 export interface AgentConversation {
@@ -241,7 +248,7 @@ export interface DownloadTask {
   status: string;
   progress: number;
 }
-export type EmailOrderScenario = 'both' | 'arrival' | 'loading' | 'flexible';
+export type EmailOrderScenario = 'both' | 'arrival' | 'loading' | 'flexible' | 'duration';
 
 export interface EmailOrderResult {
   scenario: EmailOrderScenario;

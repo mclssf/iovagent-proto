@@ -5,6 +5,7 @@ import { createMonitoredOrders, ensureRequiredMonitorSkills, eventDefinitions, e
 import { extractTaskPlates, makeOrdinaryRun, mergeTaskAttachments, ordinaryStepDelay, ordinaryTaskName, ordinaryTaskResult, resolveAsyncTool } from '@/views/AgentWork/ordinaryTasks';
 import { createDataEmployeeSkills } from './dataEmployeeSkills';
 import { completeEmailRun, createEmailDemoTask, createEmailRun, emailDemoStepDelay } from '@/views/AgentWork/emailOrderDemo';
+import { persistMailboxTasks, restoreMailboxTasks } from './projectMailboxes';
 
 const newId = (prefix: string) => `${prefix}-${crypto.randomUUID()}`;
 const stepDelay = () => 1600 + Math.round(Math.random() * 1000);
@@ -62,7 +63,7 @@ function makeRun(task: DailyTask, runtime: ProjectTaskRuntime | undefined, sourc
 export const useAgentDailyTasks = defineStore('agentDailyTasks', {
   state: () => ({
     projects: {} as Record<string, ProjectTaskRuntime>,
-    tasks: [] as DailyTask[],
+    tasks: restoreMailboxTasks() as DailyTask[],
     now: Date.now(),
   }),
   getters: {
@@ -77,7 +78,10 @@ export const useAgentDailyTasks = defineStore('agentDailyTasks', {
   actions: {
     markResultRead(taskId: string, runId: string) {
       const run = this.tasks.find((task) => task.id === taskId)?.runs.find((item) => item.id === runId);
-      if (run && hasTaskResult(run) && run.readAt === undefined) run.readAt = Date.now();
+      if (run && hasTaskResult(run) && run.readAt === undefined) {
+        run.readAt = Date.now();
+        if (run.emailOrder) persistMailboxTasks(this.tasks);
+      }
     },
     syncProjects(projects: Project[], orders: Order[]) {
       for (const project of projects) {
@@ -92,8 +96,15 @@ export const useAgentDailyTasks = defineStore('agentDailyTasks', {
           this.projects[project.id] = runtime;
           if (project.id === 'P001') {
             this.seedTasks(runtime);
-            this.tasks.unshift(createEmailDemoTask(project.id));
           }
+        }
+        if (project.mailbox?.status === 'bound') {
+          let mailTask = this.tasks.find(task => task.projectId === project.id && task.taskTemplate === 'email-order');
+          if (!mailTask) {
+            mailTask = createEmailDemoTask(project.id, Date.now(), project.id === 'P001');
+            this.tasks.unshift(mailTask);
+          }
+          mailTask.mailbox = { address: project.mailbox.address, status: project.mailbox.status };
         }
         const resumed = !runtime.connected && project.status === '已连接';
         const previousSkills = runtime.skillIds;
@@ -109,6 +120,7 @@ export const useAgentDailyTasks = defineStore('agentDailyTasks', {
       const ids = new Set(projects.map((project) => project.id));
       for (const id of Object.keys(this.projects)) if (!ids.has(id)) delete this.projects[id];
       this.tasks = this.tasks.filter((task) => !task.projectId || ids.has(task.projectId));
+      persistMailboxTasks(this.tasks);
     },
     seedTasks(runtime: ProjectTaskRuntime) {
       const base: DailyTaskDraft = { name: '', trigger: 'event', taskTemplate: 'general', eventType: 'parking', threshold: 30, fenceId: '', time: '18:00', intervalMinutes: 10, sourceDataEmployeeIds: [], targetDataEmployeeId: '', prompt: '', confirmBeforeSend: true };
@@ -197,7 +209,10 @@ export const useAgentDailyTasks = defineStore('agentDailyTasks', {
     toggleTask(taskId: string) {
       const task = this.tasks.find((item) => item.id === taskId);
       if (task?.trigger === 'once') throw new Error('普通任务仅执行一次，不支持暂停或启动');
-      if (task) task.enabled = !task.enabled;
+      if (task) {
+        task.enabled = !task.enabled;
+        if (task.taskTemplate === 'email-order') persistMailboxTasks(this.tasks);
+      }
     },
     receiveOrdinaryResult(taskId: string, jobId: string, result: { text: string; files: NonNullable<TaskRun['files']> }) {
       const task = this.tasks.find((item) => item.id === taskId);
@@ -272,6 +287,7 @@ export const useAgentDailyTasks = defineStore('agentDailyTasks', {
       if (!task.enabled) throw new Error('请先启动邮件处理任务');
       if (task.runs.some((run) => run.status === 'running')) throw new Error('本封邮件正在处理，请稍后再试');
       task.runs.unshift(createEmailRun(task, scenario));
+      persistMailboxTasks(this.tasks);
     },
     resolveAction(taskId: string, runId: string, send: boolean) {
       const run = this.tasks.find((task) => task.id === taskId)?.runs.find((item) => item.id === runId);
@@ -304,6 +320,7 @@ export const useAgentDailyTasks = defineStore('agentDailyTasks', {
     },
     tick(now = Date.now()) {
       this.now = now;
+      let mailboxChanged = false;
       for (const runtime of Object.values(this.projects as Record<string, ProjectTaskRuntime>)) {
         if (!runtime.connected || !runtime.orders.length) continue;
         for (const monitor of runtime.monitors) {
@@ -330,6 +347,7 @@ export const useAgentDailyTasks = defineStore('agentDailyTasks', {
         for (const run of task.runs) {
           if (run.status !== 'running' || now < run.nextStepAt) continue;
           run.activeStep++;
+          if (run.emailOrder) mailboxChanged = true;
           run.nextStepAt = now + (run.emailOrder ? emailDemoStepDelay : task.trigger === 'once' ? ordinaryStepDelay() : stepDelay());
           if (run.activeStep < run.steps.length) continue;
           if (run.emailOrder) { completeEmailRun(run, now); continue; }
@@ -355,6 +373,7 @@ export const useAgentDailyTasks = defineStore('agentDailyTasks', {
           }
         }
       }
+      if (mailboxChanged) persistMailboxTasks(this.tasks);
     },
   },
 });

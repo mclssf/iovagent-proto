@@ -13,9 +13,12 @@ try {
   const { useAgentDailyTasks } = await server.ssrLoadModule('/src/pinia/agentDailyTasks.ts');
   const { hasTaskResult, getTaskStatus, triggerLabel } = await server.ssrLoadModule('/src/views/AgentWork/dailyTasks.ts');
   const { createEmailOrder } = await server.ssrLoadModule('/src/views/AgentWork/emailOrderDemo.ts');
+  const { createProjectMailbox, mailboxSkill, persistMailboxProjects, restoreMailboxProjects } = await server.ssrLoadModule('/src/pinia/projectMailboxes.ts');
+  const storage = new Map();
+  globalThis.window = { localStorage: { getItem: key => storage.get(key) ?? null, setItem: (key, value) => storage.set(key, value) } };
   setActivePinia(createPinia());
   const store = useAgentDailyTasks();
-  const projects = ['P001', 'P002'].map(id => ({ id, status: '未连接', total: 0, skillIds: [] }));
+  const projects = ['P001', 'P002'].map(id => ({ id, name: id, status: '未连接', total: 0, skillIds: id === 'P001' ? [mailboxSkill.id] : [], mailbox: id === 'P001' ? createProjectMailbox() : undefined }));
   store.syncProjects(projects, []);
   store.syncProjects(projects, []);
   const mailTasks = store.tasks.filter(task => task.taskTemplate === 'email-order');
@@ -53,10 +56,15 @@ try {
   const flexible = createEmailOrder('flexible', now, 4);
   assert.equal(flexible.timing.loadingSource, '预计安排');
   assert.equal(flexible.timing.arrivalSource, '预计安排');
+  const duration = createEmailOrder('duration', now, 5);
+  assert.equal(duration.order.arrivalRequirement, '装货后 24 小时内到达');
+  assert(duration.timing.arrivalEnd <= duration.timing.loadingStart + 24 * 3600000);
+  assert.match(duration.timing.basis, /10\/01 09:00/);
+  assert.match(both.originalBody, /明天 09:00–11:00/);
   const lateNight = createEmailOrder('loading', Date.parse('2026-09-30T00:15:00+08:00'), 5);
   assert.equal(lateNight.timing.loadingStart, Date.parse('2026-10-01T09:00:00+08:00'), 'relative dates follow the mailbox timezone');
 
-  for (const scenario of ['both', 'arrival', 'loading', 'flexible']) {
+  for (const scenario of ['both', 'arrival', 'loading', 'flexible', 'duration']) {
     const before = task.runs.length;
     store.receiveDemoEmail(task.id, scenario);
     const run = task.runs[0];
@@ -82,12 +90,39 @@ try {
   }
   assert.equal(store.unreadResultsByProject.P002, undefined, 'mail results stay in their project');
   assert(!store.tasks.some(item => !item.projectId && item.taskTemplate === 'email-order'), 'personal tasks do not inherit project mail');
+  assert(!store.tasks.some(item => item.projectId === 'P002' && item.taskTemplate === 'email-order'), 'unbound projects do not get a mail task');
+  projects[1].mailbox = createProjectMailbox();
+  projects[1].skillIds = [mailboxSkill.id];
+  store.syncProjects(projects, []);
+  const secondTask = store.tasks.find(item => item.projectId === 'P002' && item.taskTemplate === 'email-order');
+  assert(secondTask.enabled, 'saving a binding starts mail processing');
+  assert.equal(secondTask.runs.length, 0, 'newly bound projects start with an empty history');
+  store.toggleTask(secondTask.id);
+  store.syncProjects(projects, []);
+  assert.equal(store.tasks.filter(item => item.id === secondTask.id).length, 1, 'saving again does not duplicate the task');
+  assert.equal(secondTask.enabled, false, 'saving again preserves paused state');
+
+  const newProject = { ...projects[1], id: 'PNEW', name: '邮箱演示项目', tmsUrl: 'not-to-be-saved', tmsUser: 'not-to-be-saved' };
+  persistMailboxProjects([...projects, newProject]);
+  const restoredProjects = restoreMailboxProjects([{ ...projects[0], mailbox: undefined }, { ...projects[1], mailbox: undefined }]);
+  assert.equal(restoredProjects.length, 3, 'a new mailbox project survives reload');
+  assert.equal(restoredProjects.find(item => item.id === 'PNEW').mailbox.address, newProject.mailbox.address);
+  assert(!storage.get('iovagent-mailbox-projects-v1').includes('not-to-be-saved'), 'connection fields are not persisted');
+  setActivePinia(createPinia());
+  const restoredStore = useAgentDailyTasks();
+  restoredStore.syncProjects(restoredProjects, []);
+  const restoredTask = restoredStore.tasks.find(item => item.id === task.id);
+  assert.equal(restoredTask.runs.length, task.runs.length, 'results are restored without reseeding');
+  assert.equal(restoredTask.runs[0].emailOrder.reply.body, task.runs[0].emailOrder.reply.body);
+  assert.equal(restoredStore.unreadResultsByTask[task.id], 0, 'read state survives reload');
+  assert.equal(restoredStore.tasks.find(item => item.id === secondTask.id).enabled, false, 'pause survives reload');
   store.deleteTask(task.id);
   assert(store.tasks.some(item => item.id === task.id), 'the fixed demo cannot be deleted');
   store.syncProjects([projects[1]], []);
   assert(!store.tasks.some(item => item.id === task.id), 'removing its project removes the demo');
-  console.log('PASS: mailbox binding, scoped seed, four time cases, timezone rollover, cargo totals, vehicle counts, mail pipeline, pause/resume and per-reply results.');
+  console.log('PASS: mailbox binding, scoped seed, five time cases, persisted project bindings and mail results, timezone rollover, cargo totals, vehicle counts, mail pipeline, pause/resume and per-reply results.');
 } finally {
+  delete globalThis.window;
   Date.now = originalNow;
   await server.close();
 }

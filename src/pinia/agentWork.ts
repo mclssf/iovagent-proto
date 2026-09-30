@@ -10,6 +10,7 @@ import type {
   PageId,
   PrivateCapacity,
   Project,
+  ProjectMailbox,
   StandardCargo,
   TimelineEvent,
   TmsSyncCustomer,
@@ -25,6 +26,7 @@ import { ensureRequiredMonitorSkills } from '@/views/AgentWork/dailyTasks';
 import type { TaskAttachment } from '@/views/AgentWork/dailyTasks';
 import { resolveAsyncTool, extractTaskPlates } from '@/views/AgentWork/ordinaryTasks';
 import { useAgentDailyTasks } from './agentDailyTasks';
+import { createProjectMailbox, mailboxSkill, persistMailboxProjects, restoreMailboxProjects } from './projectMailboxes';
 
 const defaultOrdersDateRange = {
   start: '2026-05-09',
@@ -49,6 +51,7 @@ function getOrderStartDate(order: Order) {
 const projectsSeed: Project[] = [
   {
     id: 'P001',
+    mailbox: createProjectMailbox(),
     name: '华东干线在途监控',
     status: '已连接',
     sync: '2分钟前',
@@ -69,6 +72,7 @@ const projectsSeed: Project[] = [
       'capacity-cargo-publish',
       'capacity-quote-collection',
       'capacity-private-fleet',
+      mailboxSkill.id,
     ],
   },
   {
@@ -1423,7 +1427,7 @@ export const agentWorkData = defineStore('agentWork', {
     return {
       ordersStartDate: defaultOrdersDateRange.start,
       ordersEndDate: defaultOrdersDateRange.end,
-      projects: projectsSeed.map((project) => ({ ...project, skillIds: ensureRequiredMonitorSkills(migrateCapacitySkillIds(project.skillIds ?? [])) })) as Project[],
+      projects: restoreMailboxProjects(projectsSeed).map((project) => ({ ...project, skillIds: ensureRequiredMonitorSkills(migrateCapacitySkillIds(project.skillIds ?? [])) })) as Project[],
       recentConversations: conversationSeeds.map((conversation) => ({
         ...conversation,
         messages: conversation.messages.map((message) => ({ ...message })),
@@ -2009,7 +2013,7 @@ export const agentWorkData = defineStore('agentWork', {
       });
       ElMessage.success(`已将 ${importedCount} 条运单合并到“${targetProject.name}”`);
     },
-    addSkillProject(name: string, skillNames: string[], skillIds: string[]) {
+    addSkillProject(name: string, skillNames: string[], skillIds: string[], mailbox?: ProjectMailbox) {
       const projectId = `P${crypto.randomUUID()}`;
       const skillSummary = skillNames.length > 0 ? skillNames.join(' / ') : '内置技能';
       this.workspaceMode = 'project';
@@ -2017,6 +2021,7 @@ export const agentWorkData = defineStore('agentWork', {
       this.projects = [
         {
           id: projectId,
+          mailbox: mailbox ? { ...mailbox } : undefined,
           name,
           status: '已连接',
           sync: '刚刚',
@@ -2026,14 +2031,17 @@ export const agentWorkData = defineStore('agentWork', {
           tmsUser: 'skill_agent',
           keyword: skillNames.slice(0, 2).join('、') || name,
           statusFilter: '在途',
-          skillIds: ensureRequiredMonitorSkills(migrateCapacitySkillIds(skillIds)),
+          skillIds: ensureRequiredMonitorSkills(migrateCapacitySkillIds(mailbox ? [...skillIds, mailboxSkill.id] : skillIds)),
         },
         ...this.projects,
       ];
       this.currentProjectId = projectId;
+      persistMailboxProjects(this.projects);
+      useAgentDailyTasks().syncProjects(this.projects, this.ordersSeed);
       ElMessage.success('项目创建成功');
+      return projectId;
     },
-    updateSkillProject(projectId: string, name: string, skillNames: string[], skillIds: string[]) {
+    updateSkillProject(projectId: string, name: string, skillNames: string[], skillIds: string[], mailbox?: ProjectMailbox) {
       const skillSummary = skillNames.length > 0 ? skillNames.join(' / ') : '内置技能';
       this.workspaceMode = 'project';
       this.currentConversationId = '';
@@ -2041,19 +2049,24 @@ export const agentWorkData = defineStore('agentWork', {
         project.id === projectId
           ? {
               ...project,
+              mailbox: mailbox ? { ...mailbox } : project.mailbox,
               name,
               tmsUrl: skillSummary,
               tmsUser: project.tmsUser || 'skill_agent',
               keyword: skillNames.slice(0, 2).join('、') || name,
-              skillIds: ensureRequiredMonitorSkills(migrateCapacitySkillIds(skillIds)),
+              skillIds: ensureRequiredMonitorSkills(migrateCapacitySkillIds(mailbox || project.mailbox ? [...skillIds, mailboxSkill.id] : skillIds)),
             }
           : project,
       );
       this.currentProjectId = projectId;
+      persistMailboxProjects(this.projects);
+      useAgentDailyTasks().syncProjects(this.projects, this.ordersSeed);
       ElMessage.success('项目已更新');
     },
     removeProjectAt(index: number) {
       this.projects = this.projects.filter((_, idx) => idx !== index);
+      persistMailboxProjects(this.projects);
+      useAgentDailyTasks().syncProjects(this.projects, this.ordersSeed);
       if (!this.projects.find((p) => p.id === this.currentProjectId)) {
         this.currentProjectId = this.projects[0]?.id ?? '';
       }

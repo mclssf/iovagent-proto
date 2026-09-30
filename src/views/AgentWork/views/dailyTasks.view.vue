@@ -21,6 +21,10 @@ const work = agentWorkData();
 const store = useAgentDailyTasks();
 const { goPage } = useAgentWorkNav();
 const route = useRoute();
+watch(() => route.query.projectId, (id) => {
+  const project = work.projects.find(item => item.id === id);
+  if (project && (work.currentProjectId !== project.id || work.workspaceMode !== 'project')) work.switchProject(project);
+}, { immediate: true });
 const selectedId = ref('');
 const emailScenario = ref<EmailOrderScenario>('both');
 const editingId = ref('');
@@ -207,7 +211,7 @@ async function remove(task: DailyTask) {
             <div v-for="run in activeRuns" :key="run.id" class="dt-active-run" role="status"><Icon :svg="strokeIconPaths.refresh" :size="15" svg-class="animate-spin" /><div><strong>{{ run.steps[run.activeStep]?.title ?? '正在接收结果' }}</strong><p>{{ run.steps[run.activeStep]?.text }}</p><small>{{ sourceLabels[run.source] }} · {{ Math.min(run.activeStep + 1, run.steps.length) }}/{{ run.steps.length }}</small></div></div>
             <div v-if="!results.length" class="dt-empty compact"><Icon :svg="strokeIconPaths.fileText" :size="24" /><h2>{{ activeRuns.length ? '执行结果生成中' : '暂无执行结果' }}</h2><p>{{ activeRuns.length ? '结果返回后将在此展示' : getTaskStatus(selected) === 'paused' ? '任务已暂停，启动后等待下次触发' : triggerLabel(selected, runtime?.fences) }}</p></div>
             <section v-for="(run, index) in results" :key="run.id" class="dt-run" :aria-label="`执行结果 ${results.length - index}`">
-              <header :data-result-id="run.id"><div><strong>{{ run.emailOrder ? run.emailOrder.subject : run.event ? `${run.event.order.id} · ${run.event.order.plate}` : selected.trigger === 'once' ? '任务结果' : `执行结果 ${results.length - index}` }}</strong><small>{{ formatTaskTime(run.finishedAt ?? run.startedAt) }} · {{ sourceLabels[run.source] }}</small></div><span v-if="run.emailOrder" class="dt-badge success">已回复 · 演示</span><span v-else-if="run.action?.status === 'pending'" class="dt-badge warning">待确认</span></header>
+              <header :data-result-id="run.id"><div><strong>{{ run.emailOrder ? [run.emailOrder.subject, run.emailOrder.order.number].filter(Boolean).join(' · ') : run.event ? `${run.event.order.id} · ${run.event.order.plate}` : selected.trigger === 'once' ? '任务结果' : `执行结果 ${results.length - index}` }}</strong><small>{{ formatTaskTime(run.finishedAt ?? run.startedAt) }} · {{ sourceLabels[run.source] }}</small></div><span v-if="run.emailOrder" class="dt-badge success">已回复 · 演示</span><span v-else-if="run.action?.status === 'pending'" class="dt-badge warning">待确认</span></header>
               <EmailOrderResult v-if="run.emailOrder" :email="run.emailOrder" />
               <p v-else-if="run.result" class="dt-run-result">{{ run.result }}</p>
               <div v-if="run.files?.length" class="dt-result-files" aria-label="任务结果文件">
@@ -218,7 +222,7 @@ async function remove(task: DailyTask) {
                 <p class="dt-recipient">{{ run.action.recipient }}</p><p>{{ run.action.content }}</p>
                 <div v-if="run.status === 'waiting'" class="dt-actions"><button class="dt-button primary" type="button" @click="store.resolveAction(selected.id, run.id, true)">确认发送</button><button class="dt-button" type="button" @click="store.resolveAction(selected.id, run.id, false)">取消发送</button></div>
               </div>
-              <details class="dt-run-steps"><summary>执行详情</summary><p v-if="run.event" class="dt-run-context">{{ run.event.detail }}</p><p v-if="run.toolJobId" class="dt-run-context">{{ run.toolJobId }}</p><ol><li v-for="step in run.steps" :key="step.title"><Icon :svg="strokeIconPaths.check" :size="13" /><div><strong>{{ step.title }}</strong><p>{{ step.text }}</p><span v-if="step.tool" class="dt-tool">{{ step.tool }}</span></div></li></ol></details>
+              <details class="dt-run-steps"><summary>执行详情</summary><p v-if="run.emailOrder && run.finishedAt" class="dt-run-context">开始 {{ formatTaskTime(run.startedAt) }} · 完成 {{ formatTaskTime(run.finishedAt) }}</p><p v-if="run.event" class="dt-run-context">{{ run.event.detail }}</p><p v-if="run.toolJobId" class="dt-run-context">{{ run.toolJobId }}</p><ol><li v-for="step in run.steps" :key="step.title"><Icon :svg="strokeIconPaths.check" :size="13" /><div><strong>{{ step.title }}</strong><p>{{ step.text }}</p><span v-if="step.tool" class="dt-tool">{{ step.tool }}</span></div></li></ol></details>
               <footer v-if="run.finishedAt">耗时 {{ taskDuration(run.finishedAt - run.startedAt) }}</footer>
             </section>
           </div>

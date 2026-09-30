@@ -1,9 +1,15 @@
 <script lang="ts" setup>
+import { computed } from 'vue';
 import type { EmailOrderResult } from '../interface';
 import { emailTimeRange } from '../emailOrderDemo';
 import { formatTaskTime } from '../dailyTasks';
 
-defineProps<{ email: EmailOrderResult }>();
+const props = defineProps<{ email: EmailOrderResult }>();
+const totalQuantity = computed(() => {
+  const quantities = new Map<string, number>();
+  for (const item of props.email.order.cargo) quantities.set(item.unit, (quantities.get(item.unit) ?? 0) + item.quantity);
+  return [...quantities].map(([unit, quantity]) => `${quantity} ${unit}`).join('、');
+});
 </script>
 
 <template>
@@ -19,7 +25,7 @@ defineProps<{ email: EmailOrderResult }>();
       <caption>货物清单</caption>
       <thead><tr><th scope="col">货物</th><th scope="col">数量</th><th scope="col">重量</th><th scope="col">体积</th></tr></thead>
       <tbody><tr v-for="item in email.order.cargo" :key="item.name"><td>{{ item.name }}</td><td>{{ item.quantity }} {{ item.unit }}</td><td>{{ item.weight }} 吨</td><td>{{ item.volume }} m³</td></tr></tbody>
-      <tfoot><tr><td colspan="2">合计</td><td>{{ email.dispatch.totalWeight }} 吨</td><td>{{ email.dispatch.totalVolume }} m³</td></tr></tfoot>
+      <tfoot><tr><td>合计</td><td>{{ totalQuantity }}</td><td>{{ email.dispatch.totalWeight }} 吨</td><td>{{ email.dispatch.totalVolume }} m³</td></tr></tfoot>
     </table>
     <p class="email-note">{{ email.order.handling }}</p>
 
@@ -38,7 +44,7 @@ defineProps<{ email: EmailOrderResult }>();
       <h3>时间安排</h3>
       <dl class="email-order-fields">
         <div><dt>装货 · {{ email.timing.loadingSource }}</dt><dd>{{ emailTimeRange(email.timing.loadingStart, email.timing.loadingEnd) }}</dd><small v-if="!email.order.loadingTime">客户未提供装货时间</small></div>
-        <div><dt>到达 · {{ email.timing.arrivalSource }}</dt><dd>{{ email.order.arrivalRequirement ?? emailTimeRange(email.timing.arrivalStart, email.timing.arrivalEnd) }}</dd><small v-if="!email.order.arrivalRequirement">客户未提供到达要求</small></div>
+        <div><dt>到达 · {{ email.timing.arrivalSource }}</dt><dd>{{ email.timing.arrivalSource === '客户要求' ? email.order.arrivalRequirement : emailTimeRange(email.timing.arrivalStart, email.timing.arrivalEnd) }}</dd><small v-if="!email.order.arrivalRequirement">客户未提供到达要求</small><small v-else-if="email.timing.arrivalSource === '预计安排'">客户要求：{{ email.order.arrivalRequirement }}</small></div>
       </dl>
       <p v-if="email.timing.latestLoadingAt" class="email-latest">最晚 {{ formatTaskTime(email.timing.latestLoadingAt) }} 开始装货</p>
       <p class="email-note">{{ email.timing.basis }}</p>
