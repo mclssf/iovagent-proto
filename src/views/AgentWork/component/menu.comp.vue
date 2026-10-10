@@ -26,7 +26,6 @@ const expandedProjectId = ref(store.currentProjectId);
 const editingConversationId = ref('');
 const editingConversationTitle = ref('');
 const dismissedConversationCaseIds = ref<string[]>([]);
-const openedConversationCaseIds = new Map<string, string>();
 const conversationTitleInputRef = ref<HTMLInputElement | HTMLInputElement[] | null>(null);
 
 const currentUserName = computed(
@@ -299,12 +298,12 @@ const featuredConversationCaseIds = new Set([
   'PDA-CASE-003',
 ]);
 const featuredConversationCases = kbConversationCases.filter((item) => featuredConversationCaseIds.has(item.id));
-const unopenedFeaturedConversationCases = computed(() =>
-  featuredConversationCases.filter(
-    (item) => !dismissedConversationCaseIds.value.includes(item.id)
-      && !recentConversations.value.some((conversation) => conversation.title === item.title),
-  ),
-);
+const sidebarConversations = computed(() => [
+  ...recentConversations.value.filter((conversation) => !featuredConversationCaseIds.has(conversation.id)),
+  ...featuredConversationCases
+    .filter((item) => !dismissedConversationCaseIds.value.includes(item.id))
+    .map((item) => recentConversations.value.find((conversation) => conversation.id === item.id) ?? item),
+]);
 
 const projectNavs: { icon: string; id: PageId; label: string }[] = [
   { id: 'agent', label: '智能体工作台', icon: strokeIconPaths.bot },
@@ -381,16 +380,15 @@ function startNewConversation() {
 }
 
 function openConversation(conversationId: string) {
+  ensureExampleConversation(conversationId);
   store.openConversation(conversationId);
   expandedProjectId.value = '';
   goNav('agent');
 }
 
-function openKnowledgeBaseConversation(item: KnowledgeBaseConversationCase) {
-  store.startExampleConversation(item.title, item.messages);
-  openedConversationCaseIds.set(store.currentConversationId, item.id);
-  expandedProjectId.value = '';
-  goNav('agent');
+function ensureExampleConversation(conversationId: string) {
+  const item = featuredConversationCases.find((conversation) => conversation.id === conversationId);
+  if (item) store.ensureExampleConversation(item.id, item.title, item.messages);
 }
 
 function toggleProject(project: Project) {
@@ -408,6 +406,7 @@ function openProjectPage(page: PageId) {
 }
 
 function startConversationTitleEdit(conversationId: string, title: string) {
+  ensureExampleConversation(conversationId);
   editingConversationId.value = conversationId;
   editingConversationTitle.value = title;
   nextTick(() => {
@@ -431,7 +430,7 @@ function cancelConversationTitleEdit() {
   editingConversationTitle.value = '';
 }
 
-async function deleteConversation(conversationId: string, title: string, caseId?: string) {
+async function deleteConversation(conversationId: string, title: string) {
   try {
     await ElMessageBox.confirm(`确定删除对话「${title}」吗？删除后无法继续打开该会话。`, '删除对话', {
       confirmButtonText: '删除',
@@ -442,11 +441,13 @@ async function deleteConversation(conversationId: string, title: string, caseId?
   } catch {
     return;
   }
-  const isCurrentConversation = Boolean(conversationId) && store.workspaceMode === 'conversation' && store.currentConversationId === conversationId;
-  if (conversationId && !store.deleteConversation(conversationId)) return;
-  const deletedCaseId = caseId || openedConversationCaseIds.get(conversationId);
-  if (deletedCaseId) dismissedConversationCaseIds.value.push(deletedCaseId);
-  openedConversationCaseIds.delete(conversationId);
+  const isCurrentConversation = store.workspaceMode === 'conversation' && store.currentConversationId === conversationId;
+  const isExampleConversation = featuredConversationCaseIds.has(conversationId);
+  const hasSavedConversation = recentConversations.value.some((conversation) => conversation.id === conversationId);
+  if (hasSavedConversation) {
+    if (!store.deleteConversation(conversationId)) return;
+  } else if (!isExampleConversation) return;
+  if (isExampleConversation) dismissedConversationCaseIds.value.push(conversationId);
   ElMessage.success('对话已删除');
   if (isCurrentConversation) {
     expandedProjectId.value = '';
@@ -512,7 +513,7 @@ function logout() {
         </div>
         <div class="space-y-0.5">
           <div
-            v-for="conversation in recentConversations"
+            v-for="conversation in sidebarConversations"
             :key="conversation.id"
             class="group flex min-h-9 items-center rounded-md transition"
             :class="
@@ -564,29 +565,6 @@ function logout() {
             </template>
           </div>
 
-          <div
-            v-for="item in unopenedFeaturedConversationCases"
-            :key="item.id"
-            class="group flex min-h-9 items-center rounded-md transition hover:bg-white/75"
-          >
-            <button
-              type="button"
-              class="flex h-9 min-w-0 flex-1 items-center gap-2 px-2.5 text-left text-xs text-slate-700"
-              @click="openKnowledgeBaseConversation(item)"
-            >
-              <Icon :svg="item.icon" :size="14" svg-class="shrink-0 text-slate-400" />
-              <span class="min-w-0 flex-1 truncate">{{ item.title }}</span>
-            </button>
-            <button
-              type="button"
-              class="conversation-action mr-1 flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-slate-400 opacity-0 transition hover:bg-[#eeeeeb] hover:text-red-600 focus:opacity-100 group-hover:opacity-100 group-focus-within:opacity-100"
-              :aria-label="`删除对话：${item.title}`"
-              title="删除对话"
-              @click="deleteConversation('', item.title, item.id)"
-            >
-              <Icon :svg="strokeIconPaths.trash" :size="13" />
-            </button>
-          </div>
         </div>
       </section>
 

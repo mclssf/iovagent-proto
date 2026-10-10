@@ -1871,12 +1871,23 @@ export const agentWorkData = defineStore('agentWork', {
       if (isCurrentConversation) this.startNewConversation();
       return true;
     },
+    ensureExampleConversation(conversationId: string, title: string, messages: ChatMessage[]) {
+      if (this.recentConversations.some((conversation) => conversation.id === conversationId)) return;
+      this.recentConversations = [
+        {
+          id: conversationId,
+          title,
+          updatedAt: '刚刚',
+          messages: cloneChatMessages(messages).map(message => message.role === 'agent' ? { ...message, text: `演示案例：${message.text ?? ''}` } : message),
+        },
+        ...this.recentConversations,
+      ];
+    },
     startExampleConversation(title: string, messages: ChatMessage[]) {
       this.startNewConversation();
-      this.ensureConversationStarted();
-      this.renameConversation(this.currentConversationId, title);
-      this.agentMessages = cloneChatMessages(messages).map(message => message.role === 'agent' ? { ...message, text: `演示案例：${message.text ?? ''}` } : message);
-      this.persistActiveConversationMessages();
+      const conversationId = `C${Date.now()}`;
+      this.ensureExampleConversation(conversationId, title, messages);
+      this.openConversation(conversationId);
     },
     ensureConversationStarted() {
       if (this.workspaceMode !== 'conversation' || this.currentConversationId) return;
