@@ -5,6 +5,7 @@ import { computed, nextTick, ref } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 
 import { Icon } from '@packages/icon';
+import { ElMessage, ElMessageBox } from 'element-plus';
 import { storeToRefs } from 'pinia';
 
 import { agentWorkData } from '@/pinia/agentWork';
@@ -24,6 +25,8 @@ const isUserMenuOpen = ref(false);
 const expandedProjectId = ref(store.currentProjectId);
 const editingConversationId = ref('');
 const editingConversationTitle = ref('');
+const dismissedConversationCaseIds = ref<string[]>([]);
+const openedConversationCaseIds = new Map<string, string>();
 const conversationTitleInputRef = ref<HTMLInputElement | HTMLInputElement[] | null>(null);
 
 const currentUserName = computed(
@@ -298,7 +301,8 @@ const featuredConversationCaseIds = new Set([
 const featuredConversationCases = kbConversationCases.filter((item) => featuredConversationCaseIds.has(item.id));
 const unopenedFeaturedConversationCases = computed(() =>
   featuredConversationCases.filter(
-    (item) => !recentConversations.value.some((conversation) => conversation.title === item.title),
+    (item) => !dismissedConversationCaseIds.value.includes(item.id)
+      && !recentConversations.value.some((conversation) => conversation.title === item.title),
   ),
 );
 
@@ -384,6 +388,7 @@ function openConversation(conversationId: string) {
 
 function openKnowledgeBaseConversation(item: KnowledgeBaseConversationCase) {
   store.startExampleConversation(item.title, item.messages);
+  openedConversationCaseIds.set(store.currentConversationId, item.id);
   expandedProjectId.value = '';
   goNav('agent');
 }
@@ -424,6 +429,29 @@ function commitConversationTitleEdit() {
 function cancelConversationTitleEdit() {
   editingConversationId.value = '';
   editingConversationTitle.value = '';
+}
+
+async function deleteConversation(conversationId: string, title: string, caseId?: string) {
+  try {
+    await ElMessageBox.confirm(`确定删除对话「${title}」吗？删除后无法继续打开该会话。`, '删除对话', {
+      confirmButtonText: '删除',
+      cancelButtonText: '取消',
+      confirmButtonClass: 'dialog-danger',
+      type: 'warning',
+    });
+  } catch {
+    return;
+  }
+  const isCurrentConversation = Boolean(conversationId) && store.workspaceMode === 'conversation' && store.currentConversationId === conversationId;
+  if (conversationId && !store.deleteConversation(conversationId)) return;
+  const deletedCaseId = caseId || openedConversationCaseIds.get(conversationId);
+  if (deletedCaseId) dismissedConversationCaseIds.value.push(deletedCaseId);
+  openedConversationCaseIds.delete(conversationId);
+  ElMessage.success('对话已删除');
+  if (isCurrentConversation) {
+    expandedProjectId.value = '';
+    goNav('agent');
+  }
 }
 
 function logout() {
@@ -517,26 +545,48 @@ function logout() {
               </button>
               <button
                 type="button"
-                class="mr-1 flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-slate-400 opacity-0 transition hover:bg-[#eeeeeb] hover:text-slate-800 focus:opacity-100 group-hover:opacity-100"
+                class="conversation-action flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-slate-400 opacity-0 transition hover:bg-[#eeeeeb] hover:text-slate-800 focus:opacity-100 group-hover:opacity-100 group-focus-within:opacity-100"
                 :aria-label="`修改对话标题：${conversation.title}`"
                 title="修改标题"
                 @click="startConversationTitleEdit(conversation.id, conversation.title)"
               >
                 <Icon :svg="strokeIconPaths.edit" :size="13" />
               </button>
+              <button
+                type="button"
+                class="conversation-action mr-1 flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-slate-400 opacity-0 transition hover:bg-[#eeeeeb] hover:text-red-600 focus:opacity-100 group-hover:opacity-100 group-focus-within:opacity-100"
+                :aria-label="`删除对话：${conversation.title}`"
+                title="删除对话"
+                @click="deleteConversation(conversation.id, conversation.title)"
+              >
+                <Icon :svg="strokeIconPaths.trash" :size="13" />
+              </button>
             </template>
           </div>
 
-          <button
+          <div
             v-for="item in unopenedFeaturedConversationCases"
             :key="item.id"
-            type="button"
-            class="group flex h-9 w-full items-center rounded-md px-2.5 text-left text-xs text-slate-700 transition hover:bg-white/75"
-            @click="openKnowledgeBaseConversation(item)"
+            class="group flex min-h-9 items-center rounded-md transition hover:bg-white/75"
           >
-            <Icon :svg="item.icon" :size="14" svg-class="shrink-0 text-slate-400" />
-            <span class="ml-2 min-w-0 flex-1 truncate">{{ item.title }}</span>
-          </button>
+            <button
+              type="button"
+              class="flex h-9 min-w-0 flex-1 items-center gap-2 px-2.5 text-left text-xs text-slate-700"
+              @click="openKnowledgeBaseConversation(item)"
+            >
+              <Icon :svg="item.icon" :size="14" svg-class="shrink-0 text-slate-400" />
+              <span class="min-w-0 flex-1 truncate">{{ item.title }}</span>
+            </button>
+            <button
+              type="button"
+              class="conversation-action mr-1 flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-slate-400 opacity-0 transition hover:bg-[#eeeeeb] hover:text-red-600 focus:opacity-100 group-hover:opacity-100 group-focus-within:opacity-100"
+              :aria-label="`删除对话：${item.title}`"
+              title="删除对话"
+              @click="deleteConversation('', item.title, item.id)"
+            >
+              <Icon :svg="strokeIconPaths.trash" :size="13" />
+            </button>
+          </div>
         </div>
       </section>
 
@@ -648,6 +698,12 @@ function logout() {
 </template>
 
 <style lang="scss">
+@media (hover: none) {
+  .conversation-action {
+    opacity: 1;
+  }
+}
+
 .sidebar-scroll {
   scrollbar-color: #d4d4cf transparent;
   scrollbar-gutter: stable;

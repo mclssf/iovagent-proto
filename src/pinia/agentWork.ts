@@ -1838,6 +1838,7 @@ export const agentWorkData = defineStore('agentWork', {
       );
     },
     startNewConversation() {
+      clearAgentProcessTimers();
       this.persistActiveConversationMessages();
       this.workspaceMode = 'conversation';
       this.currentConversationId = '';
@@ -1849,6 +1850,7 @@ export const agentWorkData = defineStore('agentWork', {
       this.persistActiveConversationMessages();
       const conversation = this.recentConversations.find((item) => item.id === conversationId);
       if (!conversation) return;
+      clearAgentProcessTimers();
       this.workspaceMode = 'conversation';
       this.currentConversationId = conversation.id;
       this.agentMessages = cloneChatMessages(conversation.messages);
@@ -1861,6 +1863,13 @@ export const agentWorkData = defineStore('agentWork', {
       this.recentConversations = this.recentConversations.map((conversation) =>
         conversation.id === conversationId ? { ...conversation, title: normalizedTitle } : conversation,
       );
+    },
+    deleteConversation(conversationId: string) {
+      if (!this.recentConversations.some((conversation) => conversation.id === conversationId)) return false;
+      const isCurrentConversation = this.workspaceMode === 'conversation' && this.currentConversationId === conversationId;
+      this.recentConversations = this.recentConversations.filter((conversation) => conversation.id !== conversationId);
+      if (isCurrentConversation) this.startNewConversation();
+      return true;
     },
     startExampleConversation(title: string, messages: ChatMessage[]) {
       this.startNewConversation();
@@ -1935,6 +1944,7 @@ export const agentWorkData = defineStore('agentWork', {
       }, 1200);
     },
     switchProject(p: Project) {
+      clearAgentProcessTimers();
       this.persistActiveConversationMessages();
       this.workspaceMode = 'project';
       this.currentConversationId = '';
@@ -2453,9 +2463,11 @@ export const agentWorkData = defineStore('agentWork', {
           result: '',
         },
       ];
+      const processMessage = this.agentMessages[messageIndex];
 
       try {
         const result = await runMcpPrompt(prompt);
+        if (this.agentMessages[messageIndex] !== processMessage) return;
         this.agentMessages = this.agentMessages.map((message, index) => {
           if (index !== messageIndex) return message;
           return {
@@ -2466,6 +2478,7 @@ export const agentWorkData = defineStore('agentWork', {
           };
         });
       } catch (error) {
+        if (this.agentMessages[messageIndex] !== processMessage) return;
         this.agentMessages = this.agentMessages.map((message, index) => {
           if (index !== messageIndex) return message;
           return {
