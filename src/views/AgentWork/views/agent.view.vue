@@ -954,20 +954,20 @@ onBeforeUnmount(() => {
                 </section>
               </div>
               <div v-if="m.predictionRows?.length" class="mt-4 overflow-x-auto px-3">
-                <table class="w-full min-w-[1640px] table-fixed border-collapse whitespace-nowrap text-left text-xs leading-4">
+                <table class="w-full min-w-[1100px] table-fixed border-collapse whitespace-nowrap text-left text-xs leading-4">
                   <caption class="pb-2 text-left font-semibold text-slate-900">预测结果明细</caption>
-                  <colgroup><col class="w-[100px]"><col class="w-[180px]"><col class="w-[100px]"><col class="w-[80px]"><col class="w-[80px]"><col class="w-[80px]"><col class="w-[220px]"><col class="w-[220px]"><col class="w-[190px]"><col class="w-[190px]"><col class="w-[200px]"></colgroup>
-                  <thead class="bg-slate-100"><tr><th class="p-2">源行</th><th class="p-2">运单编号</th><th class="p-2">车牌 / vid</th><th class="p-2">处理状态</th><th class="p-2">装货侧</th><th class="p-2">卸货侧</th><th class="p-2">装货地点</th><th class="p-2">卸货地点</th><th class="p-2">装货停车坐标 / 时间</th><th class="p-2">卸货停车坐标 / 时间</th><th class="p-2">地点文本</th></tr></thead>
-                  <tbody><tr v-for="row in m.predictionRows" :key="row.row" class="h-10 border-b border-slate-200">
-                    <td class="truncate px-2 py-1" :title="row.row">{{ row.row }}</td>
+                  <colgroup><col class="w-[44px]"><col class="w-[160px]"><col class="w-[88px]"><col class="w-[110px]"><col class="w-[200px]"><col class="w-[150px]"><col class="w-[170px]"><col class="w-[64px]"><col class="w-[114px]"></colgroup>
+                  <thead class="bg-slate-100"><tr><th class="p-2">行号</th><th class="p-2">运单编号</th><th class="p-2">车牌号</th><th class="p-2">装货地状态</th><th class="p-2">预测装货地 POI</th><th class="p-2">停车坐标</th><th class="p-2">停车时间</th><th class="p-2">距离</th><th class="p-2">卸货地状态</th></tr></thead>
+                  <tbody><tr v-for="(row, index) in m.predictionRows" :key="row.row" class="h-10 border-b border-slate-200">
+                    <td class="truncate px-2 py-1" :title="row.row">{{ index + 1 }}</td>
                     <td class="truncate px-2 py-1" :title="row.order">{{ row.order || '—' }}</td>
                     <td class="truncate px-2 py-1" :title="row.plate">{{ row.plate }}</td>
-                    <td class="px-2 py-1" :title="row.hint">已预测</td><td class="px-2 py-1">已预测</td><td class="px-2 py-1">已预测</td>
+                    <td class="truncate px-2 py-1" :title="row.start">{{ row.start }}</td>
                     <td class="truncate px-2 py-1" :title="row.startLocation">{{ row.startLocation || '—' }}</td>
-                    <td class="truncate px-2 py-1" :title="row.endLocation">{{ row.endLocation || '—' }}</td>
-                    <td class="px-2 py-1"><div class="truncate" :title="row.coordinate">{{ row.coordinate || '待核验' }}</div><div class="truncate text-slate-500" :title="row.stopTime">{{ row.stopTime || '待核验' }}</div></td>
-                    <td class="px-2 py-1"><div class="truncate" :title="row.endCoordinate">{{ row.endCoordinate || '待核验' }}</div><div class="truncate text-slate-500" :title="row.endStopTime">{{ row.endStopTime || '待核验' }}</div></td>
-                    <td class="truncate px-2 py-1" :title="`${row.startText || '—'} → ${row.endText || '—'}`">{{ row.startText || '—' }} → {{ row.endText || '—' }}</td>
+                    <td class="truncate px-2 py-1" :title="row.coordinate">{{ row.coordinate || '待核验' }}</td>
+                    <td class="px-2 py-1"><div class="truncate" :title="row.stopTime">{{ row.stopTime || '待核验' }}</div><div v-if="row.stopEndTime" class="truncate text-slate-500" :title="row.stopEndTime">~ {{ row.stopEndTime }}</div></td>
+                    <td class="px-2 py-1">{{ row.parkingDistance ? `${row.parkingDistance}m` : '—' }}</td>
+                    <td class="truncate px-2 py-1" :title="row.end">{{ row.end }}</td>
                   </tr></tbody>
                 </table>
               </div>

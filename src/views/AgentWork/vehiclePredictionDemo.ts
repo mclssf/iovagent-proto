@@ -509,7 +509,15 @@ export async function runPredictionDemo(text: string, files: File[]): Promise<Ch
     text: '',
     steps: [{ title: '解析输入', text: `${sources[0]!.file}，读取 ${sources.length} 行。\n${maps.join('\n')}` }, { title: '校验条件', text: '按行校验车牌/vid、北京时间、阈值和地点来源。' }, { title: '模拟预测', text: `模拟执行 ${simulated} 行，模拟接口调用 ${simulated} 次，完成 ${simulated} 行装卸货地点结果生成。` }, { title: '生成结果', text: '保留原始工作表，新增模拟预测结果表；重新读取核对行数。' }],
     predictionReport: report,
-    predictionRows: results.map((r) => ({ row: `${r.source.sheet}:${r.source.row}`, plate: r.source.input.plateNo || r.source.input.vid || '', order: r.source.input.orderNo, coordinate: r.startCoord, stopTime: r.startStop, endCoordinate: r.endCoord, endStopTime: r.endStop, status: '已预测', start: '已预测', end: '已预测', startText: r.startText, endText: r.endText, startLocation: r.startDisplay, endLocation: r.endDisplay, hint: r.hint })),
+    predictionRows: results.map((r, index) => {
+      const outputRow = output.getRow(index + 2);
+      const resultText = (header: string) => outputRow.getCell(columns.indexOf(header) + 1).text;
+      return { row: `${r.source.sheet}:${r.source.row}`, plate: r.source.input.plateNo || r.source.input.vid || '', order: r.source.input.orderNo,
+        coordinate: [resultText('预测装货地停车经度'), resultText('预测装货地停车纬度')].filter(Boolean).join(', '),
+        stopTime: r.startStop, stopEndTime: resultText('预测装货地停车结束时间'), parkingDistance: resultText('停车点与POI距离(米)'),
+        endCoordinate: r.endCoord, endStopTime: r.endStop, status: '已预测', start: resultText('预测装货地状态'), end: resultText('预测卸货地状态'),
+        startText: r.startText, endText: r.endText, startLocation: r.startDisplay, endLocation: r.endDisplay, hint: r.hint };
+    }),
     result: `总行数 ${results.length}：${counts}。\n预测结果仅供参考，实际装卸货地点请结合车辆轨迹和业务记录核验。终点停车时间为空是允许的。\n每行地点来源、客户标签、停车信息与处理提示均记录在下载文件中。`,
     file: { name: '装卸货地点预测_模拟结果.xlsx', url: downloadUrl(data), description: '演示模拟数据 · 原表保留 · 已复检行数' },
   };

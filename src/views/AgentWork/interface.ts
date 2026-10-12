@@ -217,7 +217,7 @@ export interface ChatMessage {
     analyses: { title: string; points: string[] }[];
   };
   streaming?: boolean;
-  predictionRows?: { row: string; plate: string; status: string; start: string; end: string; startText: string; endText: string; startLocation: string; endLocation: string; hint: string; order?: string; coordinate?: string; stopTime?: string; endCoordinate?: string; endStopTime?: string }[];
+  predictionRows?: { row: string; plate: string; status: string; start: string; end: string; startText: string; endText: string; startLocation: string; endLocation: string; hint: string; order?: string; coordinate?: string; stopTime?: string; stopEndTime?: string; parkingDistance?: string; endCoordinate?: string; endStopTime?: string }[];
   role: 'agent' | 'user';
   text: string;
   title?: string;
