@@ -1,9 +1,8 @@
 <script lang="ts" setup>
 import type { AgentResultLink, ChatMessage, TimelineEvent } from '../interface';
-import type { LatLngExpression, LatLngTuple } from 'leaflet';
+import { hasVehiclePredictionIntent } from '../vehiclePredictionSkill';
+import { ElMessage } from 'element-plus';
 
-import L from 'leaflet';
-import 'leaflet/dist/leaflet.css';
 import { storeToRefs } from 'pinia';
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 
@@ -11,6 +10,7 @@ import { Icon } from '@packages/icon';
 
 import { agentWorkData, quickPrompts, rightPanelTabs } from '@/pinia/agentWork';
 import { useAgentDailyTasks } from '@/pinia/agentDailyTasks';
+import { convertGpsCoordinates, loadAMap, searchDrivingRoute, type AMapCoordinate } from '@/utils/amap';
 import { taskRunLabels } from '../dailyTasks';
 
 import { getRiskOrders, badgeToneClass } from '../utils';
@@ -22,6 +22,21 @@ import ProjectMonitors from '../component/projectMonitors.comp.vue';
 import '../agentWorkspace.css';
 
 const store = agentWorkData();
+const predictionUploadBusy = ref(false);
+async function uploadPredictionFile(prompt = '真实装货地/卸货地预测', kind: 'prediction' | 'waybill' = 'prediction') {
+  if (predictionUploadBusy.value) return;
+  agentInput.value = prompt;
+  predictionUploadBusy.value = true;
+  try {
+    const response = await fetch(kind === 'prediction' ? '/demo/loading-unloading-prediction-input.xlsx' : '/demo/vehicle-authenticity-input.xlsx');
+    if (!response.ok) throw new Error('演示文件加载失败，请重试');
+    const file = new File([await response.blob()], kind === 'prediction' ? '装卸货地预测（上传）-测试1012.xlsx' : '运单真实性校验数据.xlsx', { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', lastModified: 0 });
+    uploadedFiles.value = [file];
+    await nextTick();
+    composerTextareaRef.value?.focus();
+  } catch (error) { ElMessage.error((error as Error).message); }
+  finally { predictionUploadBusy.value = false; }
+}
 const dailyTasks = useAgentDailyTasks();
 const ordinaryTask = (id: string) => dailyTasks.tasks.find((task) => task.id === id);
 function openOrdinaryTask(id: string) {
@@ -49,12 +64,14 @@ const panelMapRef = ref<HTMLDivElement | null>(null);
 const panelRouteDistance = ref('约 175 km');
 const panelRouteDuration = ref('约 2h 40m');
 
-let panelMapInstance: L.Map | null = null;
+let panelMapInstance: AMap.Map | null = null;
+
+type GpsCoordinate = [number, number];
 
 type MapTone = 'current' | 'end' | 'risk' | 'start' | 'stop' | 'warn';
 
 interface MapPoint {
-  coord: LatLngTuple;
+  coord: GpsCoordinate;
   desc: string;
   name: string;
   tone: MapTone;
@@ -361,7 +378,7 @@ function sendComposerMessage() {
   isFollowingLatest.value = true;
 
   if (uploadedFiles.value.length > 0) {
-    if (text && isDeferredWaybillImportRequest(text, uploadedFiles.value)) {
+    if (text && !hasVehiclePredictionIntent(text) && isDeferredWaybillImportRequest(text, uploadedFiles.value)) {
       startDeferredWaybillImport(text, uploadedFiles.value);
       uploadedFiles.value = [];
       agentInput.value = '';
@@ -377,8 +394,16 @@ function sendComposerMessage() {
   sendAgent();
 }
 
-function sendQuickPrompt(text: string) {
+async function sendQuickPrompt(text: string) {
   isFollowingLatest.value = true;
+  if (quickPrompts.slice(0, 3).includes(text)) {
+    if (predictionUploadBusy.value) return;
+    if (!uploadedFiles.value.length) await uploadPredictionFile();
+    if (!uploadedFiles.value.length) return;
+    agentInput.value = text;
+    sendComposerMessage();
+    return;
+  }
   sendAgent(text);
 }
 
@@ -435,10 +460,7 @@ const rightPanelTitle = computed(() => {
   if (isDefaultOverview.value) return '今日在途情况';
   return '今日在途预警处理结果';
 });
-const workspaceTitle = computed(() => {
-  if (store.workspaceMode === 'conversation') return store.currentConversation?.title || '新对话';
-  return '智能体工作台';
-});
+const workspaceTitle = computed(() => '货主场景演示');
 const isDynamicRightPanel = computed(() => isExternalH5Panel.value || isAnalysisReportPanel.value);
 const isRightPanelRendered = computed(
   () => isRightPanelVisible.value && isDynamicRightPanel.value,
@@ -506,7 +528,7 @@ const clearedLowRiskWarnings = [
   { id: 'WB20260509020', plate: '粤B90877', reason: '收费站拥堵导致低速滞留，轨迹连续且未偏离主线路。' },
 ];
 
-const eventPanelRoute: LatLngTuple[] = [
+const eventPanelRoute: GpsCoordinate[] = [
   [31.8206, 117.2272],
   [31.92, 117.72],
   [32.02, 118.12],
@@ -586,6 +608,12 @@ const eventPanelVisibleTimeline = computed(() => {
   return eventPanelTimeline;
 });
 
+function formatMapDuration(seconds: number) {
+  const hours = Math.floor(seconds / 3600);
+  const minutes = Math.round((seconds % 3600) / 60);
+  return `${hours}h ${minutes}m`;
+}
+
 function eventCardClass(event: TimelineEvent) {
   if (event.type === 'risk') return 'border-purple-200 bg-purple-50';
   if (event.type === 'stop' && store.detailView === 'agent' && event.agentTone === 'green') return 'border-emerald-200 bg-emerald-50';
@@ -593,58 +621,84 @@ function eventCardClass(event: TimelineEvent) {
   return 'border-[#deded9] bg-white';
 }
 
-function markerIcon(tone: MapTone) {
-  return L.divIcon({
-    className: 'agent-map-marker',
-    html: `<div class="agent-map-pin agent-map-pin--${tone}"></div>`,
-    iconAnchor: [11, 11],
-    iconSize: [22, 22],
-  });
+function markerContent(tone: MapTone) {
+  const root = document.createElement('div');
+  root.className = 'agent-map-marker';
+  const pin = document.createElement('div');
+  pin.className = `agent-map-pin agent-map-pin--${tone}`;
+  root.append(pin);
+  return root;
 }
 
-function popupHtml(point: MapPoint) {
+function popupContent(point: MapPoint) {
   const [lat, lng] = point.coord;
-  return `<div class="agent-map-popup"><b>${point.name}</b><p>${point.desc}</p><span>${lat.toFixed(4)}, ${lng.toFixed(4)}</span></div>`;
+  const root = document.createElement('div');
+  root.className = 'agent-map-popup';
+  const title = document.createElement('b');
+  const desc = document.createElement('p');
+  const coordinate = document.createElement('span');
+  title.textContent = point.name;
+  desc.textContent = point.desc;
+  coordinate.textContent = `${lat.toFixed(4)}, ${lng.toFixed(4)}`;
+  root.append(title, desc, coordinate);
+  return root;
 }
 
-function drawEventPanelRoute() {
-  if (!panelMapInstance) return;
-
-  const routeShadow = L.polyline(eventPanelRoute as LatLngExpression[], {
-    color: '#ffffff',
-    opacity: 0.9,
-    weight: 8,
-  }).addTo(panelMapInstance);
-
-  const routeLine = L.polyline(eventPanelRoute as LatLngExpression[], {
-    color: '#0f172a',
-    opacity: 0.9,
-    weight: 4,
-  }).addTo(panelMapInstance);
-
-  L.polyline(eventPanelRoute.slice(4, 6) as LatLngExpression[], {
-    color: '#dc2626',
-    dashArray: '8 7',
-    opacity: 0.95,
-    weight: 6,
-  }).addTo(panelMapInstance);
-
-  routeLine.bringToFront();
-  panelMapInstance.fitBounds(routeShadow.getBounds(), { padding: [28, 28] });
+function nearestRouteIndex(route: AMapCoordinate[], target: AMapCoordinate) {
+  let nearest = 0;
+  let minDistance = Number.POSITIVE_INFINITY;
+  route.forEach((coord, index) => {
+    const distance = (coord[0] - target[0]) ** 2 + (coord[1] - target[1]) ** 2;
+    if (distance < minDistance) {
+      nearest = index;
+      minDistance = distance;
+    }
+  });
+  return nearest;
 }
 
-function drawEventPanelMarkers() {
+function drawEventPanelRoute(amap: typeof AMap, route: AMapCoordinate[], riskPoints: AMapCoordinate[]) {
   if (!panelMapInstance) return;
 
-  eventPanelMapPoints.forEach((point) => {
-    const marker = L.marker(point.coord, { icon: markerIcon(point.tone) }).addTo(panelMapInstance!);
-    marker.bindPopup(popupHtml(point), { closeButton: false, offset: [0, -6] });
-    marker.bindTooltip(point.name, {
-      className: 'agent-map-tooltip',
-      direction: 'top',
-      offset: [0, -10],
-      permanent: ['start', 'end', 'warn', 'stop'].includes(point.tone),
+  const routeShadow = new amap.Polyline({ path: route, strokeColor: '#ffffff', strokeOpacity: 0.9, strokeWeight: 8 });
+  const routeLine = new amap.Polyline({ path: route, strokeColor: '#0f172a', strokeOpacity: 0.9, strokeWeight: 4 });
+  const riskStart = nearestRouteIndex(route, riskPoints[0]!);
+  const riskEnd = nearestRouteIndex(route, riskPoints[1]!);
+  const [from, to] = riskStart < riskEnd ? [riskStart, riskEnd] : [riskEnd, riskStart];
+  const riskLine = new amap.Polyline({
+    path: route.slice(from, to + 1),
+    strokeColor: '#dc2626',
+    strokeDasharray: [8, 7],
+    strokeOpacity: 0.95,
+    strokeStyle: 'dashed',
+    strokeWeight: 6,
+  });
+  panelMapInstance.add([routeShadow, routeLine, riskLine]);
+  panelMapInstance.setFitView([routeShadow], false, [28, 28, 28, 28]);
+}
+
+function drawEventPanelMarkers(amap: typeof AMap, coordinates: AMapCoordinate[]) {
+  if (!panelMapInstance) return;
+
+  eventPanelMapPoints.forEach((point, index) => {
+    const marker = new amap.Marker({
+      anchor: 'center',
+      content: markerContent(point.tone),
+      position: coordinates[index],
+      title: point.name,
+      zIndex: point.tone === 'current' ? 120 : 100,
     });
+    if (['start', 'end', 'warn', 'stop'].includes(point.tone)) {
+      marker.setLabel({ content: point.name, direction: 'top', offset: new amap.Pixel(0, -8) });
+    }
+    marker.on('click', () => {
+      new amap.InfoWindow({
+        anchor: 'bottom-center',
+        content: popupContent(point),
+        offset: new amap.Pixel(0, -14),
+      }).open(panelMapInstance!, coordinates[index]!);
+    });
+    panelMapInstance!.add(marker);
   });
 }
 
@@ -652,29 +706,35 @@ async function initEventPanelMap() {
   await nextTick();
   if (!panelMapRef.value || panelMapInstance) return;
 
-  panelMapInstance = L.map(panelMapRef.value, {
-    attributionControl: false,
-    center: [32.02, 118.2],
-    zoom: 9,
-    zoomControl: false,
-  });
-
-  L.control.zoom({ position: 'bottomright' }).addTo(panelMapInstance);
-  L.control
-    .attribution({ position: 'bottomleft', prefix: false })
-    .addAttribution('&copy; OpenStreetMap contributors')
-    .addTo(panelMapInstance);
-  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-    maxZoom: 19,
-  }).addTo(panelMapInstance);
-
-  drawEventPanelRoute();
-  drawEventPanelMarkers();
-  setTimeout(() => panelMapInstance?.invalidateSize(), 80);
+  try {
+    const amap = await loadAMap(['AMap.Driving', 'AMap.ToolBar']);
+    const routePoints = await convertGpsCoordinates(amap, eventPanelRoute.map(([lat, lng]) => [lng, lat]));
+    const markerPoints = await convertGpsCoordinates(amap, eventPanelMapPoints.map(({ coord: [lat, lng] }) => [lng, lat]));
+    const riskPoints = await convertGpsCoordinates(amap, [[118.52, 32.103], [118.68, 32.071]]);
+    panelMapInstance = new amap.Map(panelMapRef.value, {
+      center: [118.2, 32.02],
+      mapStyle: 'amap://styles/whitesmoke',
+      viewMode: '2D',
+      zoom: 9,
+    });
+    panelMapInstance.addControl(new amap.ToolBar({ position: 'RB' }));
+    try {
+      const route = await searchDrivingRoute(amap, routePoints);
+      panelRouteDistance.value = `约 ${Math.round(route.distance / 1000)} km`;
+      panelRouteDuration.value = formatMapDuration(route.duration);
+      drawEventPanelRoute(amap, route.path, riskPoints);
+    } catch {
+      drawEventPanelRoute(amap, routePoints, riskPoints);
+    }
+    drawEventPanelMarkers(amap, markerPoints);
+  } catch {
+    panelRouteDistance.value = '地图加载失败';
+    panelRouteDuration.value = '请稍后重试';
+  }
 }
 
 function clearEventPanelMap() {
-  panelMapInstance?.remove();
+  panelMapInstance?.destroy();
   panelMapInstance = null;
 }
 
@@ -783,6 +843,11 @@ onBeforeUnmount(() => {
       </div>
       <div class="agent-workspace-body">
       <div ref="chatColumnRef" class="agent-chat-column">
+      <div class="flex flex-wrap items-center gap-2 border-b border-[#eeeeec] px-4 py-2 text-xs">
+        <span class="font-medium text-amber-700">装卸货预测 · 模拟演示</span>
+        <button type="button" class="rounded border px-2 py-1 hover:bg-slate-100" :disabled="predictionUploadBusy" @click="uploadPredictionFile()">真实性装卸货地预测</button>
+        <button type="button" class="rounded border px-2 py-1 hover:bg-slate-100" :disabled="predictionUploadBusy" @click="uploadPredictionFile('核验出厂和完成时车辆是否在对应地点', 'waybill')">运单真实性校验</button>
+      </div>
       <div ref="agentMessageListRef" class="agent-message-scroll" @scroll.passive="handleMessageScroll">
         <div ref="agentMessageContentRef" class="agent-conversation-rail agent-message-content" :class="{ 'is-empty': agentMessages.length === 0 }">
           <div v-if="agentMessages.length === 0" class="agent-empty-conversation flex flex-col items-center justify-center text-center">
@@ -819,7 +884,7 @@ onBeforeUnmount(() => {
               ]"
             >
             <template v-if="m.role === 'agent' && m.title">
-              <div class="mb-3 flex items-center justify-between gap-3 border-b border-[#ededea] pb-2">
+              <div v-if="!m.predictionReport" class="mb-3 flex items-center justify-between gap-3 border-b border-[#ededea] pb-2">
                 <div>
                   <div class="text-sm font-semibold text-slate-900">{{ m.title }}</div>
                 </div>
@@ -834,10 +899,10 @@ onBeforeUnmount(() => {
                   {{ m.status }}
                 </span>
               </div>
-              <div v-if="m.text" class="mb-3 rounded-md bg-[#f7f7f5] px-3 py-2 text-xs leading-5 text-slate-500">
+              <div v-if="m.text && !m.predictionReport" class="mb-3 rounded-md bg-[#f7f7f5] px-3 py-2 text-xs leading-5 text-slate-500">
                 {{ m.text }}
               </div>
-              <div v-if="m.steps?.length" class="divide-y divide-[#ededea] rounded-md border border-[#deded9] bg-white">
+              <div v-if="m.steps?.length && !m.predictionReport" class="divide-y divide-[#ededea] rounded-md border border-[#deded9] bg-white">
                 <template v-for="(step, stepIndex) in m.steps" :key="step.title">
                   <div
                     v-if="!m.progressMode || progressStepState(m, stepIndex) !== 'pending'"
@@ -870,7 +935,62 @@ onBeforeUnmount(() => {
                   </div>
                 </template>
               </div>
-              <div v-if="m.result" class="mt-3 whitespace-pre-line rounded-md bg-blue-50 px-3 py-2 text-xs font-medium leading-5 text-blue-700">
+              <div v-if="m.predictionReport" class="space-y-4 px-3 text-xs leading-5 text-slate-600">
+                <section v-if="m.predictionReport.summary.length">
+                  <h3 class="mb-2 font-semibold text-slate-900">解析摘要</h3>
+                  <table class="w-full border-collapse text-left"><thead class="bg-slate-100"><tr><th class="border border-slate-200 p-2">项目</th><th class="border border-slate-200 p-2">内容</th></tr></thead><tbody><tr v-for="item in m.predictionReport.summary" :key="item.label"><td class="border border-slate-200 p-2">{{ item.label }}</td><td class="break-all border border-slate-200 p-2">{{ item.value }}</td></tr></tbody></table>
+                </section>
+                <section v-if="m.predictionReport.fields.length" class="overflow-x-auto">
+                  <h3 class="mb-2 font-semibold text-slate-900">字段映射</h3>
+                  <table class="w-full min-w-[420px] border-collapse text-left"><thead class="bg-slate-100"><tr><th class="border border-slate-200 p-2">预测所需字段</th><th class="border border-slate-200 p-2">对应表头</th><th class="border border-slate-200 p-2">识别结果</th></tr></thead><tbody><tr v-for="item in m.predictionReport.fields" :key="item.label"><td class="border border-slate-200 p-2">{{ item.label }}</td><td class="border border-slate-200 p-2">{{ item.header }}</td><td class="border border-slate-200 p-2">{{ item.note }}</td></tr></tbody></table>
+                </section>
+                <section v-if="m.predictionReport.judgments.length">
+                  <h3 class="mb-2 font-semibold text-slate-900">关键判断</h3>
+                  <ul class="list-disc space-y-1 pl-4"><li v-for="item in m.predictionReport.judgments" :key="item">{{ item }}</li></ul>
+                </section>
+                <section v-if="m.predictionReport.statistics.length">
+                  <h3 class="mb-2 font-semibold text-slate-900">处理统计</h3>
+                  <table class="w-full border-collapse text-left"><thead class="bg-slate-100"><tr><th class="border border-slate-200 p-2">指标</th><th class="border border-slate-200 p-2">数值</th></tr></thead><tbody><tr v-for="item in m.predictionReport.statistics" :key="item.label"><td class="border border-slate-200 p-2">{{ item.label }}</td><td class="border border-slate-200 p-2">{{ item.value }}</td></tr></tbody></table>
+                </section>
+              </div>
+              <div v-if="m.predictionRows?.length" class="mt-4 overflow-x-auto px-3">
+                <table class="w-full min-w-[1640px] table-fixed border-collapse whitespace-nowrap text-left text-xs leading-4">
+                  <caption class="pb-2 text-left font-semibold text-slate-900">预测结果明细</caption>
+                  <colgroup><col class="w-[100px]"><col class="w-[180px]"><col class="w-[100px]"><col class="w-[80px]"><col class="w-[80px]"><col class="w-[80px]"><col class="w-[220px]"><col class="w-[220px]"><col class="w-[190px]"><col class="w-[190px]"><col class="w-[200px]"></colgroup>
+                  <thead class="bg-slate-100"><tr><th class="p-2">源行</th><th class="p-2">运单编号</th><th class="p-2">车牌 / vid</th><th class="p-2">处理状态</th><th class="p-2">装货侧</th><th class="p-2">卸货侧</th><th class="p-2">装货地点</th><th class="p-2">卸货地点</th><th class="p-2">装货停车坐标 / 时间</th><th class="p-2">卸货停车坐标 / 时间</th><th class="p-2">地点文本</th></tr></thead>
+                  <tbody><tr v-for="row in m.predictionRows" :key="row.row" class="h-10 border-b border-slate-200">
+                    <td class="truncate px-2 py-1" :title="row.row">{{ row.row }}</td>
+                    <td class="truncate px-2 py-1" :title="row.order">{{ row.order || '—' }}</td>
+                    <td class="truncate px-2 py-1" :title="row.plate">{{ row.plate }}</td>
+                    <td class="px-2 py-1" :title="row.hint">已预测</td><td class="px-2 py-1">已预测</td><td class="px-2 py-1">已预测</td>
+                    <td class="truncate px-2 py-1" :title="row.startLocation">{{ row.startLocation || '—' }}</td>
+                    <td class="truncate px-2 py-1" :title="row.endLocation">{{ row.endLocation || '—' }}</td>
+                    <td class="px-2 py-1"><div class="truncate" :title="row.coordinate">{{ row.coordinate || '待核验' }}</div><div class="truncate text-slate-500" :title="row.stopTime">{{ row.stopTime || '待核验' }}</div></td>
+                    <td class="px-2 py-1"><div class="truncate" :title="row.endCoordinate">{{ row.endCoordinate || '待核验' }}</div><div class="truncate text-slate-500" :title="row.endStopTime">{{ row.endStopTime || '待核验' }}</div></td>
+                    <td class="truncate px-2 py-1" :title="`${row.startText || '—'} → ${row.endText || '—'}`">{{ row.startText || '—' }} → {{ row.endText || '—' }}</td>
+                  </tr></tbody>
+                </table>
+              </div>
+              <section v-if="m.predictionReport?.analyses.length" class="mt-4 px-3 text-xs leading-5 text-slate-600">
+                <h3 class="mb-2 font-semibold text-slate-900">逐行分析</h3>
+                <div v-for="item in m.predictionReport.analyses" :key="item.title" class="border-b border-slate-200 py-3 last:border-0">
+                  <h4 class="mb-1 font-medium text-slate-900">{{ item.title }}</h4>
+                  <ul class="list-disc space-y-1 pl-4"><li v-for="point in item.points" :key="point">{{ point }}</li></ul>
+                </div>
+              </section>
+              <section v-if="m.predictionReport?.exportSummary || m.predictionReport?.boundaries.length" class="mt-4 px-3 text-xs leading-5 text-slate-600">
+                <div v-if="m.predictionReport.exportSummary" class="border-t border-slate-200 pt-3">
+                  <h3 class="mb-1 flex items-center gap-1.5 font-semibold text-slate-900"><Icon :svg="strokeIconPaths.fileSpreadsheet" :size="14" />结果文件</h3>
+                  <p>{{ m.predictionReport.exportSummary }}</p>
+                  <a v-if="m.file" :href="m.file.url" :download="m.file.name" :aria-label="`下载 ${m.file.name}`" class="mt-2 inline-flex items-center gap-1.5 rounded-md border border-emerald-300 bg-emerald-50 px-3 py-2 font-medium text-emerald-700 hover:bg-emerald-100"><Icon :svg="strokeIconPaths.download" :size="14" />下载预测结果文件</a>
+                </div>
+                <div v-if="m.predictionReport.boundaries.length" class="mt-4 border-t border-slate-200 pt-3">
+                  <h3 class="mb-2 font-semibold text-slate-900">数据边界与核验建议</h3>
+                  <p v-for="item in m.predictionReport.boundaries" :key="item.label" class="mb-2"><strong class="font-medium text-slate-900">{{ item.label }}：</strong>{{ item.text }}</p>
+                </div>
+              </section>
+              <div v-if="m.streaming && i === agentMessages.length - 1" class="mt-2 flex items-center gap-2 px-3 text-xs text-slate-400" role="status" aria-label="正在输出结果"><span class="inline-block h-4 w-0.5 animate-pulse bg-slate-500"></span>正在输出…</div>
+              <div v-if="m.result && !m.predictionReport" class="mt-3 whitespace-pre-line rounded-md bg-blue-50 px-3 py-2 text-xs font-medium leading-5 text-blue-700">
                 {{ m.result }}
               </div>
               <a
@@ -889,7 +1009,7 @@ onBeforeUnmount(() => {
                 <Icon :svg="strokeIconPaths.chevron" :size="16" svg-class="shrink-0 text-blue-700" />
               </a>
               <a
-                v-if="m.file"
+                v-if="m.file && !m.predictionReport"
                 class="mt-3 flex w-full items-center gap-3 rounded-md border border-emerald-200 bg-emerald-50 p-3 text-left transition hover:border-emerald-300 hover:bg-emerald-100/70"
                 :download="m.file.name"
                 :href="m.file.url"
@@ -937,6 +1057,7 @@ onBeforeUnmount(() => {
               <button
                 v-for="s in visibleQuickPrompts"
                 :key="s"
+                :title="s"
                 type="button"
                 class="h-6 min-w-0 flex-1 rounded-full border border-[#e6e6e2] bg-[#f7f7f5] px-3 text-xs text-slate-600 transition hover:border-[#d8d8d2] hover:bg-white hover:text-slate-950"
                 @click="sendQuickPrompt(s)"
@@ -1178,7 +1299,7 @@ onBeforeUnmount(() => {
                 <div class="mt-1 flex gap-3 text-slate-500">
                   <span>{{ panelRouteDistance }}</span>
                   <span>{{ panelRouteDuration }}</span>
-                  <span>WGS84</span>
+                  <span>高德坐标</span>
                 </div>
               </div>
               <div class="pointer-events-none absolute top-3 right-3 z-[1000] flex gap-2">
@@ -1374,16 +1495,10 @@ onBeforeUnmount(() => {
 </template>
 
 <style lang="scss" scoped>
-:deep(.leaflet-container) {
+:deep(.amap-container) {
   background: #e2e8f0;
   color: #0f172a;
   font-family: inherit;
-}
-
-:deep(.leaflet-control-attribution) {
-  border-radius: 4px;
-  color: #64748b;
-  font-size: 10px;
 }
 
 :deep(.agent-map-marker) {
@@ -1426,7 +1541,7 @@ onBeforeUnmount(() => {
   animation: mapPulse 1.8s ease-out infinite;
 }
 
-:deep(.agent-map-tooltip) {
+:deep(.amap-marker-label) {
   border: 1px solid #e2e8f0;
   border-radius: 4px;
   box-shadow: 0 10px 24px rgb(15 23 42 / 12%);

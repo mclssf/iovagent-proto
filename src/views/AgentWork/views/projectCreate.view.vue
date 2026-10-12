@@ -8,11 +8,14 @@ import { ElMessage } from 'element-plus';
 import AppDialog from '@/components/AppDialog.vue';
 
 import { agentWorkData } from '@/pinia/agentWork';
+import { createProjectMailbox, emailDemoMailbox, mailboxSkill } from '@/pinia/projectMailboxes';
+import type { ProjectMailbox } from '../interface';
 
 import { strokeIconPaths } from '../strokeIconPaths';
 import { useAgentWorkNav } from '../useAgentWorkNav';
 import { badgeToneClass, projectStatusTone } from '../utils';
-import { ensureRequiredMonitorSkills, monitorDefinitions, requiredMonitorSkillIds } from '../dailyTasks';
+import { vehiclePredictionSkill } from '../vehiclePredictionSkill';
+const requiredMonitorSkillIds: string[] = [];
 
 type SkillType = 'analysis' | 'capacity' | 'data' | 'logistics' | 'operations';
 type SkillTab = 'all' | SkillType;
@@ -40,12 +43,14 @@ const { goPage } = useAgentWorkNav();
 const route = useRoute();
 const router = useRouter();
 const maxProjectNameLength = 20;
-const defaultLogisticsSkillIds = ensureRequiredMonitorSkills(['route-risk-expert', 'gps-trace-expert', 'parking-event-expert']);
+const defaultLogisticsSkillIds = [vehiclePredictionSkill.id];
 const projectName = ref('');
+const showSkillInstructions = ref(false);
 const activeTab = ref<SkillTab>('all');
 const selectedDataSkillIds = ref<string[]>([]);
 const selectedLogisticsSkillIds = ref<string[]>([...defaultLogisticsSkillIds]);
 const selectedOperationsSkillIds = ref<string[]>([]);
+const mailboxDraft = ref<ProjectMailbox | null>(null);
 const selectedCapacitySkillIds = ref<string[]>([]);
 const selectedAnalysisSkillIds = ref<string[]>([]);
 const authorizedSkillIds = ref<string[]>([]);
@@ -64,14 +69,7 @@ const loginForm = reactive({
 let loginAgentMessageId = 0;
 let loginAgentTimers: number[] = [];
 
-const tabs: { id: SkillTab; label: string }[] = [
-  { id: 'all', label: '全部' },
-  { id: 'data', label: '数据员工' },
-  { id: 'logistics', label: '在途专家' },
-  { id: 'analysis', label: '经营分析参谋' },
-  { id: 'operations', label: '运营助手' },
-  { id: 'capacity', label: '运力与货源' },
-];
+const tabs: { id: SkillTab; label: string }[] = [{ id: 'all', label: '全部' }, { id: 'logistics', label: '在途专家' }];
 
 const skillTypeLabels: Record<SkillType, string> = {
   analysis: '经营分析参谋',
@@ -81,232 +79,7 @@ const skillTypeLabels: Record<SkillType, string> = {
   operations: '运营助手',
 };
 
-const skills: ProjectSkill[] = [
-  ...monitorDefinitions.filter((monitor) => monitor.id !== 'parking').map((monitor): ProjectSkill => ({
-    id: monitor.skillId,
-    name: monitor.name,
-    type: 'logistics',
-    description: monitor.description,
-    usage: monitor.required ? '免费' : '付费',
-    icon: strokeIconPaths[monitor.icon],
-  })),
-  {
-    id: 'jinyu-cement-tms',
-    name: '金隅水泥TMS',
-    type: 'data',
-    description: '连接金隅水泥TMS，读取发运、车辆、承运商与在途状态数据。',
-    usage: '需登录',
-    icon: strokeIconPaths.zap,
-  },
-  {
-    id: 'zhilian-shunda-tms',
-    name: '智链顺达TMS',
-    type: 'data',
-    description: '连接智链顺达TMS，自动同步运输任务、轨迹状态和异常事件。',
-    usage: '需登录',
-    icon: strokeIconPaths.zap,
-  },
-  {
-    id: 'jinmailang-logistics',
-    name: '今麦郎物流管理',
-    type: 'data',
-    description: '接入今麦郎物流管理系统，汇总运单、线路和履约过程数据。',
-    usage: '需登录',
-    icon: strokeIconPaths.file,
-  },
-  {
-    id: 'spreadsheet-waybill',
-    name: '表格运单',
-    type: 'data',
-    description: '通过表格导入运单数据，适合快速演示、离线对账和批量补录场景。',
-    usage: '免费',
-    icon: strokeIconPaths.list,
-  },
-  {
-    id: 'tms-sync-employee',
-    name: 'TMS同步员工',
-    type: 'data',
-    description: '连接业务系统，自动同步运单、车辆、司机与在途状态。',
-    usage: '需登录',
-    icon: strokeIconPaths.zap,
-  },
-  {
-    id: 'huadong-cargo-connector',
-    name: '华东货源对接员工',
-    type: 'data',
-    description: '抓取客户系统待外调货源并映射标准字段，持续监听修改、取消和派车状态。',
-    usage: '需登录',
-    icon: strokeIconPaths.packageSearch,
-  },
-  {
-    id: 'huadong-dispatch-writeback',
-    name: '华东派车回写员工',
-    type: 'data',
-    description: '将确认合作的司机、车辆和成交信息回写客户系统，完成指派并触发平台下架。',
-    usage: '需登录',
-    icon: strokeIconPaths.truck,
-  },
-  {
-    id: 'route-risk-expert',
-    name: '在途风险专家',
-    type: 'logistics',
-    description: '结合线路、时效和历史履约表现，识别高优先级在途风险。',
-    usage: '付费',
-    icon: strokeIconPaths.shield,
-  },
-  {
-    id: 'gps-trace-expert',
-    name: '轨迹真实性专家',
-    type: 'logistics',
-    description: '分析轨迹断点、速度跳变和定位漂移，辅助判断GPS造假风险。',
-    usage: '付费',
-    icon: strokeIconPaths.map,
-  },
-  {
-    id: 'parking-event-expert',
-    name: '异常停车专家',
-    type: 'logistics',
-    description: '识别服务区、物流园、中转仓等停靠点，区分合理休息和高风险长停。',
-    usage: '付费',
-    icon: strokeIconPaths.truck,
-  },
-  {
-    id: 'delivery-sla-expert',
-    name: '到货时效专家',
-    type: 'logistics',
-    description: '评估预计到达时间、晚点风险和卸货超时，输出时效处置建议。',
-    usage: '付费',
-    icon: strokeIconPaths.gauge,
-  },
-  {
-    id: 'logistics-route-planning',
-    name: '物流路线规划',
-    type: 'logistics',
-    description: '结合起讫地、车型、限行和实时路况规划运输路线，输出里程、时效与备选方案。',
-    usage: '付费',
-    icon: strokeIconPaths.route,
-  },
-  {
-    id: 'vehicle-location-query',
-    name: '车辆定位查询',
-    type: 'logistics',
-    description: '查询车辆最新位置、定位时间、速度和方向，为运单补充实时车辆位置信息。',
-    usage: '付费',
-    icon: strokeIconPaths.locate,
-  },
-  {
-    id: 'vehicle-trace-query',
-    name: '轨迹查询',
-    type: 'logistics',
-    description: '查询车辆历史行驶轨迹、停靠点和里程，辅助核验线路、在途状态与异常事件。',
-    usage: '付费',
-    icon: strokeIconPaths.waypoints,
-  },
-  {
-    id: 'waybill-data-completion',
-    name: '运单补充',
-    type: 'logistics',
-    description: '识别运单缺失字段，补充车辆、司机、线路和运输节点等信息，提升运单数据完整性。',
-    usage: '付费',
-    icon: strokeIconPaths.filePlus,
-  },
-  {
-    id: 'waybill-data-correction',
-    name: '运单纠错',
-    type: 'logistics',
-    description: '校验运单字段与业务规则，发现并修正地址、时间、车辆和状态等异常数据。',
-    usage: '付费',
-    icon: strokeIconPaths.filePen,
-  },
-  {
-    id: 'operations-logistics-sheet',
-    name: '物流表格',
-    type: 'operations',
-    description: '自动生成和维护运输台账、异常清单与对账表，支持运营助手处理和结果沉淀。',
-    usage: '免费',
-    icon: strokeIconPaths.fileSpreadsheet,
-  },
-  {
-    id: 'operations-sms-notification',
-    name: '短信通知',
-    type: 'operations',
-    description: '遇到在途异常可以短信通知货主、司机、物流负责人等。',
-    usage: '短信费',
-    icon: strokeIconPaths.messageText,
-  },
-  {
-    id: 'operations-logistics-weather',
-    name: '物流天气',
-    type: 'operations',
-    description: '结合线路和车辆实时位置获取沿途天气预警，辅助提前安排绕行、时效与安全处置。',
-    usage: '付费',
-    icon: strokeIconPaths.cloudSun,
-  },
-  {
-    id: 'operations-license-recognition',
-    name: '证照识别',
-    type: 'operations',
-    description: '识别驾驶证、行驶证、运输证及回单等资料，自动提取字段并校验证照有效性。',
-    usage: '付费',
-    icon: strokeIconPaths.scanText,
-  },
-  {
-    id: 'operations-wecom-suite',
-    name: '企业微信套件',
-    type: 'operations',
-    description: '连接企业微信，将在途风险、协同待办和处置结果同步到群聊、消息与工作台。',
-    usage: '需连接',
-    icon: strokeIconPaths.messages,
-  },
-  {
-    id: 'operations-feishu-suite',
-    name: '飞书套件',
-    type: 'operations',
-    description: '连接飞书，将运单异常、协同任务和处置进展同步到消息、群组与多维表格。',
-    usage: '需连接',
-    icon: strokeIconPaths.panels,
-  },
-  {
-    id: 'operations-dingtalk-suite',
-    name: '钉钉套件',
-    type: 'operations',
-    description: '连接钉钉，将在途预警、审批待办和运营结果推送到群聊与工作通知。',
-    usage: '需连接',
-    icon: strokeIconPaths.bellRing,
-  },
-  {
-    id: 'capacity-cargo-normalization',
-    name: '货源解析',
-    type: 'capacity',
-    description: '解析 Excel 或连接器采集的货源并映射标准字段，缺失必填项时通过多轮对话补齐。',
-    usage: '免费',
-    icon: strokeIconPaths.fileSpreadsheet,
-  },
-  {
-    id: 'capacity-cargo-publish',
-    name: '货源发布',
-    type: 'capacity',
-    description: '将标准货源发布到大卡和已配置的满帮账号，并统一处理跨平台修改与下架。',
-    usage: '免费',
-    icon: strokeIconPaths.speaker,
-  },
-  {
-    id: 'capacity-quote-collection',
-    name: '报价抢单',
-    type: 'capacity',
-    description: '采集大卡与满帮的司机抢单、报价和电话联系反馈，形成统一候选运力列表。',
-    usage: '免费',
-    icon: strokeIconPaths.receipt,
-  },
-  {
-    id: 'capacity-private-fleet',
-    name: '私有运力池',
-    type: 'capacity',
-    description: '通过 Excel 维护企业熟车，叠加车辆位置、目的地预测和当前装卸状态，支持筛选与定向询价。',
-    usage: '付费',
-    icon: strokeIconPaths.usersRound,
-  },
-];
+const skills: ProjectSkill[] = [{ ...vehiclePredictionSkill, type: 'logistics', usage: '免费', icon: strokeIconPaths.locate }];
 
 const projectNameLength = computed(() => Array.from(projectName.value).length);
 const filteredSkills = computed(() => (activeTab.value === 'all' ? skills : skills.filter((skill) => skill.type === activeTab.value)));
@@ -346,6 +119,7 @@ function getProjectSkillIds() {
 
 function initializeProjectForm() {
   const project = editingProject.value;
+  mailboxDraft.value = project?.mailbox ? { ...project.mailbox } : null;
   if (!project && editingProjectId.value) {
     ElMessage.warning('未找到需要编辑的项目');
     goPage('projects');
@@ -405,6 +179,7 @@ function skillAvatarClass(skill: ProjectSkill) {
 }
 
 function toggleSkill(skill: ProjectSkill) {
+  if (skill.id === mailboxSkill.id) return;
   if (isSkillConnecting(skill) || requiredMonitorSkillIds.includes(skill.id)) return;
   if (skill.type === 'data') {
     if (selectedDataSkillIds.value.includes(skill.id)) {
@@ -586,6 +361,18 @@ function cancelCreate() {
   goPage('projects');
 }
 
+function bindMailbox() {
+  mailboxDraft.value = createProjectMailbox();
+  selectedOperationsSkillIds.value = [...new Set([...selectedOperationsSkillIds.value, mailboxSkill.id])];
+}
+
+function viewMailboxTask() {
+  const project = editingProject.value;
+  if (!project?.mailbox) return;
+  store.switchProject(project);
+  goPage('dailyTasks', { projectId: project.id, taskId: `email-order-${project.id}` });
+}
+
 function goNext() {
   const cleanName = projectName.value.trim();
   if (!cleanName) {
@@ -599,9 +386,9 @@ function goNext() {
   const skillNames = selectedSkills.value.map((skill) => skill.name);
   const skillIds = selectedSkills.value.map((skill) => skill.id);
   if (editingProject.value) {
-    store.updateSkillProject(editingProject.value.id, cleanName, skillNames, skillIds);
+    store.updateSkillProject(editingProject.value.id, cleanName, skillNames, skillIds, mailboxDraft.value ?? undefined);
   } else {
-    store.addSkillProject(cleanName, skillNames, skillIds);
+    store.addSkillProject(cleanName, skillNames, skillIds, mailboxDraft.value ?? undefined);
   }
   goPage('projects');
 }
@@ -643,7 +430,7 @@ onBeforeUnmount(() => {
           {{ projectNameLength }}/{{ maxProjectNameLength }}
         </span>
       </div>
-      <div v-if="editingProject" class="mt-3 grid grid-cols-4 gap-2 rounded-md border border-[#deded9] bg-[#fbfbfa] p-2">
+      <div v-if="editingProject" class="mt-3 grid grid-cols-2 gap-2 rounded-md border border-[#deded9] bg-[#fbfbfa] p-2 sm:grid-cols-4">
         <div class="rounded-md bg-white px-3 py-2">
           <div class="text-[11px] leading-4 text-slate-500">当前连接状态</div>
           <span class="mt-1 inline-flex rounded-md border px-2 py-0.5 text-xs font-medium" :class="badgeToneClass(projectStatusTone(editingProject.status))">
@@ -670,6 +457,7 @@ onBeforeUnmount(() => {
         <div class="flex min-w-0 items-baseline gap-4">
           <h2 class="text-lg font-semibold leading-6 text-slate-950">数字人技能</h2>
           <span class="text-sm font-semibold leading-5 text-slate-400">技能库</span>
+          <button type="button" class="text-xs text-blue-600 hover:underline" @click="showSkillInstructions = true">查看技能规则</button>
         </div>
         <div class="shrink-0 rounded-md bg-white px-2.5 py-1 text-xs font-medium text-slate-600 shadow-sm">已选 {{ selectedSkills.length }} 项</div>
       </div>
@@ -691,9 +479,34 @@ onBeforeUnmount(() => {
 
       <div class="min-h-0 flex-1 overflow-y-auto p-5 pt-4">
         <div v-if="filteredSkills.length" class="grid grid-cols-1 gap-3 lg:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
+          <template v-for="skill in filteredSkills" :key="skill.id">
+          <article
+            v-if="skill.id === mailboxSkill.id"
+            aria-label="邮箱连接"
+            class="flex min-h-[172px] min-w-0 flex-col rounded-lg border bg-white p-4 text-left shadow-sm"
+            :class="mailboxDraft ? 'border-slate-900 shadow-[0_0_0_1px_rgba(15,23,42,0.85)]' : 'border-[#deded9]'"
+          >
+            <div class="flex items-start justify-between gap-3">
+              <div class="flex min-w-0 items-start gap-3">
+                <span class="flex h-10 w-10 shrink-0 items-center justify-center rounded-full" :class="skillAvatarClass(skill)">
+                  <Icon :svg="skill.icon" :size="17" />
+                </span>
+                <div><h3 class="text-sm font-semibold leading-5 text-slate-950">{{ skill.name }}</h3><p class="mt-1 text-xs leading-4 text-slate-500">运营助手</p></div>
+              </div>
+              <span v-if="mailboxDraft" class="shrink-0 rounded-md bg-emerald-50 px-2 py-1 text-xs font-medium text-emerald-700">已绑定</span>
+              <span v-else class="shrink-0 rounded-md bg-[#f1f1ef] px-2 py-1 text-xs font-medium text-slate-600">未绑定</span>
+            </div>
+            <p class="mt-4 text-xs leading-6 text-slate-600">{{ skill.description }}</p>
+            <p class="mt-2 break-all text-sm font-medium text-slate-900">{{ mailboxDraft?.address ?? emailDemoMailbox }}</p>
+            <p class="mt-1 text-xs leading-5 text-slate-500">演示邮箱 · 模拟收件与回复</p>
+            <div class="mt-auto flex items-center justify-between gap-3 pt-3">
+              <span class="text-xs leading-5 text-slate-500">{{ mailboxDraft && !editingProject?.mailbox ? '点击完成，保存绑定并创建任务' : mailboxDraft ? '已关联邮件处理订单' : '绑定后自动创建邮件处理订单任务' }}</span>
+              <button v-if="!mailboxDraft" type="button" class="shrink-0 rounded-md bg-slate-900 px-3 py-1.5 text-xs font-medium text-white hover:bg-slate-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-slate-900" @click="bindMailbox">绑定邮箱</button>
+              <button v-else type="button" :disabled="!editingProject?.mailbox" class="shrink-0 rounded-md border border-[#deded9] px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-[#f7f7f5] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-slate-900 disabled:cursor-default disabled:opacity-50" @click="viewMailboxTask">查看任务</button>
+            </div>
+          </article>
           <button
-            v-for="skill in filteredSkills"
-            :key="skill.id"
+            v-else
             type="button"
             class="group flex min-h-[172px] flex-col rounded-lg border bg-white p-4 text-left shadow-sm transition"
             :class="
@@ -748,6 +561,7 @@ onBeforeUnmount(() => {
               </span>
             </div>
           </button>
+          </template>
         </div>
         <div v-else class="flex h-full min-h-[220px] flex-col items-center justify-center text-center">
           <span class="flex h-10 w-10 items-center justify-center rounded-full bg-white text-slate-400 shadow-sm">
@@ -763,7 +577,7 @@ onBeforeUnmount(() => {
         </div>
         <button
           type="button"
-          class="rounded-md px-4 py-2 text-sm font-medium transition"
+          class="shrink-0 whitespace-nowrap rounded-md px-4 py-2 text-sm font-medium transition"
           :class="canGoNext ? 'bg-slate-900 text-white hover:bg-slate-800' : 'cursor-not-allowed bg-slate-200 text-slate-400'"
           :disabled="!canGoNext"
           @click="goNext"
@@ -773,6 +587,9 @@ onBeforeUnmount(() => {
       </div>
     </section>
 
+    <AppDialog v-model="showSkillInstructions" :title="vehiclePredictionSkill.name" width="800px">
+      <pre class="max-h-[65vh] overflow-y-auto whitespace-pre-wrap break-words text-sm leading-7 text-slate-700">{{ vehiclePredictionSkill.instructions }}</pre>
+    </AppDialog>
     <AppDialog v-if="pendingLoginSkill" :model-value="true" :title="pendingLoginSkill.name" width="560px" @update:model-value="cancelSkillLogin">
         <div class="space-y-4">
           <label v-if="isPendingTmsSyncEmployee" class="block">

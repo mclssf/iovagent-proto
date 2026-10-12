@@ -10,6 +10,13 @@ export interface Project {
   keyword: string;
   statusFilter: string;
   skillIds?: string[];
+  mailbox?: ProjectMailbox;
+}
+
+export interface ProjectMailbox {
+  address: string;
+  status: 'bound';
+  boundAt: number;
 }
 
 export interface AgentConversation {
@@ -199,6 +206,18 @@ export interface TimelineEvent {
 }
 
 export interface ChatMessage {
+  pendingPredictionPrompt?: string;
+  predictionReport?: {
+    exportSummary: string;
+    boundaries: { label: string; text: string }[];
+    summary: { label: string; value: string }[];
+    fields: { label: string; header: string; note: string }[];
+    statistics: { label: string; value: string }[];
+    judgments: string[];
+    analyses: { title: string; points: string[] }[];
+  };
+  streaming?: boolean;
+  predictionRows?: { row: string; plate: string; status: string; start: string; end: string; startText: string; endText: string; startLocation: string; endLocation: string; hint: string; order?: string; coordinate?: string; stopTime?: string; endCoordinate?: string; endStopTime?: string }[];
   role: 'agent' | 'user';
   text: string;
   title?: string;
@@ -210,6 +229,8 @@ export interface ChatMessage {
   progressMode?: boolean;
   dailyTaskId?: string;
   pendingAsyncPrompt?: string;
+  pendingCompliancePrompt?: string;
+  pendingExperienceRoutePrompt?: string;
   sources?: { name: string; summary: string; format?: string }[];
   steps?: {
     title: string;
@@ -238,4 +259,52 @@ export interface DownloadTask {
   scope: string;
   status: string;
   progress: number;
+}
+export type EmailOrderScenario = 'both' | 'arrival' | 'loading' | 'flexible' | 'duration';
+
+export interface EmailOrderResult {
+  scenario: EmailOrderScenario;
+  subject: string;
+  sender: string;
+  senderName: string;
+  mailbox: string;
+  receivedAt: number;
+  originalBody: string;
+  order: {
+    number?: string;
+    origin: string;
+    destination: string;
+    cargo: { name: string; quantity: number; unit: string; weight: number; volume: number }[];
+    handling: string;
+    loadingTime?: string;
+    arrivalRequirement?: string;
+  };
+  dispatch: {
+    vehicle: string;
+    count: number;
+    totalWeight: number;
+    totalVolume: number;
+    allocation: string;
+    reason: string;
+  };
+  market: {
+    availableCount: number;
+    radius: number;
+    supply: string;
+    difficulty: string;
+    supplyReason: string;
+    price: string;
+    priceReason: string;
+  };
+  timing: {
+    loadingStart: number;
+    loadingEnd: number;
+    arrivalStart: number;
+    arrivalEnd: number;
+    latestLoadingAt?: number;
+    loadingSource: '客户要求' | '预计安排';
+    arrivalSource: '客户要求' | '预计安排';
+    basis: string;
+  };
+  reply: { subject: string; body: string; sentAt?: number };
 }

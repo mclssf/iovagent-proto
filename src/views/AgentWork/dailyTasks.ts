@@ -1,4 +1,4 @@
-import type { Order } from './interface';
+import type { EmailOrderResult, Order } from './interface';
 
 export type MonitorId = 'loading' | 'unloading' | 'parking' | 'offline' | 'deviation' | 'fence';
 export type WaybillPhase = '装货前' | '装货开始' | '装货结束' | '行程在途' | '卸货开始' | '卸货结束';
@@ -6,7 +6,9 @@ export type EventType = 'loading-start' | 'loading-end' | 'unloading-start' | 'u
 
 export const waybillPhases: WaybillPhase[] = ['装货前', '装货开始', '装货结束', '行程在途', '卸货开始', '卸货结束'];
 export const requiredMonitorSkillIds = ['loading-event-expert', 'unloading-event-expert'];
-export const ensureRequiredMonitorSkills = (ids: string[] = []) => [...new Set([...requiredMonitorSkillIds, ...ids])];
+export const ensureRequiredMonitorSkills = (ids: string[] = []) => ids.includes('vehicle-loading-unloading-predict')
+  ? ['vehicle-loading-unloading-predict']
+  : [...new Set([...requiredMonitorSkillIds, ...ids])];
 
 export const monitorDefinitions: { id: MonitorId; name: string; skillId: string; required: boolean; seconds: number; description: string; icon: 'upload' | 'download' | 'truck' | 'alert' | 'route' | 'locate' }[] = [
   { id: 'loading', name: '装货事件判断', skillId: 'loading-event-expert', required: true, seconds: 60, description: '识别装货开始、结束，驱动运单进入行程在途状态。', icon: 'upload' },
@@ -70,10 +72,14 @@ export interface WaybillEvent {
 export interface DailyTaskDraft {
   name: string;
   trigger: 'once' | 'event' | 'schedule';
+  taskTemplate?: 'general' | 'smart-order-entry' | 'email-order';
   eventType: EventType;
   threshold: number;
   fenceId: string;
   time: string;
+  intervalMinutes?: number;
+  sourceDataEmployeeIds?: string[];
+  targetDataEmployeeId?: string;
   prompt: string;
   confirmBeforeSend: boolean;
   attachments?: TaskAttachment[];
@@ -98,16 +104,18 @@ export interface DailyTask extends DailyTaskDraft {
   enabled: boolean;
   createdAt: number;
   lastScheduledDay: string;
+  lastScheduledAt?: number;
   runs: TaskRun[];
   origin?: 'manual' | 'workbench';
   conversationId?: string;
+  mailbox?: { address: string; status: 'bound' };
 }
 
 export interface TaskRun {
   id: string;
   startedAt: number;
   finishedAt?: number;
-  source: 'event' | 'schedule' | 'test' | 'manual' | 'workbench';
+  source: 'event' | 'schedule' | 'test' | 'manual' | 'workbench' | 'email';
   status: 'running' | 'waiting' | 'complete' | 'cancelled';
   event?: WaybillEvent;
   prompt: string;
@@ -118,6 +126,7 @@ export interface TaskRun {
   readAt?: number;
   toolJobId?: string;
   files?: TaskResultFile[];
+  emailOrder?: EmailOrderResult;
   action?: { channel: '短信' | '邮件'; recipient: string; content: string; status: 'pending' | 'sent' | 'cancelled' };
 }
 
@@ -147,7 +156,9 @@ export const eventLabel = (type: EventType) => eventDefinitions.find((event) => 
 export const isThresholdEvent = (type: EventType) => ['parking', 'offline', 'deviation'].includes(type);
 
 export function triggerLabel(task: DailyTaskDraft, fences: ProjectFence[] = []) {
+  if (task.taskTemplate === 'email-order') return '持续监听邮箱 · 收到订单邮件后自动处理';
   if (task.trigger === 'once') return '普通任务 · 提交后执行一次';
+  if (task.trigger === 'schedule' && task.taskTemplate === 'smart-order-entry') return `每 ${task.intervalMinutes ?? 10} 分钟 · 智能录单`;
   if (task.trigger === 'schedule') return `每天 ${task.time}`;
   const threshold = isThresholdEvent(task.eventType) ? ` ≥ ${task.threshold} ${task.eventType === 'deviation' ? '公里' : '分钟'}` : '';
   const fence = task.eventType.startsWith('fence-') ? ` · ${fences.find((item) => item.id === task.fenceId)?.name ?? '未配置围栏'}` : '';

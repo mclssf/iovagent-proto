@@ -1,0 +1,116 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>经验路线规划</title>
+    <style>
+      :root { color-scheme: light; font-family: Inter, "PingFang SC", "Microsoft YaHei", system-ui, sans-serif; color: #202733; background: #f7f7f5; }
+      * { box-sizing: border-box; }
+      body { min-width: 320px; min-height: 100vh; margin: 0; background: #f7f7f5; }
+      .page { width: min(100%, 1120px); min-height: 100vh; margin: 0 auto; padding: 18px; }
+      .topbar { display: flex; min-height: 40px; align-items: center; justify-content: space-between; gap: 16px; border-bottom: 1px solid #e1e3e6; }
+      .brand { display: flex; align-items: center; gap: 9px; color: #111827; font-size: 13px; font-weight: 650; }
+      .brand-mark { display: grid; width: 25px; height: 25px; place-items: center; border-radius: 7px; background: #172033; color: white; font-size: 11px; }
+      .version { color: #667085; font-size: 11px; }
+      .summary { display: flex; align-items: flex-end; justify-content: space-between; gap: 18px; padding: 22px 0 16px; }
+      .summary h1 { margin: 0; color: #101828; font-size: 24px; line-height: 1.35; }
+      .summary p { margin: 6px 0 0; color: #667085; font-size: 12px; }
+      .strategy { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; }
+      .pill { border: 1px solid #c8d9f4; border-radius: 999px; background: #eef5ff; padding: 4px 9px; color: #245ca8; font-size: 11px; font-weight: 650; }
+      .metrics { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); overflow: hidden; border: 1px solid #e0e3e7; border-radius: 8px; background: #e0e3e7; gap: 1px; }
+      .metric { min-width: 0; padding: 13px 14px; background: white; }
+      .metric span { color: #7a8495; font-size: 10px; }
+      .metric strong { display: block; margin-top: 5px; color: #273249; font-size: 15px; overflow-wrap: anywhere; }
+      .metric.primary strong { color: #175cd3; }
+      .map-shell { position: relative; height: 430px; margin-top: 14px; overflow: hidden; border: 1px solid #dde1e6; border-radius: 8px; background: #e9edf2; }
+      #map { position: absolute; inset: 0; }
+      .map-fallback { position: absolute; inset: 0; z-index: 1; display: grid; place-items: center; padding: 24px; color: #667085; text-align: center; }
+      .map-fallback[hidden] { display: none; }
+      .map-note { position: absolute; right: 12px; bottom: 12px; z-index: 500; width: min(340px, calc(100% - 24px)); padding: 12px; border: 1px solid #dce1e7; border-radius: 8px; background: rgba(255,255,255,.96); box-shadow: 0 14px 32px -22px #101828aa; }
+      .map-note span { color: #5270a3; font-size: 10px; font-weight: 650; }
+      .map-note strong { display: block; margin-top: 4px; font-size: 13px; }
+      .map-note p { margin: 5px 0 0; color: #667085; font-size: 11px; line-height: 1.6; }
+      .content { display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(260px, .75fr); gap: 14px; margin-top: 14px; }
+      .panel { border: 1px solid #e0e3e7; border-radius: 8px; background: white; padding: 14px; }
+      .panel h2 { margin: 0; color: #293241; font-size: 13px; }
+      .panel-subtitle { margin: 4px 0 12px; color: #7a8495; font-size: 10px; }
+      .candidate { display: grid; grid-template-columns: 24px minmax(0, 1fr) auto; align-items: center; gap: 10px; padding: 11px 0; border-top: 1px solid #eceef0; }
+      .candidate:first-of-type { border-top: 0; }
+      .candidate-index { display: grid; width: 24px; height: 24px; place-items: center; border-radius: 6px; background: #eff3f8; color: #5f6f83; font-size: 11px; font-weight: 700; }
+      .candidate.selected .candidate-index { background: #2463db; color: white; }
+      .candidate strong { display: block; font-size: 12px; }
+      .candidate small { display: block; margin-top: 2px; color: #7a8495; font-size: 10px; }
+      .candidate-meta { color: #455468; text-align: right; font-size: 11px; }
+      .road-list { margin: 10px 0 0; padding: 0; list-style: none; }
+      .road-list li { display: flex; justify-content: space-between; gap: 16px; padding: 9px 0; border-top: 1px solid #eceef0; color: #667085; font-size: 11px; }
+      .road-list strong { color: #344054; font-weight: 600; text-align: right; }
+      .map-pin { display: grid; width: 30px; height: 30px; place-items: center; border: 3px solid white; border-radius: 50% 50% 50% 8px; box-shadow: 0 4px 10px #10182838; color: white; font-size: 11px; font-weight: 700; transform: rotate(-45deg); }
+      .map-pin span { transform: rotate(45deg); }
+      .map-pin.start { background: #2463db; }
+      .map-pin.end { background: #e24a3b; }
+      @media (max-width: 760px) { .summary { align-items: flex-start; flex-direction: column; } .strategy { justify-content: flex-start; } .metrics { grid-template-columns: repeat(2, 1fr); } .content { grid-template-columns: 1fr; } .map-shell { height: 360px; } }
+    </style>
+  </head>
+  <body>
+    <main class="page">
+      <header class="topbar"><div class="brand"><span class="brand-mark">路</span><span>物流通用智能体 · 经验路线</span></div><span class="version">基于近 90 天有效运输轨迹</span></header>
+      <section class="summary"><div><h1 id="route-title">上海嘉定工厂 → 广州黄埔仓</h1><p>已综合历史通行频次、货车通行约束、里程与道路时效完成规划</p></div><div class="strategy"><span id="policy" class="pill">走高速</span><span id="preference" class="pill">最多人选</span></div></section>
+      <section class="metrics"><div class="metric primary"><span>推荐方案</span><strong id="route-name">经验主干线方案</strong></div><div class="metric"><span>预计里程</span><strong id="distance">1,480 km</strong></div><div class="metric"><span>预计耗时</span><strong id="duration">19 小时 40 分钟</strong></div><div class="metric"><span>历史采用</span><strong>132 / 286 次</strong></div></section>
+      <section class="map-shell"><div id="map-fallback" class="map-fallback">正在加载规划路线…</div><div id="map"></div><div class="map-note"><span>已选经验路线</span><strong id="map-route-name">经验主干线方案</strong><p id="map-route-note">历史采用率最高，关键节点通行稳定，适合本次运输。</p></div></section>
+      <section class="content">
+        <div class="panel"><h2>候选路线</h2><p class="panel-subtitle">已按当前规划策略排序</p><div class="candidate selected"><span class="candidate-index">1</span><div><strong id="candidate-name">经验主干线方案</strong><small>历史轨迹覆盖高，关键节点稳定</small></div><div id="candidate-meta" class="candidate-meta">1,480 km<br />19h 40m</div></div><div class="candidate"><span class="candidate-index">2</span><div><strong>里程优先备选</strong><small>距离更短，高峰时段波动较大</small></div><div id="short-meta" class="candidate-meta">1,444 km<br />20h 10m</div></div><div class="candidate"><span class="candidate-index">3</span><div><strong>国省道备选</strong><small>高速里程较少，途中节点较多</small></div><div id="road-meta" class="candidate-meta">1,566 km<br />25h 20m</div></div></div>
+        <div class="panel"><h2>路线依据</h2><p class="panel-subtitle">用于调度确认与司机下发</p><ul class="road-list"><li><span>主要道路</span><strong id="main-road">G60 沪昆高速</strong></li><li><span>关键节点</span><strong>杭州绕城 · 南昌枢纽 · 韶关北</strong></li><li><span>货车通行</span><strong>当前未发现影响通行的限行</strong></li><li><span>路线版本</span><strong id="route-version">ER-20260922-01</strong></li></ul></div>
+      </section>
+    </main>
+    <script src="/demo/amap-config.js"></script>
+    <script src="/demo/amap-runtime.js"></script>
+    <script>
+      const params = new URLSearchParams(location.search);
+      const read = (key, fallback) => params.get(key)?.trim() || fallback;
+      const number = (key, fallback) => Number.parseFloat(read(key, String(fallback))) || fallback;
+      const data = { origin: read('origin', '上海嘉定工厂'), destination: read('destination', '广州黄埔仓'), originLat: number('originLat', 31.338), originLng: number('originLng', 121.265), destinationLat: number('destinationLat', 23.158), destinationLng: number('destinationLng', 113.48), policy: read('policy', '走高速'), preference: read('preference', '最多人选'), distance: Math.round(number('distance', 1480)), duration: read('duration', '19 小时 40 分钟'), routeName: read('routeName', '经验主干线方案') };
+      const set = (id, value) => { const element = document.getElementById(id); if (element) element.textContent = value; };
+      document.title = `${data.origin} 至 ${data.destination} 经验路线`;
+      set('route-title', `${data.origin} → ${data.destination}`); set('policy', data.policy); set('preference', data.preference); set('route-name', data.routeName); set('map-route-name', data.routeName); set('candidate-name', data.routeName); set('distance', `${data.distance.toLocaleString()} km`); set('duration', data.duration); set('candidate-meta', `${data.distance.toLocaleString()} km · ${data.duration}`); set('short-meta', `${Math.max(1, Math.round(data.distance * .976)).toLocaleString()} km · 预计略慢`); set('road-meta', `${Math.round(data.distance * 1.058).toLocaleString()} km · 避开高速`); set('main-road', data.policy === '走高速' ? '高速主干路 · 历史常走节点' : '国道 / 省道 · 货车可通行节点');
+      const pin = (label, tone) => { const root = document.createElement('div'); root.className = `map-pin ${tone}`; const text = document.createElement('span'); text.textContent = label; root.append(text); return root; };
+      async function drawMap() {
+        const fallback = document.getElementById('map-fallback');
+        try {
+          const AMap = await IovAmap.load(['AMap.Driving', 'AMap.ToolBar']);
+          const converted = await IovAmap.convertGps(AMap, [[data.originLng, data.originLat], [data.destinationLng, data.destinationLat]]);
+          const origin = converted[0]; const destination = converted[1];
+          const map = new AMap.Map('map', { center: origin, mapStyle: 'amap://styles/whitesmoke', viewMode: '2D', zoom: 6 });
+          map.addControl(new AMap.ToolBar({ position: 'RB' }));
+          const drivingPolicy = data.policy === '不走高速'
+            ? (AMap.DrivingPolicy?.AVOID_HIGHWAY ?? 3)
+            : data.preference === '最短路线'
+              ? (AMap.DrivingPolicy?.LEAST_DISTANCE ?? 2)
+              : (AMap.DrivingPolicy?.LEAST_TIME ?? 0);
+          let route = [origin, destination];
+          try {
+            const result = await IovAmap.drivingRoute(AMap, route, drivingPolicy);
+            route = result.path;
+            const routeDistance = Math.max(1, Math.round(result.distance / 1000));
+            const routeHours = Math.floor(result.duration / 3600);
+            const routeMinutes = Math.round((result.duration % 3600) / 60);
+            set('distance', `${routeDistance.toLocaleString()} km`);
+            set('duration', `${routeHours} 小时 ${routeMinutes} 分钟`);
+            set('candidate-meta', `${routeDistance.toLocaleString()} km · ${routeHours}h ${routeMinutes}m`);
+          } catch {}
+          const shadow = new AMap.Polyline({ path: route, strokeColor: '#fff', strokeOpacity: .9, strokeWeight: 9 });
+          const line = new AMap.Polyline({ path: route, strokeColor: '#2463db', strokeOpacity: .96, strokeWeight: 5 });
+          const start = new AMap.Marker({ anchor: 'center', content: pin('起', 'start'), position: origin });
+          const end = new AMap.Marker({ anchor: 'center', content: pin('终', 'end'), position: destination });
+          map.add([shadow, line, start, end]);
+          map.setFitView([shadow], false, [30, 30, 30, 30]);
+          const infoWindow = new AMap.InfoWindow({ anchor: 'bottom-center', offset: new AMap.Pixel(0, -20) });
+          start.on('click', () => { infoWindow.setContent(data.origin); infoWindow.open(map, origin); });
+          end.on('click', () => { infoWindow.setContent(data.destination); infoWindow.open(map, destination); });
+          fallback.hidden = true;
+        } catch { fallback.textContent = '高德地图加载失败，请稍后重试。'; }
+      }
+      drawMap();
+    </script>
+  </body>
+</html>

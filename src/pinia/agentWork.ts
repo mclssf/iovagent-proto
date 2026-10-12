@@ -1,4 +1,6 @@
 import { migrateCapacitySkillIds } from './capacitySkills';
+import { hasVehiclePredictionIntent } from '@/views/AgentWork/vehiclePredictionSkill';
+import { runPredictionDemo, runWaybillAuthenticityDemo } from '@/views/AgentWork/vehiclePredictionDemo';
 import type {
   AgentConversation,
   AgentResultFile,
@@ -10,6 +12,7 @@ import type {
   PageId,
   PrivateCapacity,
   Project,
+  ProjectMailbox,
   StandardCargo,
   TimelineEvent,
   TmsSyncCustomer,
@@ -25,6 +28,7 @@ import { ensureRequiredMonitorSkills } from '@/views/AgentWork/dailyTasks';
 import type { TaskAttachment } from '@/views/AgentWork/dailyTasks';
 import { resolveAsyncTool, extractTaskPlates } from '@/views/AgentWork/ordinaryTasks';
 import { useAgentDailyTasks } from './agentDailyTasks';
+import { createProjectMailbox, mailboxSkill, persistMailboxProjects, restoreMailboxProjects } from './projectMailboxes';
 
 const defaultOrdersDateRange = {
   start: '2026-05-09',
@@ -49,7 +53,8 @@ function getOrderStartDate(order: Order) {
 const projectsSeed: Project[] = [
   {
     id: 'P001',
-    name: '华东干线在途监控',
+    mailbox: createProjectMailbox(),
+    name: '货主场景演示',
     status: '已连接',
     sync: '2分钟前',
     total: 128,
@@ -69,85 +74,8 @@ const projectsSeed: Project[] = [
       'capacity-cargo-publish',
       'capacity-quote-collection',
       'capacity-private-fleet',
+      mailboxSkill.id,
     ],
-  },
-  {
-    id: 'P002',
-    name: '冷链城配项目',
-    status: '授权失效',
-    sync: '昨天 23:10',
-    total: 64,
-    risk: 9,
-    tmsUrl: 'https://tms.coldchain.example.com',
-    tmsUser: 'cold_ops',
-    keyword: '冷链',
-    statusFilter: '全部',
-    skillIds: ['spreadsheet-waybill', 'route-risk-expert', 'parking-event-expert', 'delivery-sla-expert'],
-  },
-  {
-    id: 'P003',
-    name: '西南工厂发运项目',
-    status: '已连接',
-    sync: '同步中',
-    total: 83,
-    risk: 6,
-    tmsUrl: 'https://tms.southwest.example.com',
-    tmsUser: 'sw_factory',
-    keyword: '西南工厂',
-    statusFilter: '装货中',
-    skillIds: ['zhilian-shunda-tms', 'route-risk-expert', 'gps-trace-expert'],
-  },
-  {
-    id: 'P004',
-    name: '华北啤酒城配协同',
-    status: '已连接',
-    sync: '5分钟前',
-    total: 96,
-    risk: 8,
-    tmsUrl: 'https://tms.beer-north.example.com',
-    tmsUser: 'beer_dispatch',
-    keyword: '华北城配',
-    statusFilter: '在途',
-    skillIds: ['qingdao-beer-tms', 'route-risk-expert', 'delivery-sla-expert'],
-  },
-  {
-    id: 'P005',
-    name: '今麦郎干线履约',
-    status: '已连接',
-    sync: '12分钟前',
-    total: 142,
-    risk: 13,
-    tmsUrl: 'https://tms.jinmailang.example.com',
-    tmsUser: 'linehaul_ops',
-    keyword: '今麦郎',
-    statusFilter: '全部',
-    skillIds: ['jinmailang-logistics', 'route-risk-expert', 'gps-trace-expert', 'delivery-sla-expert'],
-  },
-  {
-    id: 'P006',
-    name: '水泥区域配送项目',
-    status: '授权失效',
-    sync: '昨天 18:40',
-    total: 71,
-    risk: 5,
-    tmsUrl: 'https://tms.cement-region.example.com',
-    tmsUser: 'cement_ops',
-    keyword: '水泥配送',
-    statusFilter: '装货中',
-    skillIds: ['jinyu-cement-tms', 'parking-event-expert', 'delivery-sla-expert'],
-  },
-  {
-    id: 'P007',
-    name: '电商大件履约监控',
-    status: '已连接',
-    sync: '刚刚',
-    total: 58,
-    risk: 4,
-    tmsUrl: 'https://tms.bulky.example.com',
-    tmsUser: 'bulky_service',
-    keyword: '大件履约',
-    statusFilter: '在途',
-    skillIds: ['spreadsheet-waybill', 'route-risk-expert', 'delivery-sla-expert'],
   },
 ];
 
@@ -347,9 +275,9 @@ const timelineSeed: TimelineEvent[] = [
 ];
 
 export const quickPrompts = [
-  '帮我处理一下今天的在途预警 挑出真有风险的运单',
-  '只看皖K55821异常停车事件',
-  '将上面结果通过邮件发送给 logistics.ops@example.com',
+  '真实装货地/卸货地预测',
+  '根据客户地点关键词，进行真实装货地/卸货地预测',
+  '结合停车轨迹与 POI，进行真实装货地/卸货地预测',
   '查看所有运单',
   '下载今天异常运单',
 ];
@@ -966,6 +894,226 @@ function createTransportStatusProcessMessage(plate: string, waybill: string, loc
   };
 }
 
+type HighwayPolicy = 'highway' | 'avoid-highway';
+type RoutePreference = 'popular' | 'shortest';
+
+interface ExperienceRouteRequest {
+  destination: string;
+  highwayPolicy?: HighwayPolicy;
+  origin: string;
+  preference?: RoutePreference;
+}
+
+interface DemoRoutePoint {
+  lat: number;
+  lng: number;
+  name: string;
+}
+
+const routePlanningIntentPattern = /(?:经验路线|路线规划|规划路线|推荐路线|老司机路线|怎么走|走哪条路|选择路线)/;
+const demoRoutePoints: Array<DemoRoutePoint & { terms: string[] }> = [
+  { name: '上海嘉定工厂', lat: 31.338, lng: 121.265, terms: ['上海', '嘉定'] },
+  { name: '广州黄埔仓', lat: 23.158, lng: 113.48, terms: ['广州', '黄埔'] },
+  { name: '合肥经开仓', lat: 31.787, lng: 117.205, terms: ['合肥'] },
+  { name: '南京江宁仓', lat: 31.9537, lng: 118.839, terms: ['南京', '江宁'] },
+  { name: '青岛市北配送中心', lat: 36.087, lng: 120.374, terms: ['青岛'] },
+  { name: '济南历城仓', lat: 36.709, lng: 117.121, terms: ['济南', '历城'] },
+  { name: '北京顺义仓', lat: 40.1289, lng: 116.6546, terms: ['北京', '顺义'] },
+  { name: '石家庄栾城仓', lat: 37.9002, lng: 114.6483, terms: ['石家庄', '栾城'] },
+  { name: '成都龙泉工厂', lat: 30.5728, lng: 104.269, terms: ['成都', '龙泉'] },
+  { name: '重庆江北仓', lat: 29.6205, lng: 106.694, terms: ['重庆', '江北'] },
+];
+
+function cleanRoutePlace(value: string) {
+  return value
+    .replace(/^(?:请|帮我|给我|想要|需要)/, '')
+    .replace(/^(?:规划一条|规划一下|规划)/, '')
+    .replace(/(?:规划|怎么走|走哪条|经验路线|推荐路线|路线方案|路线).*$/, '')
+    .replace(/(?:的|之间)$/, '')
+    .trim();
+}
+
+function extractRouteEndpoints(raw: string) {
+  const fromMatch = raw.match(/从\s*([^，。；,;\n]{2,24}?)\s*(?:到|至)\s*([^，。；,;\n]{2,32})/);
+  const directMatch = raw.match(/([\u4e00-\u9fa5A-Z0-9]{2,18})\s*(?:到|至)\s*([\u4e00-\u9fa5A-Z0-9]{2,24})(?:的)?(?:经验|推荐|规划)?路线/);
+  const conversationalMatch = raw.match(/([\u4e00-\u9fa5A-Z0-9]{2,18})\s*(?:到|至)\s*([\u4e00-\u9fa5A-Z0-9]{2,24}?)(?=(?:怎么走|走哪条|规划|路线|，|,|。|？|\?|$))/);
+  const match = fromMatch ?? directMatch ?? conversationalMatch;
+  return {
+    origin: cleanRoutePlace(match?.[1] ?? ''),
+    destination: cleanRoutePlace(match?.[2] ?? ''),
+  };
+}
+
+function extractExperienceRouteRequest(raw: string): ExperienceRouteRequest | null {
+  if (!routePlanningIntentPattern.test(raw)) return null;
+  const endpoints = extractRouteEndpoints(raw);
+  const highwayPolicy: HighwayPolicy | undefined = /(?:不走高速|避开高速|不上高速|国道优先|省道优先)/.test(raw)
+    ? 'avoid-highway'
+    : /(?:走高速|高速优先|优先高速)/.test(raw)
+      ? 'highway'
+      : undefined;
+  const preference: RoutePreference | undefined = /(?:最多人选|多数人选|老司机常走|常跑路线|热门路线|经验优先)/.test(raw)
+    ? 'popular'
+    : /(?:最短路线|距离最短|路程最短|最短距离)/.test(raw)
+      ? 'shortest'
+      : undefined;
+  return { ...endpoints, highwayPolicy, preference };
+}
+
+function resolveDemoRoutePoint(name: string, fallbackIndex: number): DemoRoutePoint {
+  const matched = demoRoutePoints.find((point) => point.terms.some((term) => name.includes(term)));
+  const fallback = demoRoutePoints[fallbackIndex] ?? demoRoutePoints[0]!;
+  return { lat: matched?.lat ?? fallback.lat, lng: matched?.lng ?? fallback.lng, name: name || matched?.name || fallback.name };
+}
+
+function routeDistanceKm(origin: DemoRoutePoint, destination: DemoRoutePoint, policy: HighwayPolicy, preference: RoutePreference) {
+  const radians = (degree: number) => (degree * Math.PI) / 180;
+  const latDelta = radians(destination.lat - origin.lat);
+  const lngDelta = radians(destination.lng - origin.lng);
+  const a = Math.sin(latDelta / 2) ** 2 + Math.cos(radians(origin.lat)) * Math.cos(radians(destination.lat)) * Math.sin(lngDelta / 2) ** 2;
+  const straightDistance = 6371 * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  const factor = policy === 'highway' ? 1.16 : 1.28;
+  return Math.round(straightDistance * factor * (preference === 'popular' ? 1.025 : 1));
+}
+
+function createExperienceRouteProcessMessage(request: Required<ExperienceRouteRequest>): ChatMessage {
+  const origin = resolveDemoRoutePoint(request.origin, 0);
+  const destination = resolveDemoRoutePoint(request.destination, 1);
+  const distance = routeDistanceKm(origin, destination, request.highwayPolicy, request.preference);
+  const averageSpeed = request.highwayPolicy === 'highway' ? 76 : 53;
+  const durationHours = Math.max(1, distance / averageSpeed + (request.preference === 'popular' ? 0.25 : 0));
+  const hours = Math.floor(durationHours);
+  const minutes = Math.round((durationHours - hours) * 60);
+  const policyLabel = request.highwayPolicy === 'highway' ? '走高速' : '不走高速';
+  const preferenceLabel = request.preference === 'popular' ? '最多人选' : '最短路线';
+  const routeName = request.highwayPolicy === 'highway' ? '经验主干线方案' : '经验国省道方案';
+  const params = new URLSearchParams({
+    origin: origin.name,
+    destination: destination.name,
+    originLat: String(origin.lat),
+    originLng: String(origin.lng),
+    destinationLat: String(destination.lat),
+    destinationLng: String(destination.lng),
+    policy: policyLabel,
+    preference: preferenceLabel,
+    distance: String(distance),
+    duration: `${hours} 小时 ${minutes} 分钟`,
+    routeName,
+  });
+  return {
+    role: 'agent',
+    title: '经验路线规划',
+    status: '已完成',
+    text: `正在按“${policyLabel}、${preferenceLabel}”规划 ${origin.name} 至 ${destination.name} 的经验路线。`,
+    progressMode: true,
+    steps: [
+      { title: '识别运输要求', text: `起点：${origin.name}；终点：${destination.name}；策略：${policyLabel}、${preferenceLabel}。` },
+      { title: '汇聚历史路线', text: '读取同线路历史运单、车辆实际轨迹、收费站与司机常走道路。', skill: '轨迹查询' },
+      { title: '生成候选路线', text: '综合道路等级、历史通行次数、里程和运输耗时，生成 3 条可选路线。', skill: '物流路线规划' },
+      { title: '执行策略筛选', text: `按“${policyLabel}、${preferenceLabel}”排序，选出匹配度最高的经验路线。`, skill: '物流路线规划' },
+      { title: '校验车辆通行', text: '核验货车限行、道路通行条件与关键节点，完成路线版本记录。', skill: '物流路线规划' },
+      { title: '生成路线页面', text: '在真实底图上拟合规划路线，并展示里程、耗时、关键道路与候选方案。' },
+    ],
+    result: `推荐方案：${routeName}\n线路：${origin.name} → ${destination.name}\n规划策略：${policyLabel} · ${preferenceLabel}\n预计里程：${distance} km\n预计耗时：${hours} 小时 ${minutes} 分钟\n历史参考：近 90 天同方向 286 次运输，当前方案匹配 132 次有效轨迹。`,
+    link: {
+      kind: 'externalH5',
+      label: `查看 ${origin.name} 至 ${destination.name} 规划路线`,
+      title: `${origin.name} → ${destination.name} · 经验路线`,
+      description: `${policyLabel} · ${preferenceLabel} · 约 ${distance} km`,
+      url: `/demo/experience-route.html?${params.toString()}`,
+    },
+  };
+}
+
+interface ShipmentEvidenceRequest {
+  plate: string;
+  waybill: string;
+}
+
+function extractShipmentEvidenceRequest(raw: string): ShipmentEvidenceRequest | null {
+  if (!/(?:装卸货.{0,8}(?:还原|核验|真实|实际)|(?:还原|核验|确认).{0,16}(?:装货|卸货)|(?:真实|实际).{0,16}(?:装货|卸货)|运短骗长|虚报目的地|错卸)/.test(raw)) return null;
+  const reference = extractLogisticsReference(raw);
+  return { plate: reference.plate || '皖K55821', waybill: reference.waybill || 'WB20260922018' };
+}
+
+function createShipmentEvidenceProcessMessage(request: ShipmentEvidenceRequest): ChatMessage {
+  const params = new URLSearchParams({ plate: request.plate, waybill: request.waybill });
+  return {
+    role: 'agent',
+    title: '装卸货还原',
+    status: '已完成',
+    text: `正在还原运单 ${request.waybill}（${request.plate}）的真实装货地和卸货地。`,
+    progressMode: true,
+    steps: [
+      { title: '读取运单计划', text: '获取申报装卸货地、计划时间、车辆与司机绑定关系。', skill: '运单补充' },
+      { title: '查询历史轨迹', text: '调取发车前后及运输结束前后的连续定位点，检查轨迹完整性。', skill: '轨迹查询' },
+      { title: '识别关键停车', text: '提取长时间停车、熄火和低速聚集点，形成装卸货候选地点。', skill: '异常停车专家' },
+      { title: '匹配地点语义', text: '将候选点与工厂、园区、仓库和经销商 POI 及围栏进行交叉匹配。', skill: '车辆定位查询' },
+      { title: '还原装卸节点', text: '结合停车时长、到离场顺序和轨迹方向，判断真实装货与卸货地点。', skill: '在途风险专家' },
+      { title: '复核异常风险', text: '计算申报地点偏差，筛查虚报目的地、错卸和运短骗长风险。', skill: '运单纠错' },
+    ],
+    result: `运单：${request.waybill} · 车辆：${request.plate}\n装货还原：上海嘉定综合物流园 3 号库，08:16 到达、09:02 离开，置信度 96%\n卸货还原：南京江宁食品产业园 B2 仓，16:48 到达、17:37 离开，置信度 93%\n申报差异：实际装货点距申报点 1.2 km；实际卸货点距申报点 18.6 km\n风险判断：卸货地点跨出申报围栏，建议复核是否存在错卸或非计划中转。`,
+    link: {
+      kind: 'externalH5',
+      label: `查看 ${request.waybill} 装卸货还原证据`,
+      title: `${request.waybill} · 装卸货还原`,
+      description: '轨迹 · 停车 · POI · 申报地点差异',
+      url: `/demo/shipment-reconstruction.html?${params.toString()}`,
+    },
+  };
+}
+
+interface WaybillComplianceRequest {
+  plate: string;
+  sourceFileName?: string;
+  waybill: string;
+}
+
+function hasWaybillComplianceIntent(raw: string) {
+  return /(?:运单合规校准|运单合规校验|合规校准|合规核验|校准运单|批量校准|核验运单合规)/.test(raw);
+}
+
+function extractWaybillComplianceRequest(raw: string): WaybillComplianceRequest | null {
+  if (!hasWaybillComplianceIntent(raw)) return null;
+  const reference = extractLogisticsReference(raw);
+  const attachment = extractAttachmentRequest(raw, (name) => /\.(?:csv|xls|xlsx)$/i.test(name));
+  if (!attachment && !reference.plate && !reference.waybill) return null;
+  return { plate: reference.plate || '鲁B3M579', waybill: reference.waybill || 'WB20260922027', sourceFileName: attachment?.sourceFileName };
+}
+
+function createWaybillComplianceProcessMessage(request: WaybillComplianceRequest): ChatMessage {
+  const source = request.sourceFileName ? `“${request.sourceFileName}”` : `运单 ${request.waybill}`;
+  const params = new URLSearchParams({ plate: request.plate, waybill: request.waybill, source: request.sourceFileName ?? '单笔运单' });
+  return {
+    role: 'agent',
+    title: '运单合规校准',
+    status: '已完成',
+    text: `正在校准${source}中的装卸货、线路、里程与关键时间。`,
+    progressMode: true,
+    steps: [
+      { title: '解析运单字段', text: '识别运单号、车辆、承运商、装卸货地、坐标、计划时间、线路和申报里程。', skill: '运单补充' },
+      { title: '检查必填与格式', text: '校验关键字段完整性、时间先后关系、坐标范围和车牌格式。', skill: '运单纠错' },
+      { title: '调用轨迹证据', text: '查询有效定位、停车点、离线区间与道路拟合轨迹。', skill: '轨迹查询' },
+      { title: '校准装卸地点', text: '依据到离场、停车和 POI 证据修正实际装卸货地及时间。', skill: '车辆定位查询' },
+      { title: '核验线路与里程', text: '比较申报线路、实际行驶路线和合理道路里程，识别绕行与里程偏差。', skill: '物流路线规划' },
+      { title: '生成校准结果', text: '输出校准字段、证据来源、差异说明、风险等级和可下载结果表。' },
+    ],
+    result: `校准完成：共核验 12 条运单，8 条合规，3 条需修正，1 条需人工复核。\n字段修正：装卸货地址 3 处、到离场时间 4 处、申报里程 2 处。\n重点记录：${request.waybill}（${request.plate}）实际卸货点距申报点 18.6 km，判定为中风险。\n数据覆盖：有效轨迹 100%，关键停车点 23 个，定位离线区间 2 段。`,
+    file: {
+      description: 'CSV 表格 · 12 条运单合规校准结果',
+      name: `运单合规校准结果_${formatFileTimestamp(new Date())}.csv`,
+      url: '/demo/waybill-compliance-result.csv',
+    },
+    link: {
+      kind: 'externalH5',
+      label: '查看运单合规校准报告',
+      title: `${request.waybill} · 合规校准报告`,
+      description: '轨迹证据 · 地点偏差 · 时间线 · 风险结论',
+      url: `/demo/waybill-compliance.html?${params.toString()}`,
+    },
+  };
+}
+
 interface AnalysisReportRequest {
   prompt: string;
   title: string;
@@ -1200,10 +1348,14 @@ function createOrderEventProcessMessage(result: string, status = '已完成', st
 export const agentWorkData = defineStore('agentWork', {
   state: () => {
     const defaultCargoDateRange = createDefaultRecentWeekDateRange();
+    const projects = restoreMailboxProjects(projectsSeed)
+      .filter((project) => project.id === projectsSeed[0]!.id)
+      .map((project) => ({ ...project, name: '货主场景演示', skillIds: ensureRequiredMonitorSkills(migrateCapacitySkillIds(project.skillIds ?? [])) }));
+    persistMailboxProjects(projects);
     return {
       ordersStartDate: defaultOrdersDateRange.start,
       ordersEndDate: defaultOrdersDateRange.end,
-      projects: projectsSeed.map((project) => ({ ...project, skillIds: ensureRequiredMonitorSkills(migrateCapacitySkillIds(project.skillIds ?? [])) })) as Project[],
+      projects: projects as Project[],
       recentConversations: conversationSeeds.map((conversation) => ({
         ...conversation,
         messages: conversation.messages.map((message) => ({ ...message })),
@@ -1614,6 +1766,7 @@ export const agentWorkData = defineStore('agentWork', {
       );
     },
     startNewConversation() {
+      clearAgentProcessTimers();
       this.persistActiveConversationMessages();
       this.workspaceMode = 'conversation';
       this.currentConversationId = '';
@@ -1625,6 +1778,7 @@ export const agentWorkData = defineStore('agentWork', {
       this.persistActiveConversationMessages();
       const conversation = this.recentConversations.find((item) => item.id === conversationId);
       if (!conversation) return;
+      clearAgentProcessTimers();
       this.workspaceMode = 'conversation';
       this.currentConversationId = conversation.id;
       this.agentMessages = cloneChatMessages(conversation.messages);
@@ -1638,12 +1792,30 @@ export const agentWorkData = defineStore('agentWork', {
         conversation.id === conversationId ? { ...conversation, title: normalizedTitle } : conversation,
       );
     },
+    deleteConversation(conversationId: string) {
+      if (!this.recentConversations.some((conversation) => conversation.id === conversationId)) return false;
+      const isCurrentConversation = this.workspaceMode === 'conversation' && this.currentConversationId === conversationId;
+      this.recentConversations = this.recentConversations.filter((conversation) => conversation.id !== conversationId);
+      if (isCurrentConversation) this.startNewConversation();
+      return true;
+    },
+    ensureExampleConversation(conversationId: string, title: string, messages: ChatMessage[]) {
+      if (this.recentConversations.some((conversation) => conversation.id === conversationId)) return;
+      this.recentConversations = [
+        {
+          id: conversationId,
+          title,
+          updatedAt: '刚刚',
+          messages: cloneChatMessages(messages).map(message => message.role === 'agent' ? { ...message, text: `演示案例：${message.text ?? ''}` } : message),
+        },
+        ...this.recentConversations,
+      ];
+    },
     startExampleConversation(title: string, messages: ChatMessage[]) {
       this.startNewConversation();
-      this.ensureConversationStarted();
-      this.renameConversation(this.currentConversationId, title);
-      this.agentMessages = cloneChatMessages(messages).map(message => message.role === 'agent' ? { ...message, text: `演示案例：${message.text ?? ''}` } : message);
-      this.persistActiveConversationMessages();
+      const conversationId = `C${Date.now()}`;
+      this.ensureExampleConversation(conversationId, title, messages);
+      this.openConversation(conversationId);
     },
     ensureConversationStarted() {
       if (this.workspaceMode !== 'conversation' || this.currentConversationId) return;
@@ -1711,6 +1883,7 @@ export const agentWorkData = defineStore('agentWork', {
       }, 1200);
     },
     switchProject(p: Project) {
+      clearAgentProcessTimers();
       this.persistActiveConversationMessages();
       this.workspaceMode = 'project';
       this.currentConversationId = '';
@@ -1789,7 +1962,7 @@ export const agentWorkData = defineStore('agentWork', {
       });
       ElMessage.success(`已将 ${importedCount} 条运单合并到“${targetProject.name}”`);
     },
-    addSkillProject(name: string, skillNames: string[], skillIds: string[]) {
+    addSkillProject(name: string, skillNames: string[], skillIds: string[], mailbox?: ProjectMailbox) {
       const projectId = `P${crypto.randomUUID()}`;
       const skillSummary = skillNames.length > 0 ? skillNames.join(' / ') : '内置技能';
       this.workspaceMode = 'project';
@@ -1797,6 +1970,7 @@ export const agentWorkData = defineStore('agentWork', {
       this.projects = [
         {
           id: projectId,
+          mailbox: mailbox ? { ...mailbox } : undefined,
           name,
           status: '已连接',
           sync: '刚刚',
@@ -1806,14 +1980,17 @@ export const agentWorkData = defineStore('agentWork', {
           tmsUser: 'skill_agent',
           keyword: skillNames.slice(0, 2).join('、') || name,
           statusFilter: '在途',
-          skillIds: ensureRequiredMonitorSkills(migrateCapacitySkillIds(skillIds)),
+          skillIds: ensureRequiredMonitorSkills(migrateCapacitySkillIds(mailbox ? [...skillIds, mailboxSkill.id] : skillIds)),
         },
         ...this.projects,
       ];
       this.currentProjectId = projectId;
+      persistMailboxProjects(this.projects);
+      useAgentDailyTasks().syncProjects(this.projects, this.ordersSeed);
       ElMessage.success('项目创建成功');
+      return projectId;
     },
-    updateSkillProject(projectId: string, name: string, skillNames: string[], skillIds: string[]) {
+    updateSkillProject(projectId: string, name: string, skillNames: string[], skillIds: string[], mailbox?: ProjectMailbox) {
       const skillSummary = skillNames.length > 0 ? skillNames.join(' / ') : '内置技能';
       this.workspaceMode = 'project';
       this.currentConversationId = '';
@@ -1821,19 +1998,24 @@ export const agentWorkData = defineStore('agentWork', {
         project.id === projectId
           ? {
               ...project,
+              mailbox: mailbox ? { ...mailbox } : project.mailbox,
               name,
               tmsUrl: skillSummary,
               tmsUser: project.tmsUser || 'skill_agent',
               keyword: skillNames.slice(0, 2).join('、') || name,
-              skillIds: ensureRequiredMonitorSkills(migrateCapacitySkillIds(skillIds)),
+              skillIds: ensureRequiredMonitorSkills(migrateCapacitySkillIds(mailbox || project.mailbox ? [...skillIds, mailboxSkill.id] : skillIds)),
             }
           : project,
       );
       this.currentProjectId = projectId;
+      persistMailboxProjects(this.projects);
+      useAgentDailyTasks().syncProjects(this.projects, this.ordersSeed);
       ElMessage.success('项目已更新');
     },
     removeProjectAt(index: number) {
       this.projects = this.projects.filter((_, idx) => idx !== index);
+      persistMailboxProjects(this.projects);
+      useAgentDailyTasks().syncProjects(this.projects, this.ordersSeed);
       if (!this.projects.find((p) => p.id === this.currentProjectId)) {
         this.currentProjectId = this.projects[0]?.id ?? '';
       }
@@ -1869,7 +2051,46 @@ export const agentWorkData = defineStore('agentWork', {
       if (!raw.trim()) return;
       this.ensureConversationStarted();
       const next: ChatMessage[] = [...this.agentMessages, { role: 'user', text: raw }];
-      const pendingPrompt = this.agentMessages[this.agentMessages.length - 1]?.pendingAsyncPrompt;
+      if (/核验出厂.*完成.*车辆.*对应地点/.test(raw)) {
+        const placeholder: ChatMessage = { role: 'agent', text: '正在读取源运单并匹配出厂与完成地点…', status: '处理中' };
+        this.agentMessages = [...next, placeholder];
+        const currentPlaceholder = this.agentMessages.at(-1);
+        this.agentInput = '';
+        try {
+          if (attachments.length !== 1 || !(attachments[0] instanceof File)) throw new Error('请上传一个 Excel 源文件');
+          const response = await runWaybillAuthenticityDemo(attachments[0]);
+          if (this.agentMessages.at(-1) !== currentPlaceholder) return;
+          this.startDelayedAgentProcess(next, response, () => {});
+        } catch (error) {
+          if (this.agentMessages.at(-1) !== currentPlaceholder) return;
+          this.agentMessages = [...next, { role: 'agent', text: `运单校验未执行：${(error as Error).message}。` }];
+        }
+        return;
+      }
+      const previousPrediction = this.agentMessages.at(-1)?.pendingPredictionPrompt;
+      if (hasVehiclePredictionIntent(raw) || previousPrediction && /[:：=]|附件：/.test(raw)) {
+        const prompt = previousPrediction && !hasVehiclePredictionIntent(raw) ? `${previousPrediction}\n${raw}` : raw;
+        const placeholder: ChatMessage = { role: 'agent', text: '正在解析输入与装卸货地点预测条件…', status: '处理中' };
+        this.agentMessages = [...next, placeholder];
+        const currentPlaceholder = this.agentMessages.at(-1);
+        this.agentInput = '';
+        try {
+          const files = attachments.filter((file): file is File => file instanceof File);
+          if (attachments.length !== files.length) throw new Error('附件内容不可用，请重新上传 Excel 文件');
+          const response = await runPredictionDemo(prompt, files);
+          if (this.agentMessages.at(-1) !== currentPlaceholder) return;
+          response.pendingPredictionPrompt = response.predictionRows?.some((row) => ['待补充', '参数错误', '地点歧义'].includes(row.status)) && !files.length && !/演示样例/.test(prompt) ? prompt : undefined;
+          this.startPredictionStream(next, response);
+        } catch (error) {
+          if (this.agentMessages.at(-1) !== currentPlaceholder) return;
+          this.agentMessages = [...next, { role: 'agent', text: `预测未执行：${(error as Error).message}。请检查输入后重试。` }];
+        }
+        return;
+      }
+      const pendingMessage = this.agentMessages[this.agentMessages.length - 1];
+      const pendingPrompt = pendingMessage?.pendingAsyncPrompt;
+      const pendingRoutePrompt = pendingMessage?.pendingExperienceRoutePrompt;
+      const pendingCompliancePrompt = pendingMessage?.pendingCompliancePrompt;
       const inputPrompt = raw.split('\n附件：')[0]!.trim();
       const isPlateAnswer = /^(?:车牌(?:号)?[是为：:\s]*)?[京津沪渝冀豫云辽黑湘皖鲁新苏浙赣鄂桂甘晋蒙陕吉闽贵粤青藏川宁琼][A-Z][A-Z0-9]{5,6}$/i.test(inputPrompt);
       const asyncPrompt = pendingPrompt && (isPlateAnswer || (attachments.length && /^附件：/.test(inputPrompt))) ? `${pendingPrompt}\n${isPlateAnswer ? inputPrompt : ''}` : inputPrompt;
@@ -1890,15 +2111,66 @@ export const agentWorkData = defineStore('agentWork', {
         this.agentInput = '';
         return;
       }
+      const routePrompt = pendingRoutePrompt ? `${pendingRoutePrompt}\n${inputPrompt}` : inputPrompt;
+      const experienceRouteRequest = extractExperienceRouteRequest(routePrompt);
+      const compliancePrompt = pendingCompliancePrompt ? `${pendingCompliancePrompt}\n${raw}` : raw;
+      const waybillComplianceRequest = extractWaybillComplianceRequest(compliancePrompt);
+      const shipmentEvidenceRequest = extractShipmentEvidenceRequest(raw);
       const regionVisitRegion = extractRegionVisitRegion(raw);
       const regionVisitRequest = extractRegionVisitRequest(raw);
-      const spreadsheetRequest = regionVisitRequest ? null : extractSpreadsheetRequest(raw);
+      const spreadsheetRequest = regionVisitRequest || hasWaybillComplianceIntent(compliancePrompt) ? null : extractSpreadsheetRequest(raw);
       const mcpPrompt = extractMcpPrompt(raw);
       const emailDeliveryRequest = extractEmailDeliveryRequest(raw, this.agentMessages);
       const analysisReportRequest = extractAnalysisReportRequest(raw);
       const transportStatusRequest = extractTransportStatusRequest(raw);
       const vehiclePositionRequest = transportStatusRequest ? null : extractVehiclePositionRequest(raw);
       let replyMessage: ChatMessage = { role: 'agent', text: '已处理你的请求。你可以继续补充需要关注的范围。' };
+      if (experienceRouteRequest) {
+        const missing: string[] = [];
+        if (!experienceRouteRequest.origin || !experienceRouteRequest.destination) missing.push('起点和终点');
+        if (!experienceRouteRequest.highwayPolicy) missing.push('走高速或不走高速');
+        if (!experienceRouteRequest.preference) missing.push('最多人选或最短路线');
+        if (missing.length) {
+          this.agentMessages = [
+            ...next,
+            {
+              role: 'agent',
+              text: `我会基于历史真实行驶经验规划路线。还需要你选择：${missing.join('、')}。\n可以直接回复，例如“从上海嘉定工厂到广州黄埔仓，走高速，最多人选”或“不走高速，最短路线”。`,
+              pendingExperienceRoutePrompt: routePrompt,
+            },
+          ];
+          this.agentInput = '';
+          return;
+        }
+        const processMessage = createExperienceRouteProcessMessage(experienceRouteRequest as Required<ExperienceRouteRequest>);
+        this.startDelayedAgentProcess(next, processMessage, () => this.openExternalH5(processMessage.link!.url, processMessage.link!.title));
+        this.agentInput = '';
+        return;
+      }
+      if (hasWaybillComplianceIntent(compliancePrompt) && !waybillComplianceRequest) {
+        this.agentMessages = [
+          ...next,
+          {
+            role: 'agent',
+            text: '请上传需要校准的 Excel / CSV 运单表，或补充运单号、车牌号。我会校验装卸货地、时间、线路和申报里程，并返回校准结果与证据报告。',
+            pendingCompliancePrompt: compliancePrompt,
+          },
+        ];
+        this.agentInput = '';
+        return;
+      }
+      if (waybillComplianceRequest) {
+        const processMessage = createWaybillComplianceProcessMessage(waybillComplianceRequest);
+        this.startDelayedAgentProcess(next, processMessage, () => this.openExternalH5(processMessage.link!.url, processMessage.link!.title));
+        this.agentInput = '';
+        return;
+      }
+      if (shipmentEvidenceRequest) {
+        const processMessage = createShipmentEvidenceProcessMessage(shipmentEvidenceRequest);
+        this.startDelayedAgentProcess(next, processMessage, () => this.openExternalH5(processMessage.link!.url, processMessage.link!.title));
+        this.agentInput = '';
+        return;
+      }
       if (regionVisitRequest) {
         this.startRegionVisitProcess(next, regionVisitRequest);
         this.agentInput = '';
@@ -2109,6 +2381,53 @@ export const agentWorkData = defineStore('agentWork', {
         agentProcessTimers.push(timer);
       });
     },
+    startPredictionStream(next: ChatMessage[], finalMessage: ChatMessage) {
+      const report = finalMessage.predictionReport;
+      if (!report) { this.startDelayedAgentProcess(next, finalMessage, () => {}); return; }
+      clearAgentProcessTimers();
+      this.agentMessages = [...next, { ...finalMessage, status: '处理中', streaming: true, steps: [], result: '', file: undefined, predictionRows: [], predictionReport: { summary: [], fields: [], judgments: [], statistics: [], analyses: [], boundaries: [], exportSummary: '' } }];
+      const current = this.agentMessages.at(-1)!;
+      const live = current.predictionReport!;
+      const chunks: (() => void)[] = [];
+      // Table rows arrive together; narrative text is emitted in short chunks.
+      report.summary.forEach((item) => chunks.push(() => live.summary.push(item)));
+      report.fields.forEach((item) => chunks.push(() => live.fields.push(item)));
+      report.judgments.forEach((item) => chunks.push(() => live.judgments.push(item)));
+      report.statistics.forEach((item) => chunks.push(() => live.statistics.push(item)));
+      finalMessage.predictionRows?.forEach((row) => chunks.push(() => current.predictionRows!.push(row)));
+      report.analyses.forEach((item, index) => {
+        chunks.push(() => live.analyses.push({ title: item.title, points: [] }));
+        item.points.forEach((point, pointIndex) => {
+          for (let length = 0; length < point.length; length += 16) {
+            const end = Math.min(length + 16, point.length);
+            chunks.push(() => { live.analyses[index]!.points[pointIndex] = point.slice(0, end); });
+          }
+        });
+      });
+      chunks.push(() => { live.exportSummary = report.exportSummary; });
+      report.boundaries.forEach((item, index) => {
+        chunks.push(() => live.boundaries.push({ label: item.label, text: '' }));
+        for (let length = 0; length < item.text.length; length += 16) {
+          const end = Math.min(length + 16, item.text.length);
+          chunks.push(() => { live.boundaries[index]!.text = item.text.slice(0, end); });
+        }
+      });
+      let index = 0;
+      const emitNext = () => {
+        if (this.agentMessages.at(-1) !== current) return;
+        chunks[index++]?.();
+        if (index < chunks.length) {
+          agentProcessTimers = [setTimeout(emitNext, 55)];
+        } else {
+          current.streaming = false;
+          current.status = '已完成';
+          current.file = finalMessage.file;
+          current.result = finalMessage.result;
+          clearAgentProcessTimers();
+        }
+      };
+      emitNext();
+    },
     startDelayedAgentProcess(next: ChatMessage[], finalMessage: ChatMessage, onComplete: () => void) {
       const steps = finalMessage.steps ?? [];
       const messageIndex = next.length;
@@ -2122,6 +2441,8 @@ export const agentWorkData = defineStore('agentWork', {
           activeStepIndex: 0,
           result: '',
           link: undefined,
+          file: undefined,
+          predictionRows: undefined,
         },
       ];
 
@@ -2137,6 +2458,8 @@ export const agentWorkData = defineStore('agentWork', {
               activeStepIndex: isComplete ? steps.length : stepIndex,
               result: isComplete ? finalMessage.result : '',
               link: isComplete ? finalMessage.link : undefined,
+              file: isComplete ? finalMessage.file : undefined,
+              predictionRows: isComplete ? finalMessage.predictionRows : undefined,
             };
           });
 
@@ -2164,9 +2487,11 @@ export const agentWorkData = defineStore('agentWork', {
           result: '',
         },
       ];
+      const processMessage = this.agentMessages[messageIndex];
 
       try {
         const result = await runMcpPrompt(prompt);
+        if (this.agentMessages[messageIndex] !== processMessage) return;
         this.agentMessages = this.agentMessages.map((message, index) => {
           if (index !== messageIndex) return message;
           return {
@@ -2177,6 +2502,7 @@ export const agentWorkData = defineStore('agentWork', {
           };
         });
       } catch (error) {
+        if (this.agentMessages[messageIndex] !== processMessage) return;
         this.agentMessages = this.agentMessages.map((message, index) => {
           if (index !== messageIndex) return message;
           return {

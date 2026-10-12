@@ -8,3 +8,9 @@ dist.zip
 docs
 inputs
 outputs
+*.log
+vendor-download/
+.env
+.env.development
+.env.production
+.env.analyze
