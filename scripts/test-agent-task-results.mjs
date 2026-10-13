@@ -13,8 +13,8 @@ try {
   store.syncProjects(['P001', 'P002'].map(id => ({ id, status: '已连接', total: 6, skillIds: ['parking-event-expert'] })), [{ id: 'WB001', plate: '沪A12345', driver: '司机', route: '上海 → 杭州' }]);
   assert.deepEqual(Object.values(taskStatusLabels), ['已完成', '执行中', '已暂停']);
   assert.equal(store.unreadResultsByProject.P001, 3, 'one unread latest result per seeded task');
-  const eventTask = store.tasks[0];
-  const scheduleTask = store.tasks[2];
+  const eventTask = store.tasks.find(task => task.name === '异常停车通知司机');
+  const scheduleTask = store.tasks.find(task => task.name === '每日在途风险简报');
   for (const task of store.tasks) assert.equal(getTaskStatus(task), 'running', 'completed runs and pending actions do not complete continuous tasks');
   store.toggleTask(scheduleTask.id);
   assert.equal(getTaskStatus(scheduleTask), 'paused');

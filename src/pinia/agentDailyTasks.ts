@@ -1,11 +1,15 @@
 import { defineStore } from 'pinia';
-import type { Order, Project } from '@/views/AgentWork/interface';
+import type { EmailOrderScenario, Order, Project } from '@/views/AgentWork/interface';
 import type { DailyTask, DailyTaskDraft, EventType, MonitorId, ProjectFence, ProjectTaskRuntime, TaskRun, WaybillEvent, WaybillPhase } from '@/views/AgentWork/dailyTasks';
 import { createMonitoredOrders, ensureRequiredMonitorSkills, eventDefinitions, eventLabel, hasTaskResult, isThresholdEvent, monitorDefinitions } from '@/views/AgentWork/dailyTasks';
 import { extractTaskPlates, makeOrdinaryRun, mergeTaskAttachments, ordinaryStepDelay, ordinaryTaskName, ordinaryTaskResult, resolveAsyncTool } from '@/views/AgentWork/ordinaryTasks';
+import { createDataEmployeeSkills } from './dataEmployeeSkills';
+import { completeEmailRun, createEmailDemoTask, createEmailRun, emailDemoStepDelay } from '@/views/AgentWork/emailOrderDemo';
+import { persistMailboxTasks, restoreMailboxTasks } from './projectMailboxes';
 
 const newId = (prefix: string) => `${prefix}-${crypto.randomUUID()}`;
 const stepDelay = () => 1600 + Math.round(Math.random() * 1000);
+const dataEmployeeNames = Object.fromEntries(createDataEmployeeSkills().map((skill) => [skill.id, skill.name]));
 
 function sampleEvent(runtime: ProjectTaskRuntime, type: EventType, source: WaybillEvent['source'], fenceId?: string): WaybillEvent | null {
   const order = runtime.orders.find((item) => item.phase === '行程在途') ?? runtime.orders[0];
@@ -20,6 +24,22 @@ function sampleEvent(runtime: ProjectTaskRuntime, type: EventType, source: Waybi
 }
 
 function makeRun(task: DailyTask, runtime: ProjectTaskRuntime | undefined, source: TaskRun['source'], event?: WaybillEvent): TaskRun {
+  if (task.taskTemplate === 'smart-order-entry') {
+    const sourceNames = (task.sourceDataEmployeeIds ?? []).map((id) => dataEmployeeNames[id] ?? id);
+    const targetName = dataEmployeeNames[task.targetDataEmployeeId ?? ''] ?? task.targetDataEmployeeId ?? '目标系统';
+    return {
+      id: newId('run'), startedAt: Date.now(), source, status: 'running', prompt: task.prompt,
+      activeStep: 0, nextStepAt: Date.now() + stepDelay(), result: '',
+      steps: [
+        { title: '轮询来源系统', text: `通过数据员工连接 ${sourceNames.join('、')}，检查新增和变更订单。`, tool: '数据员工' },
+        { title: '提取订单数据', text: '识别 18 条新增记录和 4 条变更记录，保留源系统单号与原始字段引用。', tool: '浏览器' },
+        { title: '统一字段语义', text: '将各系统的订单号、车辆、承运商、装卸货地和计划时间映射为标准运单字段。', tool: '运单数据映射' },
+        { title: '去重与冲突校验', text: '按源系统、订单号和业务时间去重，识别 2 条重复记录与 1 条地址冲突。', tool: '运单纠错' },
+        { title: '录入目标系统', text: `将 19 条校验通过的运单写入 ${targetName}，失败记录进入待处理队列。`, tool: '数据员工' },
+        { title: '核验录单回执', text: '读取目标系统回执，核对成功数、目标运单号和失败原因，形成本轮结果。' },
+      ],
+    };
+  }
   const subject = event ? `${event.order.id} · ${event.order.plate}` : runtime ? `本项目 ${runtime.total} 条运单` : '个人定时任务';
   const context = event ? event.detail : runtime ? `已汇总本项目在途运单与 ${runtime.events.length} 条近期事件。` : '当前任务未绑定项目，不读取项目运单、事件或企业私有数据。';
   const channel = /短信/.test(task.prompt) ? '短信' : /邮件|邮箱/.test(task.prompt) ? '邮件' : null;
@@ -43,7 +63,7 @@ function makeRun(task: DailyTask, runtime: ProjectTaskRuntime | undefined, sourc
 export const useAgentDailyTasks = defineStore('agentDailyTasks', {
   state: () => ({
     projects: {} as Record<string, ProjectTaskRuntime>,
-    tasks: [] as DailyTask[],
+    tasks: restoreMailboxTasks() as DailyTask[],
     now: Date.now(),
   }),
   getters: {
@@ -58,7 +78,10 @@ export const useAgentDailyTasks = defineStore('agentDailyTasks', {
   actions: {
     markResultRead(taskId: string, runId: string) {
       const run = this.tasks.find((task) => task.id === taskId)?.runs.find((item) => item.id === runId);
-      if (run && hasTaskResult(run) && run.readAt === undefined) run.readAt = Date.now();
+      if (run && hasTaskResult(run) && run.readAt === undefined) {
+        run.readAt = Date.now();
+        if (run.emailOrder) persistMailboxTasks(this.tasks);
+      }
     },
     syncProjects(projects: Project[], orders: Order[]) {
       for (const project of projects) {
@@ -71,7 +94,17 @@ export const useAgentDailyTasks = defineStore('agentDailyTasks', {
             fences: [], orders: project.total > 0 ? createMonitoredOrders(orders) : [], events: [], processedEventIds: [],
           };
           this.projects[project.id] = runtime;
-          if (project.id === 'P001') this.seedTasks(runtime);
+          if (project.id === 'P001') {
+            this.seedTasks(runtime);
+          }
+        }
+        if (project.mailbox?.status === 'bound') {
+          let mailTask = this.tasks.find(task => task.projectId === project.id && task.taskTemplate === 'email-order');
+          if (!mailTask) {
+            mailTask = createEmailDemoTask(project.id, Date.now(), project.id === 'P001');
+            this.tasks.unshift(mailTask);
+          }
+          mailTask.mailbox = { address: project.mailbox.address, status: project.mailbox.status };
         }
         const resumed = !runtime.connected && project.status === '已连接';
         const previousSkills = runtime.skillIds;
@@ -87,16 +120,17 @@ export const useAgentDailyTasks = defineStore('agentDailyTasks', {
       const ids = new Set(projects.map((project) => project.id));
       for (const id of Object.keys(this.projects)) if (!ids.has(id)) delete this.projects[id];
       this.tasks = this.tasks.filter((task) => !task.projectId || ids.has(task.projectId));
+      persistMailboxTasks(this.tasks);
     },
     seedTasks(runtime: ProjectTaskRuntime) {
-      const base: DailyTaskDraft = { name: '', trigger: 'event', eventType: 'parking', threshold: 30, fenceId: '', time: '18:00', prompt: '', confirmBeforeSend: true };
+      const base: DailyTaskDraft = { name: '', trigger: 'event', taskTemplate: 'general', eventType: 'parking', threshold: 30, fenceId: '', time: '18:00', intervalMinutes: 10, sourceDataEmployeeIds: [], targetDataEmployeeId: '', prompt: '', confirmBeforeSend: true };
       const presets: DailyTaskDraft[] = [
         { ...base, name: '异常停车通知司机', prompt: '当发生停车异常时，核验停车地点与轨迹，生成一条短信发送给司机，询问停靠原因和预计恢复时间。' },
         { ...base, name: '卸货完成同步', eventType: 'unloading-end', prompt: '核验卸货完成事件，整理运单履约结果和卸货时间，汇总给物流负责人。' },
         { ...base, name: '每日在途风险简报', trigger: 'schedule', prompt: '汇总今天的在途运单和异常事件，输出高风险清单、处置进展与明日重点。' },
       ];
       for (const [index, draft] of presets.entries()) {
-        const task: DailyTask = { ...draft, id: newId('task'), projectId: runtime.projectId, enabled: true, createdAt: Date.now() - 2 * 86400000, lastScheduledDay: '', runs: [] };
+        const task: DailyTask = { ...draft, id: newId('task'), projectId: runtime.projectId, enabled: true, createdAt: Date.now() - 2 * 86400000, lastScheduledDay: '', lastScheduledAt: 0, runs: [] };
         for (let day = 2; day >= 1; day--) {
           const event = task.trigger === 'event' ? sampleEvent(runtime, task.eventType, 'poll') ?? undefined : undefined;
           const run = makeRun(task, runtime, task.trigger === 'event' ? 'event' : 'schedule', event);
@@ -124,6 +158,7 @@ export const useAgentDailyTasks = defineStore('agentDailyTasks', {
       if (task.trigger === 'once') return !this.projects[task.projectId] ? '项目不存在' : '';
       const runtime = this.projects[task.projectId];
       if (!runtime) return '项目不存在';
+      if (task.taskTemplate === 'email-order') return '';
       if (!runtime.connected) return '等待数据源连接';
       if (!runtime.orders.length) return '等待接入运单';
       if (task.trigger === 'schedule') return '';
@@ -140,28 +175,44 @@ export const useAgentDailyTasks = defineStore('agentDailyTasks', {
       const attachments = mergeTaskAttachments([], draft.attachments ?? []);
       if (draft.trigger === 'once' && resolveAsyncTool(draft.prompt) && !extractTaskPlates(draft.prompt).length && !attachments.length) throw new Error('请补充需要查询的车牌号，或上传包含车牌号的文件');
       if (draft.trigger === 'schedule' && !/^([01]\d|2[0-3]):[0-5]\d$/.test(draft.time)) throw new Error('请选择有效执行时间');
+      if (draft.taskTemplate === 'smart-order-entry') {
+        if (!projectId || draft.trigger !== 'schedule') throw new Error('智能录单需要在项目中创建为定时 / 持续任务');
+        if (draft.sourceDataEmployeeIds?.length !== 3) throw new Error('请选择 3 个数据员工系统作为数据源');
+        if (!draft.targetDataEmployeeId) throw new Error('请选择 1 个录单目标系统');
+        if (draft.sourceDataEmployeeIds.includes(draft.targetDataEmployeeId)) throw new Error('目标系统不能同时作为数据源');
+        if (![5, 10, 30, 60].includes(draft.intervalMinutes ?? 0)) throw new Error('请选择有效检查频率');
+      }
       if (draft.trigger === 'event' && isThresholdEvent(draft.eventType) && (!Number.isFinite(draft.threshold) || draft.threshold <= 0)) throw new Error('阈值必须大于 0');
       if (draft.trigger === 'event' && draft.eventType.startsWith('fence-') && !this.projects[projectId]!.fences.some((fence) => fence.id === draft.fenceId)) throw new Error('请选择一个有效围栏');
       const existing = this.tasks.find((task) => task.id === taskId && task.projectId === projectId);
       if (taskId && !existing) throw new Error('任务已删除');
       if (existing && (existing.trigger === 'once' || draft.trigger === 'once')) throw new Error('已提交的任务不能改为或编辑为普通任务，请新建任务');
+      if (existing?.taskTemplate === 'email-order' || draft.taskTemplate === 'email-order') throw new Error('邮件处理订单为固定演示任务');
       if (existing?.runs.some((run) => run.status === 'running')) throw new Error('请等待本轮执行结束后再编辑');
       if (existing) {
-        Object.assign(existing, draft, { name: draft.name.trim(), prompt: draft.prompt.trim(), attachments });
+        Object.assign(existing, draft, { name: draft.name.trim(), prompt: draft.prompt.trim(), attachments, sourceDataEmployeeIds: [...(draft.sourceDataEmployeeIds ?? [])] });
         return existing.id;
       }
-      const task: DailyTask = { ...draft, name: draft.name.trim() || ordinaryTaskName(draft.prompt), prompt: draft.prompt.trim(), attachments, id: newId('task'), projectId, enabled: draft.trigger !== 'once', createdAt: Date.now(), lastScheduledDay: '', runs: [], origin: source?.origin ?? 'manual', conversationId: source?.conversationId };
+      const task: DailyTask = { ...draft, name: draft.name.trim() || ordinaryTaskName(draft.prompt), prompt: draft.prompt.trim(), attachments, sourceDataEmployeeIds: [...(draft.sourceDataEmployeeIds ?? [])], id: newId('task'), projectId, enabled: draft.trigger !== 'once', createdAt: Date.now(), lastScheduledDay: '', lastScheduledAt: 0, runs: [], origin: source?.origin ?? 'manual', conversationId: source?.conversationId };
       if (task.trigger === 'once') task.runs.push(makeOrdinaryRun(task));
+      if (task.taskTemplate === 'smart-order-entry') {
+        task.lastScheduledAt = Date.now();
+        task.runs.push(makeRun(task, this.projects[projectId], 'schedule'));
+      }
       this.tasks.unshift(task);
       return task.id;
     },
     deleteTask(taskId: string) {
+      if (this.tasks.find((task) => task.id === taskId)?.taskTemplate === 'email-order') return;
       this.tasks = this.tasks.filter((task) => task.id !== taskId);
     },
     toggleTask(taskId: string) {
       const task = this.tasks.find((item) => item.id === taskId);
       if (task?.trigger === 'once') throw new Error('普通任务仅执行一次，不支持暂停或启动');
-      if (task) task.enabled = !task.enabled;
+      if (task) {
+        task.enabled = !task.enabled;
+        if (task.taskTemplate === 'email-order') persistMailboxTasks(this.tasks);
+      }
     },
     receiveOrdinaryResult(taskId: string, jobId: string, result: { text: string; files: NonNullable<TaskRun['files']> }) {
       const task = this.tasks.find((item) => item.id === taskId);
@@ -217,6 +268,7 @@ export const useAgentDailyTasks = defineStore('agentDailyTasks', {
     testTask(taskId: string) {
       const task = this.tasks.find((item) => item.id === taskId);
       if (!task) return;
+      if (task.taskTemplate === 'email-order') { this.receiveDemoEmail(taskId, 'both'); return; }
       if (task.trigger === 'once') throw new Error('普通任务提交后只执行一次，不支持重复测试');
       const reason = this.unavailableReason(task);
       if (reason) throw new Error(reason);
@@ -228,6 +280,14 @@ export const useAgentDailyTasks = defineStore('agentDailyTasks', {
         event.detail = `${eventLabel(task.eventType)}已达到测试阈值：${event.value} ${task.eventType === 'deviation' ? '公里' : '分钟'}。`;
       }
       task.runs.unshift(makeRun(task, runtime, 'test', event));
+    },
+    receiveDemoEmail(taskId: string, scenario: EmailOrderScenario) {
+      const task = this.tasks.find((item) => item.id === taskId);
+      if (!task || task.taskTemplate !== 'email-order') return;
+      if (!task.enabled) throw new Error('请先启动邮件处理任务');
+      if (task.runs.some((run) => run.status === 'running')) throw new Error('本封邮件正在处理，请稍后再试');
+      task.runs.unshift(createEmailRun(task, scenario));
+      persistMailboxTasks(this.tasks);
     },
     resolveAction(taskId: string, runId: string, send: boolean) {
       const run = this.tasks.find((task) => task.id === taskId)?.runs.find((item) => item.id === runId);
@@ -260,6 +320,7 @@ export const useAgentDailyTasks = defineStore('agentDailyTasks', {
     },
     tick(now = Date.now()) {
       this.now = now;
+      let mailboxChanged = false;
       for (const runtime of Object.values(this.projects as Record<string, ProjectTaskRuntime>)) {
         if (!runtime.connected || !runtime.orders.length) continue;
         for (const monitor of runtime.monitors) {
@@ -276,15 +337,20 @@ export const useAgentDailyTasks = defineStore('agentDailyTasks', {
       for (const task of this.tasks) {
         const runtime = this.projects[task.projectId];
         if (!runtime && task.trigger === 'event') continue;
-        if (task.enabled && task.trigger === 'schedule' && task.time === time && task.lastScheduledDay !== day && !this.unavailableReason(task)) {
+        const intervalDue = task.taskTemplate === 'smart-order-entry' && now - (task.lastScheduledAt ?? 0) >= (task.intervalMinutes ?? 10) * 60000;
+        const dailyDue = task.taskTemplate !== 'smart-order-entry' && task.taskTemplate !== 'email-order' && task.time === time && task.lastScheduledDay !== day;
+        if (task.enabled && task.trigger === 'schedule' && (intervalDue || dailyDue) && !this.unavailableReason(task) && !task.runs.some((run) => run.status === 'running')) {
           task.lastScheduledDay = day;
+          task.lastScheduledAt = now;
           task.runs.unshift(makeRun(task, runtime, 'schedule'));
         }
         for (const run of task.runs) {
           if (run.status !== 'running' || now < run.nextStepAt) continue;
           run.activeStep++;
-          run.nextStepAt = now + (task.trigger === 'once' ? ordinaryStepDelay() : stepDelay());
+          if (run.emailOrder) mailboxChanged = true;
+          run.nextStepAt = now + (run.emailOrder ? emailDemoStepDelay : task.trigger === 'once' ? ordinaryStepDelay() : stepDelay());
           if (run.activeStep < run.steps.length) continue;
+          if (run.emailOrder) { completeEmailRun(run, now); continue; }
           if (task.trigger === 'once') {
             this.receiveOrdinaryResult(task.id, run.toolJobId!, ordinaryTaskResult(task, run));
             continue;
@@ -296,11 +362,18 @@ export const useAgentDailyTasks = defineStore('agentDailyTasks', {
             run.result = `${run.event?.order.id ?? '项目运单'}：已完成事件核验与${run.action.channel}内容生成。${task.confirmBeforeSend ? '等待确认发送。' : '发送成功（演示回执）。'}`;
           } else {
             run.status = 'complete';
-            const summary = run.event ? `${run.event.order.id} · ${run.event.order.plate}\n${run.event.detail}` : runtime ? `本项目 ${runtime.total} 条运单已完成汇总，近期产生 ${runtime.events.length} 条运单事件。` : '个人定时任务已按计划执行，本次未读取任何项目运单或条件事件数据。';
-            run.result = `${summary}\n已按指令“${run.prompt}”完成处理。${run.event?.type === 'unloading-end' ? '卸货结束节点已归档。' : runtime ? '建议优先复核未闭环异常，并持续关注在途状态变化。' : '结果已写入本任务，可继续在会话中处理。'}`;
+            if (task.taskTemplate === 'smart-order-entry') {
+              const sourceNames = (task.sourceDataEmployeeIds ?? []).map((id) => dataEmployeeNames[id] ?? id).join('、');
+              const targetName = dataEmployeeNames[task.targetDataEmployeeId ?? ''] ?? task.targetDataEmployeeId ?? '目标系统';
+              run.result = `本轮智能录单已完成。\n数据源：${sourceNames}\n目标系统：${targetName}\n发现 22 条记录：新增 18 条、变更 4 条。\n录入成功 19 条；重复跳过 2 条；地址冲突 1 条进入待处理队列。\n目标系统回执已核验，未发生重复录单。`;
+            } else {
+              const summary = run.event ? `${run.event.order.id} · ${run.event.order.plate}\n${run.event.detail}` : runtime ? `本项目 ${runtime.total} 条运单已完成汇总，近期产生 ${runtime.events.length} 条运单事件。` : '个人定时任务已按计划执行，本次未读取任何项目运单或条件事件数据。';
+              run.result = `${summary}\n已按指令“${run.prompt}”完成处理。${run.event?.type === 'unloading-end' ? '卸货结束节点已归档。' : runtime ? '建议优先复核未闭环异常，并持续关注在途状态变化。' : '结果已写入本任务，可继续在会话中处理。'}`;
+            }
           }
         }
       }
+      if (mailboxChanged) persistMailboxTasks(this.tasks);
     },
   },
 });

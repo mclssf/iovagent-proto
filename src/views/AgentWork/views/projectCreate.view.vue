@@ -8,6 +8,8 @@ import { ElMessage } from 'element-plus';
 import AppDialog from '@/components/AppDialog.vue';
 
 import { agentWorkData } from '@/pinia/agentWork';
+import { createProjectMailbox, emailDemoMailbox, mailboxSkill } from '@/pinia/projectMailboxes';
+import type { ProjectMailbox } from '../interface';
 
 import { strokeIconPaths } from '../strokeIconPaths';
 import { useAgentWorkNav } from '../useAgentWorkNav';
@@ -46,6 +48,7 @@ const activeTab = ref<SkillTab>('all');
 const selectedDataSkillIds = ref<string[]>([]);
 const selectedLogisticsSkillIds = ref<string[]>([...defaultLogisticsSkillIds]);
 const selectedOperationsSkillIds = ref<string[]>([]);
+const mailboxDraft = ref<ProjectMailbox | null>(null);
 const selectedCapacitySkillIds = ref<string[]>([]);
 const selectedAnalysisSkillIds = ref<string[]>([]);
 const authorizedSkillIds = ref<string[]>([]);
@@ -219,6 +222,12 @@ const skills: ProjectSkill[] = [
     icon: strokeIconPaths.filePen,
   },
   {
+    ...mailboxSkill,
+    type: 'operations',
+    usage: '需连接',
+    icon: strokeIconPaths.messageText,
+  },
+  {
     id: 'operations-logistics-sheet',
     name: '物流表格',
     type: 'operations',
@@ -346,6 +355,7 @@ function getProjectSkillIds() {
 
 function initializeProjectForm() {
   const project = editingProject.value;
+  mailboxDraft.value = project?.mailbox ? { ...project.mailbox } : null;
   if (!project && editingProjectId.value) {
     ElMessage.warning('未找到需要编辑的项目');
     goPage('projects');
@@ -405,6 +415,7 @@ function skillAvatarClass(skill: ProjectSkill) {
 }
 
 function toggleSkill(skill: ProjectSkill) {
+  if (skill.id === mailboxSkill.id) return;
   if (isSkillConnecting(skill) || requiredMonitorSkillIds.includes(skill.id)) return;
   if (skill.type === 'data') {
     if (selectedDataSkillIds.value.includes(skill.id)) {
@@ -586,6 +597,18 @@ function cancelCreate() {
   goPage('projects');
 }
 
+function bindMailbox() {
+  mailboxDraft.value = createProjectMailbox();
+  selectedOperationsSkillIds.value = [...new Set([...selectedOperationsSkillIds.value, mailboxSkill.id])];
+}
+
+function viewMailboxTask() {
+  const project = editingProject.value;
+  if (!project?.mailbox) return;
+  store.switchProject(project);
+  goPage('dailyTasks', { projectId: project.id, taskId: `email-order-${project.id}` });
+}
+
 function goNext() {
   const cleanName = projectName.value.trim();
   if (!cleanName) {
@@ -599,9 +622,9 @@ function goNext() {
   const skillNames = selectedSkills.value.map((skill) => skill.name);
   const skillIds = selectedSkills.value.map((skill) => skill.id);
   if (editingProject.value) {
-    store.updateSkillProject(editingProject.value.id, cleanName, skillNames, skillIds);
+    store.updateSkillProject(editingProject.value.id, cleanName, skillNames, skillIds, mailboxDraft.value ?? undefined);
   } else {
-    store.addSkillProject(cleanName, skillNames, skillIds);
+    store.addSkillProject(cleanName, skillNames, skillIds, mailboxDraft.value ?? undefined);
   }
   goPage('projects');
 }
@@ -643,7 +666,7 @@ onBeforeUnmount(() => {
           {{ projectNameLength }}/{{ maxProjectNameLength }}
         </span>
       </div>
-      <div v-if="editingProject" class="mt-3 grid grid-cols-4 gap-2 rounded-md border border-[#deded9] bg-[#fbfbfa] p-2">
+      <div v-if="editingProject" class="mt-3 grid grid-cols-2 gap-2 rounded-md border border-[#deded9] bg-[#fbfbfa] p-2 sm:grid-cols-4">
         <div class="rounded-md bg-white px-3 py-2">
           <div class="text-[11px] leading-4 text-slate-500">当前连接状态</div>
           <span class="mt-1 inline-flex rounded-md border px-2 py-0.5 text-xs font-medium" :class="badgeToneClass(projectStatusTone(editingProject.status))">
@@ -691,9 +714,34 @@ onBeforeUnmount(() => {
 
       <div class="min-h-0 flex-1 overflow-y-auto p-5 pt-4">
         <div v-if="filteredSkills.length" class="grid grid-cols-1 gap-3 lg:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
+          <template v-for="skill in filteredSkills" :key="skill.id">
+          <article
+            v-if="skill.id === mailboxSkill.id"
+            aria-label="邮箱连接"
+            class="flex min-h-[172px] min-w-0 flex-col rounded-lg border bg-white p-4 text-left shadow-sm"
+            :class="mailboxDraft ? 'border-slate-900 shadow-[0_0_0_1px_rgba(15,23,42,0.85)]' : 'border-[#deded9]'"
+          >
+            <div class="flex items-start justify-between gap-3">
+              <div class="flex min-w-0 items-start gap-3">
+                <span class="flex h-10 w-10 shrink-0 items-center justify-center rounded-full" :class="skillAvatarClass(skill)">
+                  <Icon :svg="skill.icon" :size="17" />
+                </span>
+                <div><h3 class="text-sm font-semibold leading-5 text-slate-950">{{ skill.name }}</h3><p class="mt-1 text-xs leading-4 text-slate-500">运营助手</p></div>
+              </div>
+              <span v-if="mailboxDraft" class="shrink-0 rounded-md bg-emerald-50 px-2 py-1 text-xs font-medium text-emerald-700">已绑定</span>
+              <span v-else class="shrink-0 rounded-md bg-[#f1f1ef] px-2 py-1 text-xs font-medium text-slate-600">未绑定</span>
+            </div>
+            <p class="mt-4 text-xs leading-6 text-slate-600">{{ skill.description }}</p>
+            <p class="mt-2 break-all text-sm font-medium text-slate-900">{{ mailboxDraft?.address ?? emailDemoMailbox }}</p>
+            <p class="mt-1 text-xs leading-5 text-slate-500">演示邮箱 · 模拟收件与回复</p>
+            <div class="mt-auto flex items-center justify-between gap-3 pt-3">
+              <span class="text-xs leading-5 text-slate-500">{{ mailboxDraft && !editingProject?.mailbox ? '点击完成，保存绑定并创建任务' : mailboxDraft ? '已关联邮件处理订单' : '绑定后自动创建邮件处理订单任务' }}</span>
+              <button v-if="!mailboxDraft" type="button" class="shrink-0 rounded-md bg-slate-900 px-3 py-1.5 text-xs font-medium text-white hover:bg-slate-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-slate-900" @click="bindMailbox">绑定邮箱</button>
+              <button v-else type="button" :disabled="!editingProject?.mailbox" class="shrink-0 rounded-md border border-[#deded9] px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-[#f7f7f5] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-slate-900 disabled:cursor-default disabled:opacity-50" @click="viewMailboxTask">查看任务</button>
+            </div>
+          </article>
           <button
-            v-for="skill in filteredSkills"
-            :key="skill.id"
+            v-else
             type="button"
             class="group flex min-h-[172px] flex-col rounded-lg border bg-white p-4 text-left shadow-sm transition"
             :class="
@@ -748,6 +796,7 @@ onBeforeUnmount(() => {
               </span>
             </div>
           </button>
+          </template>
         </div>
         <div v-else class="flex h-full min-h-[220px] flex-col items-center justify-center text-center">
           <span class="flex h-10 w-10 items-center justify-center rounded-full bg-white text-slate-400 shadow-sm">
@@ -763,7 +812,7 @@ onBeforeUnmount(() => {
         </div>
         <button
           type="button"
-          class="rounded-md px-4 py-2 text-sm font-medium transition"
+          class="shrink-0 whitespace-nowrap rounded-md px-4 py-2 text-sm font-medium transition"
           :class="canGoNext ? 'bg-slate-900 text-white hover:bg-slate-800' : 'cursor-not-allowed bg-slate-200 text-slate-400'"
           :disabled="!canGoNext"
           @click="goNext"
