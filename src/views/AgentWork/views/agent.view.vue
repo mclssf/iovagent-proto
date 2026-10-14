@@ -10,6 +10,8 @@ import { agentWorkData, quickPrompts, rightPanelTabs } from '@/pinia/agentWork';
 import { useAgentDailyTasks } from '@/pinia/agentDailyTasks';
 import { convertGpsCoordinates, loadAMap, searchDrivingRoute, type AMapCoordinate } from '@/utils/amap';
 import { taskRunLabels } from '../dailyTasks';
+import { readTaskAttachments, isTaskExcel } from '../ordinaryTasks';
+import { ElMessage } from 'element-plus';
 
 import { getRiskOrders, badgeToneClass } from '../utils';
 import { strokeIconPaths } from '../strokeIconPaths';
@@ -21,6 +23,7 @@ import '../agentWorkspace.css';
 
 const store = agentWorkData();
 const dailyTasks = useAgentDailyTasks();
+const hasTaskRail = computed(() => store.workspaceMode === 'project' || dailyTasks.tasks.some(task => !task.projectId && ['ready', 'running', 'stopping'].includes(task.runs[0]?.status ?? '')));
 const ordinaryTask = (id: string) => dailyTasks.tasks.find((task) => task.id === id);
 function openOrdinaryTask(id: string) {
   const task = ordinaryTask(id);
@@ -153,6 +156,8 @@ const modelSelectRef = ref<HTMLDivElement | null>(null);
 const fileInputRef = ref<HTMLInputElement | null>(null);
 const composerTextareaRef = ref<HTMLTextAreaElement | null>(null);
 const uploadedFiles = ref<File[]>([]);
+const readingAttachments = ref(false);
+let attachmentReadGeneration = 0;
 const isFileDragActive = ref(false);
 const isRightPanelVisible = ref(false);
 const filePickerPurpose = ref<'excel' | 'regular' | 'waybill'>('regular');
@@ -355,7 +360,8 @@ function confirmWaybillImport(payload: { mode: 'create' | 'merge'; projectId: st
   pendingWaybillImport.value = null;
 }
 
-function sendComposerMessage() {
+async function sendComposerMessage() {
+  if (readingAttachments.value) return;
   const text = agentInput.value.trim();
   if (!text && uploadedFiles.value.length === 0) return;
   isFollowingLatest.value = true;
@@ -368,7 +374,17 @@ function sendComposerMessage() {
       return;
     }
     const attachmentText = `附件：${uploadedFiles.value.map((file) => file.name).join('、')}`;
-    sendAgent(text ? `${text}\n${attachmentText}` : attachmentText, uploadedFiles.value);
+    const readGeneration = ++attachmentReadGeneration;
+    const context = `${store.workspaceMode}:${store.currentProjectId}:${store.currentConversationId}`;
+    readingAttachments.value = true;
+    try {
+      const files = [...uploadedFiles.value];
+      const excel = await readTaskAttachments(files.filter(isTaskExcel));
+      if (readGeneration !== attachmentReadGeneration || context !== `${store.workspaceMode}:${store.currentProjectId}:${store.currentConversationId}`) return;
+      const attachments = files.map(file => excel.find(item => item.name === file.name && item.size === file.size && item.lastModified === file.lastModified) ?? { name: file.name, size: file.size, type: file.type, lastModified: file.lastModified });
+      await sendAgent(text ? `${text}\n${attachmentText}` : attachmentText, attachments);
+    } catch (error) { ElMessage.warning((error as Error).message); return; }
+    finally { readingAttachments.value = false; }
     uploadedFiles.value = [];
     agentInput.value = '';
     return;
@@ -785,6 +801,7 @@ watch(isRightPanelVisible, (visible) => {
 });
 
 onBeforeUnmount(() => {
+  attachmentReadGeneration++;
   document.removeEventListener('click', closeComposerMenusOnOutside);
   document.removeEventListener('keydown', closeTaskCardOnEscape);
   conversationResizeObserver?.disconnect();
@@ -794,7 +811,7 @@ onBeforeUnmount(() => {
 
 <template>
   <div class="agent-workspace" :class="{ 'has-h5': isRightPanelRendered }">
-    <div class="agent-conversation-pane" :class="{ 'has-project': store.workspaceMode === 'project' }">
+    <div class="agent-conversation-pane" :class="{ 'has-project': hasTaskRail }">
       <div class="agent-workspace-header flex h-12 shrink-0 items-center justify-between gap-4 border-b border-[#eeeeec] bg-[#fcfcfc] px-4">
         <div class="flex min-w-0 items-center gap-2.5">
           <div class="flex h-7 w-7 items-center justify-center rounded-md bg-[#f2f2ef] text-slate-700">
@@ -805,8 +822,8 @@ onBeforeUnmount(() => {
           </div>
         </div>
         <div class="flex shrink-0 items-center gap-2">
-        <button v-if="store.workspaceMode === 'project'" ref="taskToggleRef" type="button" class="agent-task-toggle" aria-label="持续任务" title="持续任务" :aria-expanded="isTaskCardOpen" aria-controls="project-task-card" @click="isTaskCardOpen = !isTaskCardOpen">
-          <Icon :svg="strokeIconPaths.alarmClock" :size="15" /><span>持续任务</span>
+        <button v-if="hasTaskRail" ref="taskToggleRef" type="button" class="agent-task-toggle" aria-label="任务执行" title="任务执行" :aria-expanded="isTaskCardOpen" aria-controls="project-task-card" @click="isTaskCardOpen = !isTaskCardOpen">
+          <Icon :svg="strokeIconPaths.file" :size="15" /><span>任务执行</span>
         </button>
         <button
           v-if="isDynamicRightPanel"
@@ -1085,17 +1102,19 @@ onBeforeUnmount(() => {
                 type="button"
                 class="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-slate-900 text-white shadow-sm transition hover:bg-slate-800"
                 aria-label="发送"
+                :disabled="readingAttachments"
+                :aria-busy="readingAttachments"
                 @click="sendComposerMessage"
               >
-                <Icon :svg="strokeIconPaths.arrowUp" :size="18" />
+                <Icon :svg="readingAttachments ? strokeIconPaths.refresh : strokeIconPaths.arrowUp" :size="18" :svg-class="readingAttachments ? 'animate-spin' : ''" />
               </button>
             </div>
           </div>
         </div>
       </div>
       </div>
-      <aside v-if="store.workspaceMode === 'project'" id="project-task-card" ref="taskRailRef" class="agent-task-rail" :class="{ 'is-open': isTaskCardOpen }" aria-label="项目持续任务">
-        <ProjectMonitors :key="store.currentProjectId" :project-id="store.currentProjectId" />
+      <aside v-if="hasTaskRail" id="project-task-card" ref="taskRailRef" class="agent-task-rail" :class="{ 'is-open': isTaskCardOpen }" aria-label="任务执行">
+        <ProjectMonitors :key="store.workspaceMode + store.currentProjectId" :project-id="store.workspaceMode === 'project' ? store.currentProjectId : ''" />
       </aside>
       </div>
     </div>

@@ -9,7 +9,6 @@ import { ElMessage, ElMessageBox } from 'element-plus';
 import { storeToRefs } from 'pinia';
 
 import { agentWorkData } from '@/pinia/agentWork';
-import { useAgentDailyTasks } from '@/pinia/agentDailyTasks';
 import { removeToken } from '@/utils/auth';
 
 import { strokeIconPaths } from '../strokeIconPaths';
@@ -17,7 +16,6 @@ import { agentWorkRouteName } from '../useAgentWorkNav';
 import { badgeToneClass, projectStatusTone } from '../utils';
 
 const store = agentWorkData();
-const dailyTasks = useAgentDailyTasks();
 const { projects, recentConversations } = storeToRefs(store);
 const route = useRoute();
 const router = useRouter();
@@ -33,15 +31,10 @@ const currentUserName = computed(
 );
 
 const publicNavs: { icon: string; id: PageId; label: string }[] = [
-  { id: 'dailyTasks', label: '做任务', icon: strokeIconPaths.alarmClock },
+  { id: 'dailyTasks', label: '做任务', icon: strokeIconPaths.file },
   { id: 'knowledgeBase', label: '我的知识库', icon: strokeIconPaths.book },
   { id: 'downloads', label: '下载', icon: strokeIconPaths.download },
 ];
-const personalTaskUnreadCount = computed(() =>
-  dailyTasks.tasks
-    .filter((task) => !task.projectId)
-    .reduce((total, task) => total + (dailyTasks.unreadResultsByTask[task.id] ?? 0), 0),
-);
 
 interface KnowledgeBaseConversationCase {
   icon: string;
@@ -307,7 +300,7 @@ const sidebarConversations = computed(() => [
 
 const projectNavs: { icon: string; id: PageId; label: string }[] = [
   { id: 'agent', label: '智能体工作台', icon: strokeIconPaths.bot },
-  { id: 'dailyTasks', label: '做任务', icon: strokeIconPaths.alarmClock },
+  { id: 'dailyTasks', label: '做任务', icon: strokeIconPaths.file },
   { id: 'orders', label: '运单列表', icon: strokeIconPaths.list },
   { id: 'risk', label: '异常运单列表', icon: strokeIconPaths.shield },
   { id: 'detail', label: '运单详情与地图', icon: strokeIconPaths.map },
@@ -503,7 +496,6 @@ function logout() {
         >
           <Icon :svg="item.icon" :size="16" />
           {{ item.label }}
-          <span v-if="item.id === 'dailyTasks' && personalTaskUnreadCount" class="ml-auto inline-flex h-[18px] min-w-[18px] shrink-0 items-center justify-center rounded-full bg-[#2563eb] px-1 text-[10px] leading-none text-white tabular-nums" :aria-label="`${personalTaskUnreadCount} 条未读结果`">{{ personalTaskUnreadCount }}</span>
         </button>
       </nav>
 
@@ -637,7 +629,6 @@ function logout() {
               >
                 <Icon :svg="item.icon" :size="14" />
                 {{ item.label }}
-                <span v-if="item.id === 'dailyTasks' && dailyTasks.unreadResultsByProject[project.id]" class="ml-auto inline-flex h-[18px] min-w-[18px] shrink-0 items-center justify-center rounded-full bg-[#2563eb] px-1 text-[10px] leading-none text-white tabular-nums" :aria-label="`${dailyTasks.unreadResultsByProject[project.id]} 条未读结果`">{{ dailyTasks.unreadResultsByProject[project.id] }}</span>
               </button>
             </div>
           </div>

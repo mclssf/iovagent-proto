@@ -51,7 +51,7 @@ export function useAgentWorkNav() {
   }
 
   function sendAgent(text?: string, attachments?: TaskAttachment[]) {
-    store.appendAgentExchange(text, goPage, attachments);
+    return store.appendAgentExchange(text, goPage, attachments);
   }
 
   return { goPage, openOrderDetail, createDownload, sendAgent };

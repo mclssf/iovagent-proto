@@ -24,9 +24,11 @@ import { extractMcpPrompt, runMcpPrompt } from '@/views/AgentWork/mcpClient';
 import { getRiskOrders, summarizeOrders } from '@/views/AgentWork/utils';
 import { ensureRequiredMonitorSkills } from '@/views/AgentWork/dailyTasks';
 import type { TaskAttachment } from '@/views/AgentWork/dailyTasks';
-import { resolveAsyncTool, extractTaskPlates } from '@/views/AgentWork/ordinaryTasks';
+import { resolveAsyncTool, extractTaskPlates, planWorkbenchExcelTask } from '@/views/AgentWork/ordinaryTasks';
+import { excelParsingSkill } from '@/views/AgentWork/ordinaryTaskSkills';
 import { useAgentDailyTasks } from './agentDailyTasks';
 import { createProjectMailbox, mailboxSkill, persistMailboxProjects, restoreMailboxProjects } from './projectMailboxes';
+import { restoreOrdinaryTaskProjects } from './ordinaryTaskPersistence';
 
 const defaultOrdersDateRange = {
   start: '2026-05-09',
@@ -1427,7 +1429,7 @@ export const agentWorkData = defineStore('agentWork', {
     return {
       ordersStartDate: defaultOrdersDateRange.start,
       ordersEndDate: defaultOrdersDateRange.end,
-      projects: restoreMailboxProjects(projectsSeed).map((project) => ({ ...project, skillIds: ensureRequiredMonitorSkills(migrateCapacitySkillIds(project.skillIds ?? [])) })) as Project[],
+      projects: restoreOrdinaryTaskProjects(restoreMailboxProjects(projectsSeed)).map((project) => ({ ...project, skillIds: ensureRequiredMonitorSkills(migrateCapacitySkillIds(project.skillIds ?? [])) })) as Project[],
       recentConversations: conversationSeeds.map((conversation) => ({
         ...conversation,
         messages: conversation.messages.map((message) => ({ ...message })),
@@ -2131,15 +2133,45 @@ export const agentWorkData = defineStore('agentWork', {
       const isPlateAnswer = /^(?:车牌(?:号)?[是为：:\s]*)?[京津沪渝冀豫云辽黑湘皖鲁新苏浙赣鄂桂甘晋蒙陕吉闽贵粤青藏川宁琼][A-Z][A-Z0-9]{5,6}$/i.test(inputPrompt);
       const asyncPrompt = pendingPrompt && (isPlateAnswer || (attachments.length && /^附件：/.test(inputPrompt))) ? `${pendingPrompt}\n${isPlateAnswer ? inputPrompt : ''}` : inputPrompt;
       const asyncTool = resolveAsyncTool(asyncPrompt);
+      const invalidExcel = attachments.find(file => file.parseError);
+      if (invalidExcel) {
+        this.agentMessages = [...next, { role: 'agent', text: `“${invalidExcel.name}”无法处理：${invalidExcel.parseError}。请检查文件后重新上传。` }];
+        this.agentInput = '';
+        return;
+      }
+      const agentDecision = planWorkbenchExcelTask(attachments);
+      if (agentDecision) {
+        const prompt = asyncPrompt.startsWith('附件：') ? '分析上传的运单表格，生成处理结果及执行报告。' : asyncPrompt;
+        const historicalCount = agentDecision.historicalIndexes.length;
+        const count = agentDecision.waybillRows;
+        const projectId = this.workspaceMode === 'project' ? this.currentProjectId : '';
+        const conversationId = this.workspaceMode === 'conversation' ? this.currentConversationId : undefined;
+        this.startDelayedAgentProcess(next, {
+          role: 'agent', title: historicalCount ? '识别历史运单处理任务' : '识别批量运单处理任务', progressMode: true, text: '正在调用 Excel 解析 Skill，检查运单时间与处理数量。',
+          steps: [
+            { title: '调用 Excel 解析 Skill', text: `加载 ${excelParsingSkill.name} v${excelParsingSkill.version}，解析 ${attachments.length} 个 Excel 文件的字段与实际数据行，识别运单号、车牌号及运单开始时间。处理要求：${prompt}`, skill: excelParsingSkill.name },
+            { title: historicalCount ? '识别历史运单' : '识别运单处理规模', text: `剔除表头与空白行后共 ${agentDecision.totalRows} 条数据，识别 ${count} 条运单；${historicalCount ? `其中 ${historicalCount} 条运单时间超过 180 天。` : `未发现超过 180 天的有效运单时间；${count} > ${agentDecision.thresholdRows}，超过批量阈值。`}${agentDecision.invalidTimeRows ? `${agentDecision.invalidTimeRows} 条运单时间缺失或无效，不将其判为历史运单。` : ''}` },
+            ...(historicalCount ? [{ title: 'Agent 判断处理接口', text: `为 ${historicalCount} 条超过 180 天的运单选择历史业务质量分析接口，其他运单使用常规处理能力。${count > agentDecision.thresholdRows ? `同时 ${count} > ${agentDecision.thresholdRows}，满足批量任务条件。` : '即使未超过 100 条，也需建立普通任务等待异步结果。'}此判断已在工作台完成，任务中沿用该方案。`, skill: '历史业务质量分析接口' }] : []),
+            { title: '创建普通任务', text: '保留原始提示词、输入记录和会话来源，创建一次性执行任务。' },
+          ], result: historicalCount ? `发现 ${historicalCount} 条超过 180 天的运单，已确定使用历史业务质量分析接口并创建普通任务。` : `解析到 ${count} 条运单，超过 ${agentDecision.thresholdRows} 条，已创建普通任务。`,
+        }, () => {
+          try {
+            const id = useAgentDailyTasks().saveTask(projectId, { name: '', trigger: 'once', prompt, attachments }, undefined, { origin: 'workbench', conversationId, agentDecision });
+            this.agentMessages = [...this.agentMessages, { role: 'agent', text: '已自动创建普通任务，开始批量处理。任务结果与文件包会保存在“做任务”和“下载”，你可以继续当前对话。', dailyTaskId: id }];
+          } catch (error) { this.agentMessages = [...this.agentMessages, { role: 'agent', text: `普通任务未创建：${(error as Error).message}` }]; }
+        });
+        this.agentInput = '';
+        return;
+      }
       if (asyncTool) {
         if (!extractTaskPlates(asyncPrompt).length && !attachments.length) {
           this.agentMessages = [...next, { role: 'agent', text: `查询 ${asyncTool.date} 的历史轨迹需要调用异步归档工具。请补充车牌号，或上传包含车牌号的文件，我会创建普通任务执行一次。`, pendingAsyncPrompt: asyncPrompt }];
         } else {
           try {
             const taskId = useAgentDailyTasks().saveTask(this.workspaceMode === 'project' ? this.currentProjectId : '', {
-              name: '', trigger: 'once', eventType: 'parking', threshold: 30, fenceId: '', time: '18:00', prompt: asyncPrompt, confirmBeforeSend: true, attachments,
+              name: '', trigger: 'once', prompt: asyncPrompt, attachments,
             }, undefined, { origin: 'workbench', conversationId: this.workspaceMode === 'conversation' ? this.currentConversationId : undefined });
-            this.agentMessages = [...next, { role: 'agent', text: `已识别需要调用“${asyncTool.name}”异步工具，已创建普通任务，仅执行一次。\n任务将独立处理，完成后的文字结果和下载文件会出现在任务运行事件中，你可以继续当前对话。`, dailyTaskId: taskId }];
+            this.agentMessages = [...next, { role: 'agent', text: `已识别需要调用“${asyncTool.name}”异步工具，已创建普通任务。\n文字结果和文件包将保存在“做任务”与“下载”，你可以继续当前对话。`, dailyTaskId: taskId }];
           } catch (error) {
             this.agentMessages = [...next, { role: 'agent', text: `普通任务未创建：${(error as Error).message}。` }];
           }

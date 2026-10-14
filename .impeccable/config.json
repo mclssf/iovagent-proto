@@ -1,0 +1,17 @@
+{
+  "detector": {
+    "ignoreRules": [],
+    "ignoreFiles": [],
+    "ignoreValues": [
+      {
+        "rule": "gray-on-color",
+        "value": "*",
+        "files": [
+          "src/views/AgentWork/views/agent.view.vue"
+        ],
+        "createdAt": "2026-10-13T09:54:49.448Z",
+        "reason": "Assistant verified existing conditional color states: red background always uses white text; neutral slate background uses slate text. Detector merges mutually exclusive branches."
+      }
+    ]
+  }
+}

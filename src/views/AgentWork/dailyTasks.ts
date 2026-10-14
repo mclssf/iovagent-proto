@@ -1,4 +1,4 @@
-import type { EmailOrderResult, Order } from './interface';
+import type { EmailOrderResult, Order, Project, ProjectMailbox } from './interface';
 
 export type MonitorId = 'loading' | 'unloading' | 'parking' | 'offline' | 'deviation' | 'fence';
 export type WaybillPhase = '装货前' | '装货开始' | '装货结束' | '行程在途' | '卸货开始' | '卸货结束';
@@ -69,17 +69,8 @@ export interface WaybillEvent {
 
 export interface DailyTaskDraft {
   name: string;
-  trigger: 'once' | 'event' | 'schedule';
-  taskTemplate?: 'general' | 'smart-order-entry' | 'email-order';
-  eventType: EventType;
-  threshold: number;
-  fenceId: string;
-  time: string;
-  intervalMinutes?: number;
-  sourceDataEmployeeIds?: string[];
-  targetDataEmployeeId?: string;
+  trigger: 'once';
   prompt: string;
-  confirmBeforeSend: boolean;
   attachments?: TaskAttachment[];
 }
 
@@ -88,48 +79,70 @@ export interface TaskAttachment {
   size: number;
   type: string;
   lastModified: number;
+  rowCount?: number;
+  records?: Record<string, string>[];
+  parseError?: string;
 }
 
 export interface TaskResultFile {
   name: string;
   mimeType: string;
   content: string;
+  encoding?: 'base64';
+  size?: number;
+  detail?: boolean;
 }
 
-export interface DailyTask extends DailyTaskDraft {
+export interface TaskAgentDecision {
+  reason: 'historical-waybills' | 'large-batch';
+  decidedAt: number;
+  totalRows: number;
+  waybillRows: number;
+  historicalIndexes: number[];
+  invalidTimeRows: number;
+  thresholdRows: number;
+  archiveAgeDays: number;
+}
+
+export interface DailyTask extends Omit<DailyTaskDraft, 'trigger'> {
+  trigger: 'once' | 'email';
+  taskTemplate?: 'email-order';
+  mailbox?: ProjectMailbox;
+  enabled?: boolean;
+  agentDecision?: TaskAgentDecision;
   id: string;
   projectId: string;
-  enabled: boolean;
+  projectContext?: Pick<Project, 'id' | 'name' | 'status' | 'sync' | 'total' | 'risk' | 'keyword' | 'statusFilter' | 'skillIds'>;
   createdAt: number;
-  lastScheduledDay: string;
-  lastScheduledAt?: number;
   runs: TaskRun[];
   origin?: 'manual' | 'workbench';
   conversationId?: string;
-  mailbox?: { address: string; status: 'bound' };
 }
 
 export interface TaskRun {
   id: string;
   startedAt: number;
   finishedAt?: number;
-  source: 'event' | 'schedule' | 'test' | 'manual' | 'workbench' | 'email';
-  status: 'running' | 'waiting' | 'complete' | 'cancelled';
-  event?: WaybillEvent;
+  source: 'manual' | 'workbench' | 'email';
+  status: 'ready' | 'running' | 'stopping' | 'stopped' | 'complete' | 'partial' | 'failed';
   prompt: string;
   steps: { title: string; text: string; tool?: string }[];
   activeStep: number;
   nextStepAt: number;
   result: string;
-  readAt?: number;
   toolJobId?: string;
   files?: TaskResultFile[];
   emailOrder?: EmailOrderResult;
-  action?: { channel: '短信' | '邮件'; recipient: string; content: string; status: 'pending' | 'sent' | 'cancelled' };
+  executionMode?: 'prompt' | 'skill';
+  skills?: { id: string; name: string; version: string; description: string; status: 'loading' | 'running' | 'success' | 'failed' | 'stopped' }[];
+  progress?: { total: number; processed: number; success: number; failed: number };
+  error?: string;
+  stoppedAt?: number;
 }
 
 export interface ProjectTaskRuntime {
   projectId: string;
+  projectContext?: DailyTask['projectContext'];
   connected: boolean;
   total: number;
   skillIds: string[];
@@ -153,29 +166,20 @@ export function createMonitoredOrders(orders: Order[]): MonitoredOrder[] {
 export const eventLabel = (type: EventType) => eventDefinitions.find((event) => event.id === type)?.name ?? type;
 export const isThresholdEvent = (type: EventType) => ['parking', 'offline', 'deviation'].includes(type);
 
-export function triggerLabel(task: DailyTaskDraft, fences: ProjectFence[] = []) {
-  if (task.taskTemplate === 'email-order') return '持续监听邮箱 · 收到订单邮件后自动处理';
-  if (task.trigger === 'once') return '普通任务 · 提交后执行一次';
-  if (task.trigger === 'schedule' && task.taskTemplate === 'smart-order-entry') return `每 ${task.intervalMinutes ?? 10} 分钟 · 智能录单`;
-  if (task.trigger === 'schedule') return `每天 ${task.time}`;
-  const threshold = isThresholdEvent(task.eventType) ? ` ≥ ${task.threshold} ${task.eventType === 'deviation' ? '公里' : '分钟'}` : '';
-  const fence = task.eventType.startsWith('fence-') ? ` · ${fences.find((item) => item.id === task.fenceId)?.name ?? '未配置围栏'}` : '';
-  return `${eventLabel(task.eventType)}${threshold}${fence}`;
-}
+export const triggerLabel = (task: { trigger: DailyTask['trigger'] }) => task.trigger === 'email' ? '邮件任务 · 持续监听邮箱' : '普通任务 · 一次性执行';
 
-export const taskTypeLabels = { once: '普通任务', event: '条件触发', schedule: '定时 / 持续' };
-export const taskRunLabels: Record<TaskRun['status'], string> = { running: '执行中', waiting: '待确认', complete: '已完成', cancelled: '已取消' };
-
-export type DailyTaskStatus = 'complete' | 'running' | 'paused';
-export const taskStatusLabels: Record<DailyTaskStatus, string> = { complete: '已完成', running: '执行中', paused: '已暂停' };
+export const taskTypeLabels = { once: '普通任务' };
+export type DailyTaskStatus = TaskRun['status'] | 'paused';
+export const taskStatusLabels: Record<DailyTaskStatus, string> = { ready: '待开始', running: '运行中', stopping: '停止中', stopped: '已停止', complete: '已完成', partial: '部分完成', failed: '执行失败', paused: '已暂停' };
+export const taskRunLabels = taskStatusLabels;
 
 export function hasTaskResult(run: TaskRun) {
-  return run.status !== 'running' && Boolean(run.result.trim() || run.files?.length);
+  return ['stopped', 'complete', 'partial', 'failed'].includes(run.status) && Boolean(run.result.trim() || run.files?.length);
 }
 
 export function getTaskStatus(task: DailyTask): DailyTaskStatus {
-  if (task.trigger === 'once') return task.runs.some((run) => run.status === 'complete' && hasTaskResult(run)) ? 'complete' : 'running';
-  return task.enabled ? 'running' : 'paused';
+  if (task.trigger === 'email') return task.enabled ? 'running' : 'paused';
+  return task.runs[0]?.status ?? 'ready';
 }
 
 export function formatTaskTime(value: number) {

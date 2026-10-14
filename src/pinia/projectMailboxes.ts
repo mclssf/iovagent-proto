@@ -1,14 +1,12 @@
 import type { Project, ProjectMailbox } from '@/views/AgentWork/interface';
-import type { DailyTask } from '@/views/AgentWork/dailyTasks';
 
 export const mailboxSkill = {
   id: 'operations-email-connection',
   name: '邮箱连接',
-  description: '接收客户订单邮件，识别运输需求并自动回复',
+  description: '接收客户订单邮件，识别运输需求并自动回复。',
 };
 export const emailDemoMailbox = 'orders@iov-demo.example.com';
 const projectsKey = 'iovagent-mailbox-projects-v1';
-const tasksKey = 'iovagent-mailbox-tasks-v1';
 type SavedMailboxProject = Omit<Project, 'tmsUrl' | 'tmsUser'>;
 
 export function createProjectMailbox(): ProjectMailbox {
@@ -48,12 +46,4 @@ export function persistMailboxProjects(projects: Project[]) {
     total: project.total, risk: project.risk, keyword: project.keyword, statusFilter: project.statusFilter,
     skillIds: project.skillIds, mailbox: project.mailbox,
   })));
-}
-
-export function restoreMailboxTasks(): DailyTask[] {
-  return readStoredList<DailyTask>(tasksKey).filter(task => task?.taskTemplate === 'email-order' && typeof task.projectId === 'string' && Array.isArray(task.runs) && task.mailbox?.status === 'bound');
-}
-
-export function persistMailboxTasks(tasks: DailyTask[]) {
-  writeStoredList(tasksKey, tasks.filter(task => task.taskTemplate === 'email-order'));
 }

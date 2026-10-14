@@ -1,0 +1,88 @@
+import assert from 'node:assert/strict';
+import { fileURLToPath } from 'node:url';
+import { createServer } from 'vite';
+import { createPinia, setActivePinia } from 'pinia';
+import { read, utils } from 'xlsx';
+
+const root = fileURLToPath(new URL('../', import.meta.url));
+const server = await createServer({ configFile: false, root, resolve: { alias: { '@': `${root}src` } }, optimizeDeps: { noDiscovery: true, include: [] }, server: { middlewareMode: true, hmr: false, ws: false }, appType: 'custom' });
+const originalNow = Date.now;
+const originalTimeout = globalThis.setTimeout;
+const originalClear = globalThis.clearTimeout;
+const now = Date.parse('2026-10-14T10:00:00+08:00');
+Date.now = () => now;
+const storage = new Map([['iovagent-ordinary-tasks-v2', '[]']]);
+globalThis.window = { localStorage: { getItem: key => storage.get(key) ?? null, setItem: (key, value) => storage.set(key, value) }, matchMedia: () => ({ matches: false }) };
+const day = 86400000;
+const at = days => new Date(now - days * day).toISOString();
+const row = (index, time) => ({ 运单号: `WB-${index}`, 车牌号: `沪A${String(10000 + index)}`, 运单开始时间: time });
+const input = records => [{ name: '运单.xlsx', size: 8192, type: '', lastModified: now, rowCount: records.length, records }];
+
+try {
+  const ordinary = await server.ssrLoadModule('/src/views/AgentWork/ordinaryTasks.ts');
+  const { useAgentDailyTasks } = await server.ssrLoadModule('/src/pinia/agentDailyTasks.ts');
+  const { agentWorkData } = await server.ssrLoadModule('/src/pinia/agentWork.ts');
+  const mixed = input([row(0, at(181)), row(1, at(180)), row(2, at(179)), row(3, '无效日期'), row(4, at(-1))]);
+  const plan = ordinary.planWorkbenchExcelTask(mixed, now);
+  assert.equal(plan.reason, 'historical-waybills');
+  assert.deepEqual(plan.historicalIndexes, [0], 'strictly older than 180 days, not equal to 180 days');
+  assert.equal(plan.invalidTimeRows, 1);
+  assert.equal(ordinary.planWorkbenchExcelTask(input([row(1, at(180)), row(2, at(179))]), now), null);
+  assert.equal(ordinary.parseWaybillTimestamp('2026-02-30 08:00:00'), null);
+  assert.equal(ordinary.parseWaybillTimestamp('2026年4月1日 08:00:00'), Date.parse('2026-04-01T08:00:00+08:00'));
+  assert.equal(ordinary.parseWaybillTimestamp('4/1/26'), Date.parse('2026-04-01T00:00:00+08:00'));
+  assert.equal(ordinary.parseWaybillTimestamp('2026-04-01 25:00:00'), null);
+  const recent = Array.from({ length: 101 }, (_, index) => row(index, at(1)));
+  assert.equal(ordinary.planWorkbenchExcelTask(input(recent.slice(0, 100)), now), null);
+  assert.equal(ordinary.planWorkbenchExcelTask(input(recent), now).reason, 'large-batch');
+  assert.equal(ordinary.planWorkbenchExcelTask(input(recent), now).historicalIndexes.length, 0);
+  assert.equal(ordinary.planWorkbenchExcelTask(input(Array.from({ length: 120 }, () => ({ 产品名: '商品', 数量: '3' }))), now), null, 'do not fabricate waybill semantics for arbitrary spreadsheets');
+
+  setActivePinia(createPinia());
+  const store = useAgentDailyTasks();
+  const work = agentWorkData();
+  store.syncProjects(work.projects, work.ordersSeed);
+  const timers = [];
+  globalThis.setTimeout = callback => { const timer = { callback, cancelled: false }; timers.push(timer); return timer; };
+  globalThis.clearTimeout = timer => { timer.cancelled = true; };
+  work.startNewConversation();
+  await work.appendAgentExchange('帮我处理这些运单并导出报告', () => {}, mixed);
+  const process = work.agentMessages.at(-1);
+  assert.deepEqual(process.steps.map(step => step.title), ['调用 Excel 解析 Skill', '识别历史运单', 'Agent 判断处理接口', '创建普通任务']);
+  assert.match(process.steps[2].text, /1 条超过 180 天/);
+  for (const timer of timers) if (!timer.cancelled) timer.callback();
+  const created = work.agentMessages.find(message => message.dailyTaskId);
+  const task = store.tasks.find(task => task.id === created.dailyTaskId);
+  assert.equal(task.projectId, '');
+  assert.deepEqual(task.agentDecision.historicalIndexes, [0]);
+  assert.equal(task.runs[0].skills[0].name, '历史业务质量分析');
+  assert.equal(task.runs[0].summary, undefined);
+  store.tick(now + 120000);
+  const run = task.runs[0];
+  assert.equal(run.status, 'complete');
+  const reportFile = run.files.find(file => file.name === '执行报告.xlsx');
+  const report = read(ordinary.resultFileBytes(reportFile), { type: 'array' });
+  const reportRows = utils.sheet_to_json(report.Sheets[report.SheetNames[0]]);
+  assert.deepEqual(reportRows.map(row => row.处理接口), ['历史业务质量分析接口', '常规处理工具', '常规处理工具', '常规处理工具', '常规处理工具']);
+  assert.equal(store.resultDownloads.filter(file => file.taskId === task.id).length, 1);
+  const previous = JSON.stringify(task.agentDecision);
+  store.rerunTask(task.id);
+  assert.equal(JSON.stringify(task.agentDecision), previous, 'reruns use the existing Agent decision instead of reclassifying time');
+
+  timers.length = 0;
+  work.startNewConversation();
+  await work.appendAgentExchange('帮我处理这批运单', () => {}, input(recent));
+  const batchProcess = work.agentMessages.at(-1);
+  assert.deepEqual(batchProcess.steps.map(step => step.title), ['调用 Excel 解析 Skill', '识别运单处理规模', '创建普通任务']);
+  assert.match(batchProcess.steps[1].text, /101 > 100/);
+  for (const timer of timers) if (!timer.cancelled) timer.callback();
+  const batchCard = work.agentMessages.find(message => message.dailyTaskId);
+  const batchTask = store.tasks.find(task => task.id === batchCard.dailyTaskId);
+  assert.equal(batchTask.agentDecision.reason, 'large-batch');
+  assert(batchTask.runs[0].skills.every(skill => skill.name !== '历史业务质量分析'));
+  assert.match(batchTask.runs[0].steps[1].text, /不调用历史业务质量分析接口/);
+  console.log('PASS: Agent-owned Excel Skill routing, strict 180-day boundary, 100/101 waybill count, invalid dates, mixed-date service selection, frozen decisions, no summary, and package-only downloads.');
+} finally {
+  globalThis.setTimeout = originalTimeout; globalThis.clearTimeout = originalClear;
+  Date.now = originalNow; delete globalThis.window; await server.close();
+}

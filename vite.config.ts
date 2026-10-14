@@ -109,6 +109,9 @@ export default defineConfig(({ mode }) => {
     build: {
       outDir: 'dist',
       emptyOutDir: true,
+      rollupOptions: {
+        output: { manualChunks: { spreadsheet: ['xlsx', 'fflate'] } },
+      },
     },
   };
 });

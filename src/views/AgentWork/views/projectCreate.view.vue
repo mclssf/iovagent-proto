@@ -735,7 +735,7 @@ onBeforeUnmount(() => {
             <p class="mt-2 break-all text-sm font-medium text-slate-900">{{ mailboxDraft?.address ?? emailDemoMailbox }}</p>
             <p class="mt-1 text-xs leading-5 text-slate-500">演示邮箱 · 模拟收件与回复</p>
             <div class="mt-auto flex items-center justify-between gap-3 pt-3">
-              <span class="text-xs leading-5 text-slate-500">{{ mailboxDraft && !editingProject?.mailbox ? '点击完成，保存绑定并创建任务' : mailboxDraft ? '已关联邮件处理订单' : '绑定后自动创建邮件处理订单任务' }}</span>
+              <span class="text-xs leading-5 text-slate-500">{{ mailboxDraft && !editingProject?.mailbox ? '点击完成，保存邮箱绑定' : mailboxDraft ? '邮箱数据源已绑定' : '绑定项目邮箱数据源' }}</span>
               <button v-if="!mailboxDraft" type="button" class="shrink-0 rounded-md bg-slate-900 px-3 py-1.5 text-xs font-medium text-white hover:bg-slate-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-slate-900" @click="bindMailbox">绑定邮箱</button>
               <button v-else type="button" :disabled="!editingProject?.mailbox" class="shrink-0 rounded-md border border-[#deded9] px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-[#f7f7f5] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-slate-900 disabled:cursor-default disabled:opacity-50" @click="viewMailboxTask">查看任务</button>
             </div>
