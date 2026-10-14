@@ -12,6 +12,8 @@ export const agentWorkRouteName: Record<PageId, string> = {
   agent: 'agent-work-agent',
   longTasks: 'agent-work-long-tasks',
   dailyTasks: 'agent-work-daily-tasks',
+  events:'agent-work-events',
+  phaseConfig:'agent-work-phase-config',
   orders: 'agent-work-orders',
   risk: 'agent-work-risk',
   detail: 'agent-work-detail',

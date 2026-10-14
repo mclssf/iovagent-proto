@@ -297,26 +297,8 @@ export const useAgentDailyTasks = defineStore('agentDailyTasks', {
       run.result += send ? `\n${run.action.channel}发送成功（演示回执），通知对象：${run.action.recipient}。` : '\n已取消本次通知，后续触发规则保持不变。';
     },
     runMonitor(runtime: ProjectTaskRuntime, monitorId: MonitorId) {
-      const monitor = runtime.monitors.find((item) => item.id === monitorId)!;
-      monitor.runs++;
-      monitor.lastRun = this.now;
-      if (monitorId === 'loading' || monitorId === 'unloading') {
-        const transitions: Partial<Record<WaybillPhase, { phase: WaybillPhase; type?: EventType }>> = monitorId === 'loading'
-          ? { 装货前: { phase: '装货开始', type: 'loading-start' }, 装货开始: { phase: '装货结束', type: 'loading-end' }, 装货结束: { phase: '行程在途' } }
-          : { 行程在途: { phase: '卸货开始', type: 'unloading-start' }, 卸货开始: { phase: '卸货结束', type: 'unloading-end' } };
-        for (const order of runtime.orders) {
-          const transition = transitions[order.phase];
-          if (!transition) continue;
-          // Leave a transport window for the independent anomaly judgments before unloading.
-          if (order.phase === '行程在途' && this.now - order.phaseChangedAt < 10 * 60000) continue;
-          order.phase = transition.phase;
-          order.phaseChangedAt = this.now;
-          if (transition.type) this.receiveEvent({ id: newId('event'), projectId: runtime.projectId, type: transition.type, occurredAt: this.now, source: 'poll', order: { ...order }, detail: `${order.plate} 节点已核验，运单状态流转为“${transition.phase}”。`, value: 0 });
-        }
-      } else if (monitorId !== 'fence' && runtime.orders.some((order) => order.phase === '行程在途')) {
-        const event = sampleEvent(runtime, monitorId, 'poll');
-        if (event) this.receiveEvent(event);
-      }
+      const monitor=runtime.monitors.find(m=>m.id===monitorId);if(monitor)monitor.nextRun=this.now+60000;
+      // Phase1 mock collector owns waybill events; do not advance legacy synthetic lifecycle.
     },
     tick(now = Date.now()) {
       this.now = now;

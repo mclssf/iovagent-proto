@@ -5,7 +5,7 @@ export type WaybillPhase = '装货前' | '装货开始' | '装货结束' | '行�
 export type EventType = 'loading-start' | 'loading-end' | 'unloading-start' | 'unloading-end' | 'parking' | 'offline' | 'deviation' | 'fence-enter' | 'fence-exit';
 
 export const waybillPhases: WaybillPhase[] = ['装货前', '装货开始', '装货结束', '行程在途', '卸货开始', '卸货结束'];
-export const requiredMonitorSkillIds = ['loading-event-expert', 'unloading-event-expert'];
+export const requiredMonitorSkillIds: string[] = [];
 export const ensureRequiredMonitorSkills = (ids: string[] = []) => [...new Set([...requiredMonitorSkillIds, ...ids])];
 
 export const monitorDefinitions: { id: MonitorId; name: string; skillId: string; required: boolean; seconds: number; description: string; icon: 'upload' | 'download' | 'truck' | 'alert' | 'route' | 'locate' }[] = [

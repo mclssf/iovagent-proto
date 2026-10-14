@@ -1,3 +1,5 @@
+import {usePhase1} from './phase1';
+import {stateNames,sessionNames,dateText} from '@/views/Phase1/catalog';
 import { migrateCapacitySkillIds } from './capacitySkills';
 import type {
   AgentConversation,
@@ -156,8 +158,8 @@ const projectsSeed: Project[] = [
 ];
 
 const projectWelcomeMessages: ChatMessage[] = [
-  { role: 'agent', text: '今日已同步 128 单，已加入在途监控 128 单。当前高风险 6 单、低风险 11 单。' },
-  { role: 'agent', text: '发现 2 单非目的地物流园长停、1 单 GPS 轨迹疑似造假，建议优先复核。' },
+  { role: 'agent', text: 'V1.1 本地模拟：查看运单、基础事件、固定规则结果及人工纠正记录。请输入 V11 运单号查询当前项目数据。' },
+  { role: 'agent', text: '监听与晚发晚到参数在项目管理的编辑详情→项目配置中维护。原 V1 普通任务、邮件及其他演示仍从“其他任务与邮件”进入。' },
 ];
 
 const conversationSeeds: AgentConversation[] = [];
@@ -1838,7 +1840,6 @@ export const agentWorkData = defineStore('agentWork', {
       );
     },
     startNewConversation() {
-      clearAgentProcessTimers();
       this.persistActiveConversationMessages();
       this.workspaceMode = 'conversation';
       this.currentConversationId = '';
@@ -1850,7 +1851,6 @@ export const agentWorkData = defineStore('agentWork', {
       this.persistActiveConversationMessages();
       const conversation = this.recentConversations.find((item) => item.id === conversationId);
       if (!conversation) return;
-      clearAgentProcessTimers();
       this.workspaceMode = 'conversation';
       this.currentConversationId = conversation.id;
       this.agentMessages = cloneChatMessages(conversation.messages);
@@ -1864,30 +1864,12 @@ export const agentWorkData = defineStore('agentWork', {
         conversation.id === conversationId ? { ...conversation, title: normalizedTitle } : conversation,
       );
     },
-    deleteConversation(conversationId: string) {
-      if (!this.recentConversations.some((conversation) => conversation.id === conversationId)) return false;
-      const isCurrentConversation = this.workspaceMode === 'conversation' && this.currentConversationId === conversationId;
-      this.recentConversations = this.recentConversations.filter((conversation) => conversation.id !== conversationId);
-      if (isCurrentConversation) this.startNewConversation();
-      return true;
-    },
-    ensureExampleConversation(conversationId: string, title: string, messages: ChatMessage[]) {
-      if (this.recentConversations.some((conversation) => conversation.id === conversationId)) return;
-      this.recentConversations = [
-        {
-          id: conversationId,
-          title,
-          updatedAt: '刚刚',
-          messages: cloneChatMessages(messages).map(message => message.role === 'agent' ? { ...message, text: `演示案例：${message.text ?? ''}` } : message),
-        },
-        ...this.recentConversations,
-      ];
-    },
     startExampleConversation(title: string, messages: ChatMessage[]) {
       this.startNewConversation();
-      const conversationId = `C${Date.now()}`;
-      this.ensureExampleConversation(conversationId, title, messages);
-      this.openConversation(conversationId);
+      this.ensureConversationStarted();
+      this.renameConversation(this.currentConversationId, title);
+      this.agentMessages = cloneChatMessages(messages).map(message => message.role === 'agent' ? { ...message, text: `演示案例：${message.text ?? ''}` } : message);
+      this.persistActiveConversationMessages();
     },
     ensureConversationStarted() {
       if (this.workspaceMode !== 'conversation' || this.currentConversationId) return;
@@ -1955,7 +1937,6 @@ export const agentWorkData = defineStore('agentWork', {
       }, 1200);
     },
     switchProject(p: Project) {
-      clearAgentProcessTimers();
       this.persistActiveConversationMessages();
       this.workspaceMode = 'project';
       this.currentConversationId = '';
@@ -2124,6 +2105,15 @@ export const agentWorkData = defineStore('agentWork', {
       this.ensureConversationStarted();
       const next: ChatMessage[] = [...this.agentMessages, { role: 'user', text: raw }];
       const pendingMessage = this.agentMessages[this.agentMessages.length - 1];
+      const phaseId=raw.match(/V11-[A-Za-z0-9]+/)?.[0];
+      if(phaseId){
+        if(this.workspaceMode!=='project'){this.agentMessages=[...next,{role:'agent',text:'请先选择项目，再查询一期运单；自由对话不会读取项目私有数据。'}];this.agentInput='';return;}
+        const phase=usePhase1();const order=phase.orders.find(o=>o.id===phaseId&&o.projectId===this.currentProjectId);
+        if(!order){this.agentMessages=[...next,{role:'agent',text:`当前项目未找到运单${phaseId}，请核对运单号或项目。`}];this.agentInput='';return;}
+        const alerts=phase.anomalies.filter(a=>a.orderId===order.id&&a.status==='active');
+        const message:ChatMessage={role:'agent',text:'',title:'一期运单与监听结果',status:'已完成',steps:[{title:'读取项目运单',text:`读取${order.id}及其项目配置v${order.config.version}。`},{title:'汇总基础事实与结果',text:'读取本系统的围栏里程碑、事件和异常，不查询SaaS事件或进行大模型研判。'}],result:`${order.id}｜${order.plate}｜${order.origin.name} → ${order.destination.name}\n状态：${stateNames[order.state]}；监听：${sessionNames[order.session]}。\n读取时点${dateText(phase.now)}，固定截止${dateText(order.expiresAt)}。\n${alerts.length}条未恢复异常：${alerts.map(a=>a.kind).join('、')||'无'}。\n建议进入运单详情查看事实与配置，在做任务核对结果；这些数据为本地模拟。`};
+        this.startDelayedAgentProcess(next,message,()=>{});this.agentInput='';return;
+      }
       const pendingPrompt = pendingMessage?.pendingAsyncPrompt;
       const pendingRoutePrompt = pendingMessage?.pendingExperienceRoutePrompt;
       const pendingCompliancePrompt = pendingMessage?.pendingCompliancePrompt;
@@ -2474,11 +2464,9 @@ export const agentWorkData = defineStore('agentWork', {
           result: '',
         },
       ];
-      const processMessage = this.agentMessages[messageIndex];
 
       try {
         const result = await runMcpPrompt(prompt);
-        if (this.agentMessages[messageIndex] !== processMessage) return;
         this.agentMessages = this.agentMessages.map((message, index) => {
           if (index !== messageIndex) return message;
           return {
@@ -2489,7 +2477,6 @@ export const agentWorkData = defineStore('agentWork', {
           };
         });
       } catch (error) {
-        if (this.agentMessages[messageIndex] !== processMessage) return;
         this.agentMessages = this.agentMessages.map((message, index) => {
           if (index !== messageIndex) return message;
           return {

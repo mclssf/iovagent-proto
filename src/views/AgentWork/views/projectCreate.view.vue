@@ -1,4 +1,11 @@
 <script lang="ts" setup>
+import {usePhase1} from '@/pinia/phase1';
+import ConfigEditor from '@/views/Phase1/ConfigEditor.vue';
+import {phaseSkills} from '@/views/Phase1/catalog';
+import type {P1SkillId} from '../interface';
+const props=defineProps<{embedded?:boolean}>();
+const phaseConfigEditor=ref<InstanceType<typeof ConfigEditor>>();
+
 import { migrateCapacitySkillIds } from '@/pinia/capacitySkills';
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
@@ -42,7 +49,7 @@ const { goPage } = useAgentWorkNav();
 const route = useRoute();
 const router = useRouter();
 const maxProjectNameLength = 20;
-const defaultLogisticsSkillIds = ensureRequiredMonitorSkills(['route-risk-expert', 'gps-trace-expert', 'parking-event-expert']);
+const defaultLogisticsSkillIds = phaseSkills.filter(s=>s.id!=='p1-weather').map(s=>s.id);
 const projectName = ref('');
 const activeTab = ref<SkillTab>('all');
 const selectedDataSkillIds = ref<string[]>([]);
@@ -85,14 +92,7 @@ const skillTypeLabels: Record<SkillType, string> = {
 };
 
 const skills: ProjectSkill[] = [
-  ...monitorDefinitions.filter((monitor) => monitor.id !== 'parking').map((monitor): ProjectSkill => ({
-    id: monitor.skillId,
-    name: monitor.name,
-    type: 'logistics',
-    description: monitor.description,
-    usage: monitor.required ? '免费' : '付费',
-    icon: strokeIconPaths[monitor.icon],
-  })),
+  ...phaseSkills.map((skill):ProjectSkill=>({id:skill.id,name:skill.name,type:'logistics',description:skill.description,usage:'免费',icon:strokeIconPaths[skill.icon]})),
   {
     id: 'jinyu-cement-tms',
     name: '金隅水泥TMS',
@@ -619,14 +619,19 @@ function goNext() {
     ElMessage.warning('请选择至少一项项目技能');
     return;
   }
+  if(!props.embedded&&!phaseConfigEditor.value?.validate()) {ElMessage.warning('请检查一期配置参数');return;}
   const skillNames = selectedSkills.value.map((skill) => skill.name);
   const skillIds = selectedSkills.value.map((skill) => skill.id);
+  let phaseProjectId=editingProject.value?.id||'';
   if (editingProject.value) {
     store.updateSkillProject(editingProject.value.id, cleanName, skillNames, skillIds, mailboxDraft.value ?? undefined);
   } else {
-    store.addSkillProject(cleanName, skillNames, skillIds, mailboxDraft.value ?? undefined);
+    phaseProjectId=store.addSkillProject(cleanName, skillNames, skillIds, mailboxDraft.value ?? undefined);
   }
-  goPage('projects');
+  if(props.embedded){const phase=usePhase1();const config=phase.config(phaseProjectId);config.selectedSkills=skillIds.filter(id=>phaseSkills.some(s=>s.id===id)) as P1SkillId[];phase.saveConfig(phaseProjectId,config,config.version);}
+  else phaseConfigEditor.value?.commit(phaseProjectId);
+  if(!props.embedded)goPage('projects');
+  else ElMessage.success('项目内容已保存');
 }
 
 onMounted(() => {
@@ -679,7 +684,7 @@ onBeforeUnmount(() => {
         </div>
         <div class="rounded-md bg-white px-3 py-2">
           <div class="text-[11px] leading-4 text-slate-500">历史数据</div>
-          <div class="mt-1 truncate text-sm font-medium text-slate-900">{{ editingProject.total }} 单 · {{ editingProject.risk }} 异常</div>
+          <div class="mt-1 truncate text-sm font-medium text-slate-900">{{ usePhase1().orders.filter(o=>o.projectId===editingProject!.id).length }} 单 · {{ usePhase1().orders.filter(o=>o.projectId===editingProject!.id&&usePhase1().anomalies.some(a=>a.orderId===o.id&&a.status==='active')).length }} 异常运单</div>
         </div>
         <div class="rounded-md bg-white px-3 py-2">
           <div class="text-[11px] leading-4 text-slate-500">筛选条件</div>
@@ -806,6 +811,7 @@ onBeforeUnmount(() => {
         </div>
       </div>
 
+      <details v-if="!props.embedded" class="mx-5 mb-4 shrink-0 max-h-[40vh] overflow-auto border-t border-[#deded9]"><summary class="cursor-pointer py-3 text-sm font-medium">一期监听与规则配置</summary><ConfigEditor ref="phaseConfigEditor" :project-id="editingProject?.id" :selected-skills="selectedLogisticsSkillIds.filter(id=>phaseSkills.some(s=>s.id===id)) as P1SkillId[]" embedded/></details>
       <div class="mx-5 mb-5 flex h-14 shrink-0 items-center justify-between gap-3 rounded-lg bg-white px-4 shadow-sm">
         <div class="min-w-0 truncate text-xs text-slate-500">
           {{ selectedSkills.length ? selectedSkills.map((skill) => skill.name).join('、') : '请选择项目技能' }}

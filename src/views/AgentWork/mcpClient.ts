@@ -90,7 +90,7 @@ async function mcpPost<T>(method: string, params?: Record<string, unknown>, noti
 
   const nextSessionId = response.headers.get('mcp-session-id');
   if (nextSessionId) sessionId = nextSessionId;
-  if (notification) return {};
+  if (notification) return {} as T;
 
   const json = await readJsonRpcResponse<T>(response);
   if (json.error) {

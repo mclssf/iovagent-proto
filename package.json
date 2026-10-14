@@ -1,12 +1,14 @@
 {
   "name": "iovagent",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.1.1",
   "type": "module",
   "scripts": {
-    "dev": "vite --host 0.0.0.0",
+    "dev": "vite --host 127.0.0.1 --port 5806 --strictPort",
     "build": "vite build",
-    "preview": "vite preview --host 0.0.0.0"
+    "preview": "vite preview --host 0.0.0.0",
+    "typecheck": "vue-tsc --noEmit -p tsconfig.verify.json",
+    "test:phase1": "node scripts/test-phase1.mjs"
   },
   "dependencies": {
     "animate.css": "^4.1.1",

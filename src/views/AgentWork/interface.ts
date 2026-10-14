@@ -55,6 +55,8 @@ export type PageId =
   | 'knowledgeBase'
   | 'knowledgeBaseEmpty'
   | 'longTasks'
+  | 'events'
+  | 'phaseConfig'
   | 'orders'
   | 'projectCreate'
   | 'projects'
@@ -296,3 +298,41 @@ export interface EmailOrderResult {
   };
   reply: { subject: string; body: string; sentAt?: number };
 }
+
+export type P1SkillId = 'p1-status' | 'p1-parking' | 'p1-offline' | 'p1-deviation' | 'p1-late' | 'p1-weather';
+export type P1State = 'pending' | 'loading' | 'in_transit' | 'arrived' | 'completed';
+export type P1EventType = 'fence' | 'parking' | 'offline' | 'deviation' | 'weather';
+export interface P1Config {
+ version:number; selectedSkills:P1SkillId[];weather:{enabled:boolean};
+ deviation:{enabled:boolean;radiusMeters:number;repeatMinutes:number};
+ offline:{enabled:boolean;thresholdMinutes:number;repeatMinutes:number};
+ parking:{enabled:boolean;thresholdMinutes:number;repeatMinutes:number};
+ fenceTargets:('origin'|'destination')[];
+ lateDeparture:{enabled:boolean;graceMinutes:number};lateArrival:{enabled:boolean;graceMinutes:number};
+ statusUpdates:Exclude<P1State,'pending'>[];
+}
+export interface P1Place {name:string;lat:number;lon:number;radiusMeters:number;regionCode:string}
+export interface P1Correction {at:number;reason:string;before:string;after:string;operator:string}
+export interface P1Order {
+ id:string;projectId:string;plate:string;plateColor:1|2;driver:string;source:string;
+ origin:P1Place;destination:P1Place;plannedDeparture:number|null;plannedArrival:number|null;
+ milestoneMethods?:Partial<Record<P1State,string>>;corrections?:P1Correction[];
+ createdAt:number;state:P1State;enteredAt?:number;departedAt?:number;arrivedAt?:number;completedAt?:number;
+ weatherRequestedAt?:number;weatherEffectiveAt?:number;weatherActiveLogged?:boolean;
+ expiresAt:number;activateAt:number;config:P1Config;
+ providerMode:'mock'|'whitepaper';
+ session:'subscribing'|'active'|'paused'|'stopped'|'cleanup_pending';endReason:string;
+ cleanupWillFail:boolean;cleanupAttempts:number;subscriptionRevision:number;deviationBlocked:boolean;
+}
+export interface P1Event {
+ id:string;orderId:string;projectId:string;type:P1EventType;phase:'started'|'recovered'|'enter'|'exit';
+ occurredAt:number;receivedAt:number;address:string;durationMinutes:number;distanceMeters:number;
+ weatherType?:string;message?:string;sourceMessageId?:string;
+ originalResult?:string;corrections?:P1Correction[];target?:'origin'|'destination';result:string;taskIds:P1SkillId[];configVersion:number;
+}
+export interface P1Anomaly {
+ id:string;orderId:string;kind:'超时停车'|'在途离线'|'线路偏离'|'晚发'|'晚到'|'恶劣天气';
+ status:'active'|'recovered'|'corrected';firstAt:number;lastAt:number;nextReminderAt:number;
+ originalReason?:string;corrections?:P1Correction[];repeatCount:number;reason:string;deadlineAt?:number;eventId?:string;configVersion:number;taskId:P1SkillId;
+}
+export interface P1Log {id:string;projectId:string;orderId:string;taskId:P1SkillId;at:number;kind:'开始'|'基础事件'|'结果'|'提醒'|'恢复'|'结束'|'配置'|'失败';text:string}

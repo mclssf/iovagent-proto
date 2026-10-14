@@ -7,6 +7,8 @@ import { agentWorkData } from '@/pinia/agentWork';
 import { useAgentDailyTasks } from '@/pinia/agentDailyTasks';
 import { createDataEmployeeSkills } from '@/pinia/dataEmployeeSkills';
 import type { DailyTask, TaskRun } from '../dailyTasks';
+import type { EmailOrderScenario } from '../interface';
+import { emailDemoScenarios } from '../emailOrderDemo';
 import { formatTaskTime, getTaskStatus, hasTaskResult, taskDuration, triggerLabel, taskTypeLabels, taskStatusLabels } from '../dailyTasks';
 import { downloadTaskResult } from '../ordinaryTasks';
 import { strokeIconPaths } from '../strokeIconPaths';
@@ -24,6 +26,7 @@ watch(() => route.query.projectId, (id) => {
   if (project && (work.currentProjectId !== project.id || work.workspaceMode !== 'project')) work.switchProject(project);
 }, { immediate: true });
 const selectedId = ref('');
+const emailScenario = ref<EmailOrderScenario>('both');
 const editingId = ref('');
 const showForm = ref(false);
 const search = ref('');
@@ -116,6 +119,13 @@ function test(task: DailyTask) {
   selectedId.value = task.id;
   try { store.testTask(task.id); } catch (error) { ElMessage.warning((error as Error).message); }
 }
+function receiveEmail(task: DailyTask) {
+  selectedId.value = task.id;
+  try {
+    store.receiveDemoEmail(task.id, emailScenario.value);
+    resultScroll.value?.scrollTo({ top: 0, behavior: 'smooth' });
+  } catch (error) { ElMessage.warning((error as Error).message); }
+}
 function status(task: DailyTask) {
   return taskStatusLabels[getTaskStatus(task)];
 }
@@ -154,7 +164,7 @@ async function remove(task: DailyTask) {
                 <p class="dt-task-description" :title="task.prompt">{{ task.prompt }}</p>
               </button>
               <footer class="dt-task-footer">
-                <div class="dt-task-meta"><span>{{ task.runs.filter(hasTaskResult).length }} 条结果</span><span v-if="task.taskTemplate === 'email-order'">固定任务</span><span v-if="task.runs.some(run => run.status === 'waiting')" class="dt-pending">{{ task.runs.filter(run => run.status === 'waiting').length }} 项待确认</span></div>
+                <div class="dt-task-meta"><span>{{ task.runs.filter(hasTaskResult).length }} 条结果</span><span v-if="task.taskTemplate === 'email-order'">固定演示</span><span v-if="task.runs.some(run => run.status === 'waiting')" class="dt-pending">{{ task.runs.filter(run => run.status === 'waiting').length }} 项待确认</span></div>
                 <div class="dt-task-actions">
                 <template v-if="task.trigger === 'once'">
                   <button type="button" class="dt-icon" :aria-label="`查看结果 ${task.name}`" title="查看执行结果" @click="selectTask(task.id)"><Icon :svg="strokeIconPaths.list" :size="15" /></button>
@@ -187,11 +197,21 @@ async function remove(task: DailyTask) {
         </header>
         <div class="dt-run-body">
           <div ref="resultScroll" class="dt-run-scroll" :key="selected.id">
-            <div class="dt-run-section-heading"><h3>{{ selected.taskTemplate === 'email-order' ? '邮件处理记录' : '执行结果' }} <span class="dt-secondary">{{ results.length }}</span></h3><span v-if="selected.taskTemplate === 'email-order'" class="dt-secondary">收件 → 处理 → 回复</span><button v-else-if="selected.trigger !== 'once'" type="button" class="dt-text-button" :disabled="activeRuns.length > 0" @click="test(selected)"><Icon :svg="strokeIconPaths.refresh" :size="13" />测试执行一次</button></div>
+            <section v-if="selected.mailbox" class="dt-email-connection" aria-label="运营助手邮箱连接">
+              <header><h3>邮箱连接<span>运营助手</span></h3><span class="dt-badge success">已绑定</span></header>
+              <p class="dt-email-mailbox">{{ selected.mailbox.address }}</p>
+              <p class="email-note">演示邮箱，模拟收件后自动处理并回复，每封邮件保存一条结果。</p>
+              <div class="dt-email-controls">
+                <label for="email-demo-scenario">示例邮件<select id="email-demo-scenario" v-model="emailScenario" :disabled="activeRuns.length > 0"><option v-for="scenario in emailDemoScenarios" :key="scenario.id" :value="scenario.id">{{ scenario.label }}</option></select></label>
+                <button type="button" class="dt-button primary" :disabled="!selected.enabled || activeRuns.length > 0" @click="receiveEmail(selected)"><Icon :svg="strokeIconPaths.download" :size="14" />{{ activeRuns.length ? '处理中…' : '模拟收件' }}</button>
+              </div>
+              <p v-if="!selected.enabled" class="email-note">任务已暂停，启动后可继续模拟收件。</p>
+            </section>
+            <div class="dt-run-section-heading"><h3>执行结果 <span class="dt-secondary">{{ results.length }}</span></h3><span v-if="selected.taskTemplate === 'email-order'" class="email-note">收件 → 处理 → 回复</span><button v-else-if="selected.trigger !== 'once'" type="button" class="dt-text-button" :disabled="activeRuns.length > 0" @click="test(selected)"><Icon :svg="strokeIconPaths.refresh" :size="13" />测试执行一次</button></div>
             <div v-for="run in activeRuns" :key="run.id" class="dt-active-run" role="status"><Icon :svg="strokeIconPaths.refresh" :size="15" svg-class="animate-spin" /><div><strong>{{ run.steps[run.activeStep]?.title ?? '正在接收结果' }}</strong><p>{{ run.steps[run.activeStep]?.text }}</p><small>{{ sourceLabels[run.source] }} · {{ Math.min(run.activeStep + 1, run.steps.length) }}/{{ run.steps.length }}</small></div></div>
             <div v-if="!results.length" class="dt-empty compact"><Icon :svg="strokeIconPaths.fileText" :size="24" /><h2>{{ activeRuns.length ? '执行结果生成中' : '暂无执行结果' }}</h2><p>{{ activeRuns.length ? '结果返回后将在此展示' : getTaskStatus(selected) === 'paused' ? '任务已暂停，启动后等待下次触发' : triggerLabel(selected, runtime?.fences) }}</p></div>
-            <section v-for="(run, index) in results" :key="run.id" class="dt-run" :aria-label="`${run.emailOrder ? '邮件处理记录' : '执行结果'} ${results.length - index}`">
-              <header :data-result-id="run.id"><div><strong>{{ run.emailOrder ? [run.emailOrder.subject, run.emailOrder.order.number].filter(Boolean).join(' · ') : run.event ? `${run.event.order.id} · ${run.event.order.plate}` : selected.trigger === 'once' ? '任务结果' : `执行结果 ${results.length - index}` }}</strong><small>{{ formatTaskTime(run.finishedAt ?? run.startedAt) }} · {{ sourceLabels[run.source] }}</small></div><span v-if="run.emailOrder" class="dt-badge success">已回复</span><span v-else-if="run.action?.status === 'pending'" class="dt-badge warning">待确认</span></header>
+            <section v-for="(run, index) in results" :key="run.id" class="dt-run" :aria-label="`执行结果 ${results.length - index}`">
+              <header :data-result-id="run.id"><div><strong>{{ run.emailOrder ? [run.emailOrder.subject, run.emailOrder.order.number].filter(Boolean).join(' · ') : run.event ? `${run.event.order.id} · ${run.event.order.plate}` : selected.trigger === 'once' ? '任务结果' : `执行结果 ${results.length - index}` }}</strong><small>{{ formatTaskTime(run.finishedAt ?? run.startedAt) }} · {{ sourceLabels[run.source] }}</small></div><span v-if="run.emailOrder" class="dt-badge success">已回复 · 演示</span><span v-else-if="run.action?.status === 'pending'" class="dt-badge warning">待确认</span></header>
               <EmailOrderResult v-if="run.emailOrder" :email="run.emailOrder" />
               <p v-else-if="run.result" class="dt-run-result">{{ run.result }}</p>
               <div v-if="run.files?.length" class="dt-result-files" aria-label="任务结果文件">
@@ -202,8 +222,8 @@ async function remove(task: DailyTask) {
                 <p class="dt-recipient">{{ run.action.recipient }}</p><p>{{ run.action.content }}</p>
                 <div v-if="run.status === 'waiting'" class="dt-actions"><button class="dt-button primary" type="button" @click="store.resolveAction(selected.id, run.id, true)">确认发送</button><button class="dt-button" type="button" @click="store.resolveAction(selected.id, run.id, false)">取消发送</button></div>
               </div>
-              <details class="dt-run-steps"><summary>{{ run.emailOrder ? '执行过程' : '执行详情' }}</summary><p v-if="run.emailOrder && run.finishedAt" class="dt-run-context">开始 {{ formatTaskTime(run.startedAt) }} · 完成 {{ formatTaskTime(run.finishedAt) }} · 耗时 {{ taskDuration(run.finishedAt - run.startedAt) }}</p><p v-if="run.event" class="dt-run-context">{{ run.event.detail }}</p><p v-if="run.toolJobId" class="dt-run-context">{{ run.toolJobId }}</p><ol><li v-for="step in run.steps" :key="step.title"><Icon :svg="strokeIconPaths.check" :size="13" /><div><strong>{{ step.title }}</strong><p>{{ step.text }}</p><span v-if="step.tool" class="dt-tool">{{ step.tool }}</span></div></li></ol></details>
-              <footer v-if="run.finishedAt && !run.emailOrder">耗时 {{ taskDuration(run.finishedAt - run.startedAt) }}</footer>
+              <details class="dt-run-steps"><summary>执行详情</summary><p v-if="run.emailOrder && run.finishedAt" class="dt-run-context">开始 {{ formatTaskTime(run.startedAt) }} · 完成 {{ formatTaskTime(run.finishedAt) }}</p><p v-if="run.event" class="dt-run-context">{{ run.event.detail }}</p><p v-if="run.toolJobId" class="dt-run-context">{{ run.toolJobId }}</p><ol><li v-for="step in run.steps" :key="step.title"><Icon :svg="strokeIconPaths.check" :size="13" /><div><strong>{{ step.title }}</strong><p>{{ step.text }}</p><span v-if="step.tool" class="dt-tool">{{ step.tool }}</span></div></li></ol></details>
+              <footer v-if="run.finishedAt">耗时 {{ taskDuration(run.finishedAt - run.startedAt) }}</footer>
             </section>
           </div>
           <aside id="daily-task-background" ref="backgroundRef" class="dt-background-rail" :class="{ 'is-open': showBackground }" aria-label="任务背景">

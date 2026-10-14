@@ -1,0 +1,24 @@
+# V1.1 一期可交互 Demo
+
+由仓库根目录 V1 独立复制，未引入V2多节点运输。
+
+- 启动：本目录 `pnpm dev`，入口 http://127.0.0.1:5806/index/orders
+- 构建：`pnpm build`；类型检查：`pnpm typecheck`；业务回归：`pnpm test:phase1`
+- 项目配置：/index/projects/detail?projectId=P001&tab=config
+- 五个业务任务：/index/daily-tasks?projectId=P001
+- 事件列表：/index/events；异常运单：/index/risk
+- 预置七个一致的mock场景；可新增、模拟事件、推进时间、改配置、恢复样例并撤销恢复。
+- 本地数据按V1.1独立键持久化。前三类业务共用模拟RID，围栏/晚发晚到按固定规则处理，无真实接口/大模型/消息发送。
+- “Mock支持”能演示偏离半径；“白皮书约束”会阻断该未确认能力，且停车/离线限制10分钟倍数。
+- 缺高德Key时展示地图降级，不提供虚构轨迹。
+- V1原普通任务/邮件通过“其他任务与邮件”入口保留。
+
+`V1-BASELINE.json`记录开发前复制基线，业务代码已在此基线上修改，当前80文件已不再与V1完全一致。依赖链接到根目录node_modules；单独迁移时执行pnpm install --frozen-lockfile，环境凭证仍由环境文件提供。
+
+早期Demo说明位于仓库outputs/v1.1-demo/PRD-V1.1-第一期事件监听Demo-v1.1.md；docs/phase1仍保留前期方案和接口/Skill契约。
+
+v2.1评审方案已调整为自研事件监听：outputs/v1.1-review/self-developed-v2.1/PRD-V1.1-需求评审与开发指导-v2.1.md；四类监听算法/API/Tools由我们开发，旧供应商告警约束不作为目标。当前Mock代码尚未同步此算法职责变更。
+
+天气预警扩展：项目配置开启恶劣天气监听后增加第六项任务；次日0点预计生效，等待期不延长72小时。可在任务页模拟推进和暴雨消息，事件直接异常，不发车机提醒。v2.2历史评审稿为outputs/v1.1-review/self-developed-v2.1/PRD-V1.1-需求评审与开发指导-v2.2.md；真实数据专用天气服务尚待确认。
+
+当前评审文档：outputs/v1.1-review/reorganized-v2.3/PRD-V1.1-需求评审与开发指导-v2.3.html（同名Markdown可编辑）。五类事件Tools均基于原有接口由我们开发；整理了重复章节并重采八张截图，保留六个业务Skill和36个验收场景。完整附件为outputs/v1.1-review/V1.1-需求评审包-v2.3.zip。

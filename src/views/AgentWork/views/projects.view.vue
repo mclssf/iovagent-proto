@@ -2,6 +2,9 @@
 import { Icon } from '@packages/icon';
 import { storeToRefs } from 'pinia';
 
+import {usePhase1} from '@/pinia/phase1';
+import {useRouter} from 'vue-router';
+const phase=usePhase1();const phaseRouter=useRouter();
 import { agentWorkData } from '@/pinia/agentWork';
 
 import { strokeIconPaths } from '../strokeIconPaths';
@@ -57,17 +60,18 @@ const { goPage } = useAgentWorkNav();
                 <div class="mt-1 text-xs text-slate-500">状态：{{ p.statusFilter }}</div>
               </td>
               <td class="px-4 py-4 align-middle">
-                <div class="font-medium text-slate-900">{{ p.total }} 单</div>
-                <div class="mt-1 text-xs text-red-500">{{ p.risk }} 异常</div>
+                <div class="font-medium text-slate-900">{{ phase.orders.filter(o=>o.projectId===p.id).length }} 单</div>
+                <div class="mt-1 text-xs text-red-500">{{ phase.orders.filter(o=>o.projectId===p.id&&phase.anomalies.some(a=>a.orderId===o.id&&a.status==='active')).length }} 异常</div>
               </td>
               <td class="px-4 py-4 align-middle">
                 <div class="flex items-center gap-2">
                   <button type="button" class="rounded-md border border-[#deded9] px-3 py-1.5 text-xs hover:bg-[#f7f7f5]" @click="store.refreshProject(p)">
                     <Icon :svg="strokeIconPaths.refresh" :size="13" svg-class="mr-1 inline" />刷新
                   </button>
-                  <button type="button" class="rounded-md border border-[#deded9] px-3 py-1.5 text-xs hover:bg-[#f7f7f5]" @click="goPage('projectCreate', { projectId: p.id })">
+                  <button type="button" class="rounded-md border border-[#deded9] px-3 py-1.5 text-xs hover:bg-[#f7f7f5]" @click="phaseRouter.push({path:'/index/projects/detail',query:{projectId:p.id}})">
                     编辑
                   </button>
+<button type="button" class="rounded-md border border-[#deded9] px-3 py-1.5 text-xs" @click="phaseRouter.push({path:'/index/projects/detail',query:{projectId:p.id,tab:'config'}})">监听配置</button>
                   <button type="button" class="rounded-md border border-red-200 px-3 py-1.5 text-xs text-red-600 hover:bg-red-50" @click="store.removeProjectAt(i)">
                     删除
                   </button>
