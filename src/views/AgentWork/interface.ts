@@ -10,6 +10,7 @@ export interface Project {
   keyword: string;
   statusFilter: string;
   skillIds?: string[];
+  quickPrompts?: string[];
   mailbox?: ProjectMailbox;
 }
 
@@ -176,6 +177,7 @@ export interface PrivateCapacity {
 }
 
 export interface Order {
+  sourceFields?: { label: string; value: string }[];
   id: string;
   plate: string;
   driver: string;
@@ -206,18 +208,22 @@ export interface TimelineEvent {
 }
 
 export interface ChatMessage {
+  verificationRows?: { row: string; sourceIndex?: number; order: string; plate: string; color: string; start: string; end: string; startPosition: string; endPosition: string; conclusion: string; hint: string }[];
   pendingPredictionPrompt?: string;
   predictionReport?: {
+    kind?: 'waybill';
+    introduction?: string;
+    taskProgress?: { title: string; text: string }[];
     exportSummary: string;
     boundaries: { label: string; text: string }[];
     summary: { label: string; value: string }[];
     fields: { label: string; header: string; note: string }[];
     statistics: { label: string; value: string }[];
     judgments: string[];
-    analyses: { title: string; points: string[] }[];
+    analyses: { title: string; points: string[]; groups?: { label: string; status?: string; items: string[] }[] }[];
   };
   streaming?: boolean;
-  predictionRows?: { row: string; plate: string; status: string; start: string; end: string; startText: string; endText: string; startLocation: string; endLocation: string; hint: string; order?: string; coordinate?: string; stopTime?: string; stopEndTime?: string; parkingDistance?: string; endCoordinate?: string; endStopTime?: string }[];
+  predictionRows?: { row: string; plate: string; status: string; start: string; end: string; startText: string; endText: string; startLocation: string; endLocation: string; hint: string; order?: string; sourceStartTime?: string; coordinate?: string; stopTime?: string; stopEndTime?: string; parkingDistance?: string; endCoordinate?: string; endStopTime?: string }[];
   role: 'agent' | 'user';
   text: string;
   title?: string;

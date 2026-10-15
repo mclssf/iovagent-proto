@@ -41,7 +41,7 @@ export function useAgentWorkNav() {
 
   function openOrderDetail(order: Order) {
     store.setSelectedOrder(order);
-    return goPage('detail');
+    return goPage('detail', { projectId: store.currentProjectId, orderId: order.id });
   }
 
   function createDownload(scope: string) {

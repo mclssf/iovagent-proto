@@ -9,6 +9,7 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { Icon } from '@packages/icon';
 
 import { agentWorkData, quickPrompts, rightPanelTabs } from '@/pinia/agentWork';
+import { cleanOutputValue } from '../outputWording';
 import { useAgentDailyTasks } from '@/pinia/agentDailyTasks';
 import { convertGpsCoordinates, loadAMap, searchDrivingRoute, type AMapCoordinate } from '@/utils/amap';
 import { taskRunLabels } from '../dailyTasks';
@@ -50,6 +51,7 @@ function openOrdinaryTask(id: string) {
   goPage('dailyTasks', { taskId: id, scope: task.projectId ? 'project' : 'personal' });
 }
 const { agentMessages, agentInput } = storeToRefs(store);
+const displayedMessages = computed(() => agentMessages.value.map((message) => message.role === 'agent' ? cleanOutputValue(message) : message));
 const { goPage, createDownload, sendAgent } = useAgentWorkNav();
 const agentMessageListRef = ref<HTMLDivElement | null>(null);
 const agentMessageContentRef = ref<HTMLDivElement | null>(null);
@@ -395,16 +397,9 @@ function sendComposerMessage() {
 }
 
 async function sendQuickPrompt(text: string) {
-  isFollowingLatest.value = true;
-  if (quickPrompts.slice(0, 3).includes(text)) {
-    if (predictionUploadBusy.value) return;
-    if (!uploadedFiles.value.length) await uploadPredictionFile();
-    if (!uploadedFiles.value.length) return;
-    agentInput.value = text;
-    sendComposerMessage();
-    return;
-  }
-  sendAgent(text);
+  agentInput.value = text;
+  await nextTick();
+  composerTextareaRef.value?.focus();
 }
 
 function resizeComposer() {
@@ -460,12 +455,12 @@ const rightPanelTitle = computed(() => {
   if (isDefaultOverview.value) return '今日在途情况';
   return '今日在途预警处理结果';
 });
-const workspaceTitle = computed(() => '货主场景演示');
+const workspaceTitle = computed(() => store.currentProject.name);
 const isDynamicRightPanel = computed(() => isExternalH5Panel.value || isAnalysisReportPanel.value);
 const isRightPanelRendered = computed(
   () => isRightPanelVisible.value && isDynamicRightPanel.value,
 );
-const visibleQuickPrompts = computed(() => quickPrompts.slice(0, 3));
+const visibleQuickPrompts = computed(() => store.currentProject.quickPrompts ?? quickPrompts.slice(0, 3));
 
 const trendData = [
   { date: '05-09', count: 8 },
@@ -843,11 +838,6 @@ onBeforeUnmount(() => {
       </div>
       <div class="agent-workspace-body">
       <div ref="chatColumnRef" class="agent-chat-column">
-      <div class="flex flex-wrap items-center gap-2 border-b border-[#eeeeec] px-4 py-2 text-xs">
-        <span class="font-medium text-amber-700">装卸货预测 · 模拟演示</span>
-        <button type="button" class="rounded border px-2 py-1 hover:bg-slate-100" :disabled="predictionUploadBusy" @click="uploadPredictionFile()">真实性装卸货地预测</button>
-        <button type="button" class="rounded border px-2 py-1 hover:bg-slate-100" :disabled="predictionUploadBusy" @click="uploadPredictionFile('核验出厂和完成时车辆是否在对应地点', 'waybill')">运单真实性校验</button>
-      </div>
       <div ref="agentMessageListRef" class="agent-message-scroll" @scroll.passive="handleMessageScroll">
         <div ref="agentMessageContentRef" class="agent-conversation-rail agent-message-content" :class="{ 'is-empty': agentMessages.length === 0 }">
           <div v-if="agentMessages.length === 0" class="agent-empty-conversation flex flex-col items-center justify-center text-center">
@@ -876,7 +866,7 @@ onBeforeUnmount(() => {
               </button>
             </div>
           </div>
-          <div v-for="(m, i) in agentMessages" :key="i" class="agent-message-row flex" :class="m.role === 'user' ? 'justify-end' : 'justify-start'">
+          <div v-for="(m, i) in displayedMessages" :key="i" class="agent-message-row flex" :class="m.role === 'user' ? 'justify-end' : 'justify-start'">
             <div
               class="agent-message rounded-md text-sm leading-6"
               :class="[
@@ -936,6 +926,15 @@ onBeforeUnmount(() => {
                 </template>
               </div>
               <div v-if="m.predictionReport" class="space-y-4 px-3 text-xs leading-5 text-slate-600">
+                <section v-if="m.predictionReport.kind === 'waybill' && m.predictionReport.taskProgress?.length" class="max-w-[440px] rounded-md border border-slate-200 bg-white p-3">
+                  <div class="mb-2 flex items-center justify-between"><h3 class="font-semibold text-slate-900">任务进度</h3><span class="rounded-full border border-slate-200 px-2 text-[10px]">7 项</span></div>
+                  <div v-for="item in m.predictionReport.taskProgress" :key="item.title" class="mt-2 flex items-start justify-between gap-3 rounded border border-slate-200 p-2">
+                    <div><h4 class="font-medium text-slate-900">{{ item.title }}</h4><p class="mt-1 text-[11px] text-slate-500">{{ item.text }}</p></div><span class="shrink-0 rounded-full bg-emerald-50 px-2 py-0.5 text-[10px] text-emerald-700">已完成</span>
+                  </div>
+                </section>
+                <section v-if="m.predictionReport.kind === 'waybill' && m.predictionReport.introduction">
+                  <h3 class="mb-1 font-semibold text-slate-900">运单真实性核验完成</h3><p>{{ m.predictionReport.introduction }}</p>
+                </section>
                 <section v-if="m.predictionReport.summary.length">
                   <h3 class="mb-2 font-semibold text-slate-900">解析摘要</h3>
                   <table class="w-full border-collapse text-left"><thead class="bg-slate-100"><tr><th class="border border-slate-200 p-2">项目</th><th class="border border-slate-200 p-2">内容</th></tr></thead><tbody><tr v-for="item in m.predictionReport.summary" :key="item.label"><td class="border border-slate-200 p-2">{{ item.label }}</td><td class="break-all border border-slate-200 p-2">{{ item.value }}</td></tr></tbody></table>
@@ -971,21 +970,39 @@ onBeforeUnmount(() => {
                   </tr></tbody>
                 </table>
               </div>
+              <div v-if="m.verificationRows?.length" class="mt-4 overflow-x-auto px-3">
+                <table class="w-full min-w-[740px] table-fixed border-collapse text-left text-xs leading-4">
+                  <caption class="pb-2 text-left font-semibold text-slate-900">核验结果摘要</caption>
+                  <colgroup><col class="w-[44px]"><col class="w-[100px]"><col class="w-[120px]"><col class="w-[120px]"><col class="w-[120px]"><col class="w-[120px]"><col class="w-[116px]"></colgroup>
+                  <thead class="bg-slate-100"><tr><th class="border border-slate-200 p-2">行号</th><th class="border border-slate-200 p-2">车牌号</th><th class="border border-slate-200 p-2">起始地事件核验</th><th class="border border-slate-200 p-2">目的地事件核验</th><th class="border border-slate-200 p-2">出厂位置查询</th><th class="border border-slate-200 p-2">完成位置查询</th><th class="border border-slate-200 p-2">总结论</th></tr></thead>
+                  <tbody><tr v-for="(row, index) in m.verificationRows" :key="row.row" class="h-10 border-b border-slate-200">
+                    <td class="border border-slate-200 px-2 py-1" :title="row.row">{{ row.sourceIndex || index + 1 }}</td><td class="border border-slate-200 px-2 py-1" :title="row.order">{{ row.plate }}</td>
+                    <td class="border border-slate-200 px-2 py-1">{{ row.start }}</td><td class="border border-slate-200 px-2 py-1" :class="row.end === '通过' ? 'text-emerald-700' : row.end === '无法判断' ? 'text-amber-700' : 'text-red-700'">{{ row.end }}</td><td class="border border-slate-200 px-2 py-1">{{ row.startPosition }}</td><td class="border border-slate-200 px-2 py-1">{{ row.endPosition }}</td><td class="border border-slate-200 px-2 py-1 font-semibold" :class="row.conclusion === '通过' ? 'text-emerald-700' : row.conclusion === '无法判断' ? 'text-amber-700' : 'text-red-700'" :title="row.hint">{{ row.conclusion === '通过' ? '校验通过' : ['无法判断', '调用失败'].includes(row.conclusion) ? row.conclusion : '校验未通过' }}</td>
+                  </tr></tbody>
+                </table>
+              </div>
               <section v-if="m.predictionReport?.analyses.length" class="mt-4 px-3 text-xs leading-5 text-slate-600">
-                <h3 class="mb-2 font-semibold text-slate-900">逐行分析</h3>
+                <h3 class="mb-2 font-semibold text-slate-900">{{ m.predictionReport.kind === 'waybill' ? '关键发现' : '逐行分析' }}</h3>
                 <div v-for="item in m.predictionReport.analyses" :key="item.title" class="border-b border-slate-200 py-3 last:border-0">
                   <h4 class="mb-1 font-medium text-slate-900">{{ item.title }}</h4>
-                  <ul class="list-disc space-y-1 pl-4"><li v-for="point in item.points" :key="point">{{ point }}</li></ul>
+                  <ul v-if="item.points.length" class="list-disc space-y-1 pl-4"><li v-for="point in item.points" :key="point">{{ point }}</li></ul>
+                  <details v-if="item.groups?.length" class="mt-2">
+                    <summary class="cursor-pointer text-xs text-slate-500 hover:text-slate-800">查看车辆明细（{{ item.groups.length }} 项）</summary>
+                    <div v-for="group in item.groups" :key="group.label" class="mt-3 border-l-2 border-slate-200 pl-3">
+                      <h5 class="mb-1 font-medium text-slate-800">{{ group.label }} <span class="ml-1" :class="!group.status || group.status === '通过' ? 'text-emerald-700' : 'text-amber-700'">{{ group.status || '通过' }}</span></h5>
+                      <ul class="list-disc space-y-1 pl-4"><li v-for="point in group.items" :key="point">{{ point }}</li></ul>
+                    </div>
+                  </details>
                 </div>
               </section>
               <section v-if="m.predictionReport?.exportSummary || m.predictionReport?.boundaries.length" class="mt-4 px-3 text-xs leading-5 text-slate-600">
                 <div v-if="m.predictionReport.exportSummary" class="border-t border-slate-200 pt-3">
-                  <h3 class="mb-1 flex items-center gap-1.5 font-semibold text-slate-900"><Icon :svg="strokeIconPaths.fileSpreadsheet" :size="14" />结果文件</h3>
+                  <h3 class="mb-1 flex items-center gap-1.5 font-semibold text-slate-900"><Icon :svg="strokeIconPaths.fileSpreadsheet" :size="14" />{{ m.predictionReport.kind === 'waybill' ? '核验结果文件' : '结果文件' }}</h3>
                   <p>{{ m.predictionReport.exportSummary }}</p>
-                  <a v-if="m.file" :href="m.file.url" :download="m.file.name" :aria-label="`下载 ${m.file.name}`" class="mt-2 inline-flex items-center gap-1.5 rounded-md border border-emerald-300 bg-emerald-50 px-3 py-2 font-medium text-emerald-700 hover:bg-emerald-100"><Icon :svg="strokeIconPaths.download" :size="14" />下载预测结果文件</a>
+                  <a v-if="m.file" :href="m.file.url" :download="m.file.name" :aria-label="`下载 ${m.file.name}`" class="mt-2 inline-flex items-center gap-1.5 rounded-md border border-emerald-300 bg-emerald-50 px-3 py-2 font-medium text-emerald-700 hover:bg-emerald-100"><Icon :svg="strokeIconPaths.download" :size="14" />{{ m.verificationRows?.length ? '下载轨迹核验结果文件' : '下载核验结果文件' }}</a>
                 </div>
                 <div v-if="m.predictionReport.boundaries.length" class="mt-4 border-t border-slate-200 pt-3">
-                  <h3 class="mb-2 font-semibold text-slate-900">数据边界与核验建议</h3>
+                  <h3 class="mb-2 font-semibold text-slate-900">{{ m.predictionReport.kind === 'waybill' ? '数据边界说明' : '数据边界与核验建议' }}</h3>
                   <p v-for="item in m.predictionReport.boundaries" :key="item.label" class="mb-2"><strong class="font-medium text-slate-900">{{ item.label }}：</strong>{{ item.text }}</p>
                 </div>
               </section>

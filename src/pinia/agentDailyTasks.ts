@@ -60,10 +60,20 @@ function makeRun(task: DailyTask, runtime: ProjectTaskRuntime | undefined, sourc
   };
 }
 
+function loadProjectTasks() {
+  const tasks = restoreMailboxTasks();
+  const resetKey = 'iovagent_prediction_tasks_cleared_v1';
+  if (typeof window === 'undefined' || localStorage.getItem(resetKey)) return tasks;
+  const retained = tasks.filter((task) => task.projectId !== 'P001');
+  persistMailboxTasks(retained);
+  localStorage.setItem(resetKey, 'true');
+  return retained;
+}
+
 export const useAgentDailyTasks = defineStore('agentDailyTasks', {
   state: () => ({
     projects: {} as Record<string, ProjectTaskRuntime>,
-    tasks: restoreMailboxTasks() as DailyTask[],
+    tasks: loadProjectTasks() as DailyTask[],
     now: Date.now(),
   }),
   getters: {
@@ -94,11 +104,8 @@ export const useAgentDailyTasks = defineStore('agentDailyTasks', {
             fences: [], orders: project.total > 0 ? createMonitoredOrders(orders) : [], events: [], processedEventIds: [],
           };
           this.projects[project.id] = runtime;
-          if (project.id === 'P001') {
-            this.seedTasks(runtime);
-          }
         }
-        if (project.mailbox?.status === 'bound') {
+        if (project.mailbox?.status === 'bound' && project.id !== 'P001') {
           let mailTask = this.tasks.find(task => task.projectId === project.id && task.taskTemplate === 'email-order');
           if (!mailTask) {
             mailTask = createEmailDemoTask(project.id, Date.now(), project.id === 'P001');

@@ -2,7 +2,9 @@
 import type { TimelineEvent } from '../interface';
 
 import { Icon } from '@packages/icon';
-import { nextTick, onBeforeUnmount, onMounted, ref } from 'vue';
+import { nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
+import { useRoute } from 'vue-router';
+import { useAgentWorkNav } from '../useAgentWorkNav';
 
 import { agentWorkData } from '@/pinia/agentWork';
 import { convertGpsCoordinates, loadAMap, searchDrivingRoute, type AMapCoordinate } from '@/utils/amap';
@@ -11,6 +13,14 @@ import { strokeIconPaths } from '../strokeIconPaths';
 import { badgeToneClass } from '../utils';
 
 const store = agentWorkData();
+const route = useRoute();
+const { goPage } = useAgentWorkNav();
+watch(() => [route.query.projectId, route.query.orderId], ([projectId, orderId]) => {
+  const project = store.projects.find((item) => item.id === projectId);
+  if (project && store.currentProjectId !== project.id) store.switchProject(project);
+  const order = store.currentProjectOrders.find((item) => item.id === orderId);
+  if (order) store.setSelectedOrder(order);
+}, { immediate: true });
 const mapRef = ref<HTMLDivElement | null>(null);
 const routeDistance = ref('--');
 const routeDuration = ref('--');
@@ -205,6 +215,8 @@ function drawMarkers(amap: typeof AMap, coordinates: AMapCoordinate[]) {
 }
 
 async function initMap() {
+  if (store.currentProjectId === 'PSC2') return;
+  if (!store.currentProjectOrders.some((order) => order.id === store.selectedOrder?.id)) return;
   await nextTick();
   if (!mapRef.value || mapInstance) return;
 
@@ -252,7 +264,21 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div class="flex h-full flex-col space-y-3">
+  <div v-if="!store.currentProjectOrders.some((order) => order.id === store.selectedOrder?.id)" class="flex h-full flex-col">
+    <h1 class="border-b border-slate-200 px-4 py-3 text-sm font-semibold">运单详情与地图轨迹</h1>
+    <p class="p-8 text-center text-sm text-slate-500">暂无运单详情与轨迹数据，请先上传运单并在运单列表中选择记录。</p>
+  </div>
+  <div v-else-if="store.currentProjectId === 'PSC2'" class="flex h-full flex-col gap-4 overflow-y-auto">
+    <header class="flex items-center justify-between border-b border-slate-200 px-4 py-3"><h1 class="text-sm font-semibold">运单详情</h1><button type="button" class="rounded border border-slate-200 px-3 py-1 text-xs" @click="goPage('orders')">返回运单列表</button></header>
+    <section class="mx-4 rounded border border-slate-200 bg-white p-4">
+      <div class="flex items-center justify-between gap-3"><h2 class="text-sm font-semibold">{{ store.selectedOrder.id }} · {{ store.selectedOrder.plate }}</h2><span class="rounded px-2 py-1 text-xs" :class="store.selectedOrder.risk === '高风险' ? 'bg-red-50 text-red-700' : 'bg-emerald-50 text-emerald-700'">{{ store.selectedOrder.risk === '高风险' ? '异常 · 待复核' : '正常 · 已完成' }}</span></div>
+      <p class="mt-3 text-sm text-slate-600">{{ store.selectedOrder.route }}</p>
+      <h3 class="mt-4 text-xs font-semibold">监控结论</h3><p class="mt-2 text-sm" :class="store.selectedOrder.risk === '高风险' ? 'text-red-700' : 'text-slate-600'">{{ store.selectedOrder.issue }}</p>
+      <p class="mt-2 text-xs text-slate-500">{{ store.selectedOrder.risk === '高风险' ? '建议核对停靠原因、司机说明及运输轨迹后确认处理。' : '出厂和完成节点顺序正常，运输记录已完成。' }}</p>
+    </section>
+    <section class="mx-4 mb-4"><h2 class="mb-2 text-sm font-semibold">附件运单信息</h2><dl class="grid grid-cols-1 gap-px overflow-hidden rounded border border-slate-200 bg-slate-200 md:grid-cols-2"><div v-for="field in store.selectedOrder.sourceFields" :key="field.label" class="bg-white px-3 py-2"><dt class="text-xs text-slate-500">{{ field.label }}</dt><dd class="mt-1 break-words text-sm text-slate-800">{{ field.value }}</dd></div></dl></section>
+  </div>
+  <div v-else class="flex h-full flex-col space-y-3">
     <div class="overflow-hidden rounded-md border border-[#deded9] bg-white">
       <div class="flex h-12 items-center justify-between gap-4 border-b border-[#e2e2dc] px-4">
         <div class="flex items-center gap-2.5">

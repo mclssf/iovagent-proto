@@ -1,4 +1,5 @@
 import type { DailyTask, TaskAttachment, TaskResultFile, TaskRun } from './dailyTasks';
+import { cleanOutputText } from './outputWording';
 
 const DAY = 86400000;
 const chinaDate = (value: number) => new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit', day: '2-digit' }).format(value);
@@ -92,10 +93,10 @@ export function ordinaryTaskResult(task: DailyTask, run: TaskRun): { text: strin
 }
 
 export function downloadTaskResult(file: TaskResultFile) {
-  const url = URL.createObjectURL(new Blob([file.content], { type: file.mimeType }));
+  const url = URL.createObjectURL(new Blob([cleanOutputText(file.content)], { type: file.mimeType }));
   const link = document.createElement('a');
   link.href = url;
-  link.download = file.name;
+  link.download = cleanOutputText(file.name);
   document.body.appendChild(link);
   link.click();
   link.remove();

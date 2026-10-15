@@ -1,6 +1,8 @@
 import { migrateCapacitySkillIds } from './capacitySkills';
 import { hasVehiclePredictionIntent } from '@/views/AgentWork/vehiclePredictionSkill';
-import { runPredictionDemo, runWaybillAuthenticityDemo } from '@/views/AgentWork/vehiclePredictionDemo';
+import { runPredictionDemo, runWaybillAuthenticityDemo, runWaybillTraceVerifierDemo } from '@/views/AgentWork/vehiclePredictionDemo';
+import { cleanOutputValue } from '@/views/AgentWork/outputWording';
+import shipperMonitorSource from '@/views/AgentWork/shipperMonitorOrders.json';
 import type {
   AgentConversation,
   AgentResultFile,
@@ -21,7 +23,6 @@ import type {
 import { ElMessage } from 'element-plus';
 import { defineStore } from 'pinia';
 
-import { cargoQuoteSeedData, cargoSeedData, privateCapacitySeedData } from '@/views/AgentWork/capacityData';
 import { extractMcpPrompt, runMcpPrompt } from '@/views/AgentWork/mcpClient';
 import { getRiskOrders, summarizeOrders } from '@/views/AgentWork/utils';
 import { ensureRequiredMonitorSkills } from '@/views/AgentWork/dailyTasks';
@@ -54,11 +55,11 @@ const projectsSeed: Project[] = [
   {
     id: 'P001',
     mailbox: createProjectMailbox(),
-    name: '货主场景演示',
+    name: '真实性装卸货地预测',
     status: '已连接',
     sync: '2分钟前',
-    total: 128,
-    risk: 17,
+    total: 0,
+    risk: 0,
     tmsUrl: 'https://tms.huadong.example.com',
     tmsUser: 'alfred',
     keyword: '华东干线',
@@ -77,12 +78,33 @@ const projectsSeed: Project[] = [
       mailboxSkill.id,
     ],
   },
+  ...['运单真实性甄别', '货主运单监控（司机付费）', '在途停靠风险研判', '货物在途追踪与填报', '经验路线规划与偏航预警', '多源订单归集与录入', '回单自动关联审核'].map((name, index): Project => ({
+    id: `PSC${index + 1}`, name, status: '已连接', sync: '暂无数据', total: 0, risk: 0,
+    tmsUrl: 'https://tms.huadong.example.com', tmsUser: 'demo_user', keyword: name, statusFilter: '全部', skillIds: ['capacity-cargo-publish', 'capacity-quote-collection'],
+    quickPrompts: [
+      ['运单真实性', '核验上传历史运单的运单真实性，检查出厂与完成时车辆是否在对应地点', '根据上传订单明细核验运单真实性，汇总区域事件和位置证据并导出 Excel'],
+      ['监控司机进场与离场时间', '核验车辆是否进入货主场站', '汇总司机进场监控结果'],
+      ['研判在途异常停靠风险', '分析长时间停车及疑似非计划卸货', '结合轨迹识别高风险停靠点'],
+      ['根据上传表格补充在途运单', '查询运单状态并填写客服表格', '补充车辆位置与预计到达时间'],
+      ['按历史经验规划运输路线', '检查车辆是否偏离计划路线', '分析偏航原因并提出处理建议'],
+      ['汇总多源运单并检查重复记录', '将上传订单整理为标准运单', '校验录单字段与缺失信息'],
+      ['将上传回单关联到对应运单', '审核回单完整性与签收信息', '汇总待审核及无法关联的回单'],
+    ][index],
+  })),
 ];
 
-const projectWelcomeMessages: ChatMessage[] = [
-  { role: 'agent', text: '今日已同步 128 单，已加入在途监控 128 单。当前高风险 6 单、低风险 11 单。' },
-  { role: 'agent', text: '发现 2 单非目的地物流园长停、1 单 GPS 轨迹疑似造假，建议优先复核。' },
-];
+const projectWelcomeMessages: ChatMessage[] = [];
+
+const shipperMonitorOrders: Order[] = shipperMonitorSource.map((row, index) => ({
+  id: row['订单号'], plate: row['车牌号'], driver: '未提供', carrier: row['承运商'] || '未提供',
+  factory: row['发货工厂'], route: `${row['发货工厂']} → ${row['收货地址']}`,
+  status: index === 0 ? '已完成' : '待复核', risk: index === 0 ? '无风险' : '高风险',
+  issue: index === 0 ? '运输节点正常，已完成交付' : '非计划停靠：驶离规定线路后停车45分钟，建议复核',
+  source: '附件导入', startTime: row['出厂时间'], updated: row['订单结束时间'],
+  eta: index === 0 ? row['订单结束时间'] : '待异常复核',
+  sourceFields: Object.entries(row).map(([label, value]) => ({ label, value: value == null ? '未提供' : String(value) })),
+}));
+
 
 const conversationSeeds: AgentConversation[] = [];
 
@@ -1349,8 +1371,8 @@ export const agentWorkData = defineStore('agentWork', {
   state: () => {
     const defaultCargoDateRange = createDefaultRecentWeekDateRange();
     const projects = restoreMailboxProjects(projectsSeed)
-      .filter((project) => project.id === projectsSeed[0]!.id)
-      .map((project) => ({ ...project, name: '货主场景演示', skillIds: ensureRequiredMonitorSkills(migrateCapacitySkillIds(project.skillIds ?? [])) }));
+      .filter((project) => projectsSeed.some((seed) => seed.id === project.id))
+      .map((project) => ({ ...project, total: project.id === 'PSC2' ? 2 : 0, risk: project.id === 'PSC2' ? 1 : 0, sync: project.id === 'PSC2' ? '附件已导入' : '暂无数据', status: '已连接', name: projectsSeed.find((seed) => seed.id === project.id)!.name, quickPrompts: projectsSeed.find((seed) => seed.id === project.id)!.quickPrompts, skillIds: project.id === 'P001' ? ensureRequiredMonitorSkills(migrateCapacitySkillIds(project.skillIds ?? [])) : project.skillIds }));
     persistMailboxProjects(projects);
     return {
       ordersStartDate: defaultOrdersDateRange.start,
@@ -1383,24 +1405,9 @@ export const agentWorkData = defineStore('agentWork', {
       riskOrdersKeyword: '',
       detailView: 'agent' as 'agent' | 'rule',
       detailOnlyAbnormal: false,
-      cargoSources: cargoSeedData.map((cargo) => ({
-        ...cargo,
-        loadAddresses: cargo.loadAddresses.map((address) => ({ ...address })),
-        unloadAddresses: cargo.unloadAddresses.map((address) => ({ ...address })),
-        platformPublications: cargo.platformPublications.map((publication) => ({ ...publication })),
-        price: { ...cargo.price },
-        tags: [...cargo.tags],
-        truckLengths: [...cargo.truckLengths],
-        truckTypes: [...cargo.truckTypes],
-      })) as StandardCargo[],
-      cargoQuotes: cargoQuoteSeedData.map((quote) => ({
-        ...quote,
-        comments: [...quote.comments],
-      })) as CargoQuote[],
-      privateCapacity: privateCapacitySeedData.map((capacity) => ({
-        ...capacity,
-        routes: [...capacity.routes],
-      })) as PrivateCapacity[],
+      cargoSources: [] as StandardCargo[],
+      cargoQuotes: [] as CargoQuote[],
+      privateCapacity: [] as PrivateCapacity[],
       cargoKeyword: '',
       cargoStatusFilter: '全部',
       cargoSourceFilter: '全部',
@@ -1419,7 +1426,7 @@ export const agentWorkData = defineStore('agentWork', {
       privateCapacityKeyword: '',
       privateCapacityLoadStateFilter: '全部',
       /** 演示数据，只读引用 */
-      ordersSeed: ordersSeedData,
+      ordersSeed: [] as Order[],
     };
   },
   getters: {
@@ -1432,8 +1439,11 @@ export const agentWorkData = defineStore('agentWork', {
     currentConversation(state): AgentConversation | null {
       return state.recentConversations.find((conversation) => conversation.id === state.currentConversationId) ?? null;
     },
+    currentProjectOrders(state): Order[] {
+      return state.currentProjectId === 'PSC2' ? shipperMonitorOrders : state.currentProjectId === 'P001' ? state.ordersSeed : [];
+    },
     ordersFiltered(state): Order[] {
-      return state.ordersSeed.filter(
+      return this.currentProjectOrders.filter(
         (o) =>
           (state.ordersRiskFilter === '全部' || o.risk === state.ordersRiskFilter) &&
           (state.ordersStatusFilter === '全部' || o.status === state.ordersStatusFilter) &&
@@ -1444,7 +1454,7 @@ export const agentWorkData = defineStore('agentWork', {
     },
     riskOrdersFiltered(state): Order[] {
       const keyword = state.riskOrdersKeyword.trim().toLowerCase();
-      return getRiskOrders(state.ordersSeed)
+      return getRiskOrders(this.currentProjectOrders)
         .filter((o) => state.riskOrdersRisk === '全部异常' || o.risk === state.riskOrdersRisk)
         .filter((o) => state.riskOrdersSource === '全部来源' || o.source.includes(state.riskOrdersSource))
         .filter((o) => !state.ordersStartDate || getOrderStartDate(o) >= state.ordersStartDate)
@@ -1545,6 +1555,26 @@ export const agentWorkData = defineStore('agentWork', {
     },
   },
   actions: {
+    syncPredictionOrders(message: ChatMessage) {
+      if (this.currentProjectId !== 'P001' || !message.predictionRows?.length) return;
+      const uploadedOrders: Order[] = cleanOutputValue(message.predictionRows).map((row) => ({
+        id: row.order || `UPLOAD-${row.row}`, plate: row.plate, driver: '未提供', carrier: '未提供',
+        route: `${row.startLocation || '待补充装货地'} → ${row.endLocation || '待补充卸货地'}`,
+        factory: row.startLocation || '待补充装货地', status: '待核验', risk: '无风险',
+        issue: '装卸货地点预测结果待业务核验', source: 'Excel上传', startTime: row.sourceStartTime || '', updated: '刚刚', eta: '未提供',
+      }));
+      const byId = new Map(this.ordersSeed.map((order) => [order.id, order]));
+      uploadedOrders.forEach((order) => byId.set(order.id, order));
+      this.ordersSeed = [...byId.values()];
+      const dates = this.ordersSeed.map((order) => order.startTime.slice(0, 10)).filter(Boolean).sort();
+      this.ordersStartDate = dates[0] || '';
+      this.ordersEndDate = dates.at(-1) || '';
+      const project = this.projects.find((item) => item.id === 'P001')!;
+      project.total = this.ordersSeed.length;
+      project.risk = 0;
+      project.sync = '刚刚';
+      useAgentDailyTasks().syncProjects(this.projects, this.ordersSeed);
+    },
     focusCargoQuotes(cargoId: string) {
       this.quoteKeyword = cargoId;
       this.quoteTypeFilter = '全部';
@@ -1888,7 +1918,11 @@ export const agentWorkData = defineStore('agentWork', {
       this.workspaceMode = 'project';
       this.currentConversationId = '';
       this.currentProjectId = p.id;
-      this.agentMessages = cloneChatMessages(projectWelcomeMessages);
+      if (p.id === 'PSC2') {
+        this.ordersStartDate = '2026-08-01';
+        this.ordersEndDate = '2026-08-01';
+      }
+      this.agentMessages = p.id === 'P001' ? cloneChatMessages(projectWelcomeMessages) : [];
       this.agentInput = '';
       this.rightPanel = 'overview';
       ElMessage.success(`已切换到：${p.name}`);
@@ -2051,16 +2085,17 @@ export const agentWorkData = defineStore('agentWork', {
       if (!raw.trim()) return;
       this.ensureConversationStarted();
       const next: ChatMessage[] = [...this.agentMessages, { role: 'user', text: raw }];
-      if (/核验出厂.*完成.*车辆.*对应地点/.test(raw)) {
+      if (/核验出厂.*完成.*车辆.*对应地点/.test(raw) || this.currentProjectId === 'PSC1' && /运单真实性|核验|甄别/.test(raw)) {
         const placeholder: ChatMessage = { role: 'agent', text: '正在读取源运单并匹配出厂与完成地点…', status: '处理中' };
         this.agentMessages = [...next, placeholder];
         const currentPlaceholder = this.agentMessages.at(-1);
         this.agentInput = '';
         try {
           if (attachments.length !== 1 || !(attachments[0] instanceof File)) throw new Error('请上传一个 Excel 源文件');
-          const response = await runWaybillAuthenticityDemo(attachments[0]);
+          const response = this.currentProjectId === 'PSC1' ? await runWaybillTraceVerifierDemo(attachments[0]) : await runWaybillAuthenticityDemo(attachments[0]);
           if (this.agentMessages.at(-1) !== currentPlaceholder) return;
-          this.startDelayedAgentProcess(next, response, () => {});
+          if (response.predictionReport) this.startPredictionStream(next, response);
+          else this.startDelayedAgentProcess(next, response, () => {});
         } catch (error) {
           if (this.agentMessages.at(-1) !== currentPlaceholder) return;
           this.agentMessages = [...next, { role: 'agent', text: `运单校验未执行：${(error as Error).message}。` }];
@@ -2079,6 +2114,7 @@ export const agentWorkData = defineStore('agentWork', {
           if (attachments.length !== files.length) throw new Error('附件内容不可用，请重新上传 Excel 文件');
           const response = await runPredictionDemo(prompt, files);
           if (this.agentMessages.at(-1) !== currentPlaceholder) return;
+          if (files.length) this.syncPredictionOrders(response);
           response.pendingPredictionPrompt = response.predictionRows?.some((row) => ['待补充', '参数错误', '地点歧义'].includes(row.status)) && !files.length && !/演示样例/.test(prompt) ? prompt : undefined;
           this.startPredictionStream(next, response);
         } catch (error) {
@@ -2382,21 +2418,25 @@ export const agentWorkData = defineStore('agentWork', {
       });
     },
     startPredictionStream(next: ChatMessage[], finalMessage: ChatMessage) {
+      finalMessage = cleanOutputValue(finalMessage);
       const report = finalMessage.predictionReport;
       if (!report) { this.startDelayedAgentProcess(next, finalMessage, () => {}); return; }
       clearAgentProcessTimers();
-      this.agentMessages = [...next, { ...finalMessage, status: '处理中', streaming: true, steps: [], result: '', file: undefined, predictionRows: [], predictionReport: { summary: [], fields: [], judgments: [], statistics: [], analyses: [], boundaries: [], exportSummary: '' } }];
+      this.agentMessages = [...next, { ...finalMessage, status: '处理中', streaming: true, steps: [], result: '', file: undefined, predictionRows: [], verificationRows: [], predictionReport: { kind: report.kind, taskProgress: [], introduction: '', summary: [], fields: [], judgments: [], statistics: [], analyses: [], boundaries: [], exportSummary: '' } }];
       const current = this.agentMessages.at(-1)!;
       const live = current.predictionReport!;
       const chunks: (() => void)[] = [];
+      report.taskProgress?.forEach((item) => chunks.push(() => live.taskProgress!.push(item)));
+      if (report.introduction) chunks.push(() => { live.introduction = report.introduction; });
       // Table rows arrive together; narrative text is emitted in short chunks.
       report.summary.forEach((item) => chunks.push(() => live.summary.push(item)));
       report.fields.forEach((item) => chunks.push(() => live.fields.push(item)));
       report.judgments.forEach((item) => chunks.push(() => live.judgments.push(item)));
       report.statistics.forEach((item) => chunks.push(() => live.statistics.push(item)));
       finalMessage.predictionRows?.forEach((row) => chunks.push(() => current.predictionRows!.push(row)));
+      finalMessage.verificationRows?.forEach((row) => chunks.push(() => current.verificationRows!.push(row)));
       report.analyses.forEach((item, index) => {
-        chunks.push(() => live.analyses.push({ title: item.title, points: [] }));
+        chunks.push(() => live.analyses.push({ title: item.title, points: [], groups: item.groups }));
         item.points.forEach((point, pointIndex) => {
           for (let length = 0; length < point.length; length += 16) {
             const end = Math.min(length + 16, point.length);
@@ -2429,6 +2469,7 @@ export const agentWorkData = defineStore('agentWork', {
       emitNext();
     },
     startDelayedAgentProcess(next: ChatMessage[], finalMessage: ChatMessage, onComplete: () => void) {
+      finalMessage = cleanOutputValue(finalMessage);
       const steps = finalMessage.steps ?? [];
       const messageIndex = next.length;
 

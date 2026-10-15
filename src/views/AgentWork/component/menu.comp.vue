@@ -330,7 +330,7 @@ const capacityProjectNavs: Array<{ icon: string; id: PageId; label: string; skil
 function projectNavsFor(project: Project) {
   const enabledSkillIds = project.skillIds ?? [];
   return [
-    ...projectNavs,
+    ...projectNavs.filter((item) => project.id !== 'PSC2' || item.id !== 'detail'),
     ...capacityProjectNavs.filter((item) => item.skillIds.some((skillId) => enabledSkillIds.includes(skillId))),
   ];
 }

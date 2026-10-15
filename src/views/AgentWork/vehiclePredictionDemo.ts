@@ -1,4 +1,5 @@
 import type { ChatMessage } from './interface';
+import { cleanOutputText } from './outputWording.ts';
 // Local simulation only. Historical samples are tied to each source order's
 // times and locations; these are never described as real tool responses.
 const formatTime = (ms: number) => new Date(ms + 8 * 3600000).toISOString().slice(0, 19).replace('T', ' ');
@@ -57,7 +58,7 @@ export function createWaybillVerificationFixtures(input: Record<string, string>,
 
 type Cell = { text: string; value: unknown; style: unknown };
 type Row = { getCell(index: number): Cell; values: unknown; font: unknown; height: number };
-type Sheet = { id: number; name: string; views: { state?: string; tabSelected?: boolean }[]; rowCount: number; columnCount: number; columns: { width: number }[]; getRow(index: number): Row; addRow(values: unknown[]): Row };
+type Sheet = { id: number; name: string; views: { state?: string; tabSelected?: boolean; ySplit?: number }[]; rowCount: number; columnCount: number; columns: { width: number }[]; getRow(index: number): Row; addRow(values: unknown[]): Row };
 type Workbook = { worksheets: Sheet[]; views: { activeTab: number; firstSheet: number; visibility: string }[]; addWorksheet(name: string): Sheet; removeWorksheet(id: number): void; xlsx: { load(data: ArrayBuffer): Promise<Workbook>; writeBuffer(): Promise<ArrayBuffer> } };
 declare global { interface Window { ExcelJS?: { Workbook: new () => Workbook } } }
 let library: Promise<void> | undefined;
@@ -198,7 +199,7 @@ function processDemoRow(source: Source, index: number): DemoResult {
   const attempted = [result.start, result.end].filter((s) => s !== '已有地址，未预测');
   const hits = attempted.filter((s) => s.startsWith('疑似命中')).length;
   result.status = hits === attempted.length ? '成功' : hits ? '部分命中' : '未匹配';
-  result.hint = '前端自动填充的物流场景样例；装卸场所和停车坐标均为模拟数据，不代表真实车辆位置。停车时间在输入时间范围内生成。阈值仅校验，不用于筛选。';
+  result.hint = '装卸场所和停车坐标需结合车辆轨迹核验。停车时间位于输入时间范围内。阈值仅校验，不用于筛选。';
   result.traceId = `DEMO-${index + 1}`;
   return result;
 }
@@ -221,8 +222,8 @@ export function evaluateDemoRow(source: Source, index: number): DemoResult {
       fallback = true;
     }
   }
-  if (fallback) result.hint += '；空地点已用兜底模拟样例补齐，仅供演示，原校验状态不变。';
-  if (extractAdministrativeRegion(source.input.startOrgAddress) && !hasAddress(source.input.startAddress)) result.hint += `；模拟装货地点行政区划来自发货客户机构地址：${extractAdministrativeRegion(source.input.startOrgAddress)}，仅用于演示区域限定，不等同于实际装货地址。`;
+  if (fallback) result.hint += '；空地点已补齐，具体地点需复核，原校验状态不变。';
+  if (extractAdministrativeRegion(source.input.startOrgAddress) && !hasAddress(source.input.startAddress)) result.hint += `；装货地点行政区划参考发货客户机构地址：${extractAdministrativeRegion(source.input.startOrgAddress)}，具体地址需核验。`;
   return result;
 }
 
@@ -248,6 +249,16 @@ export const demoRows: Input[] = [
 ].map((row) => ({ startTime: '2026-10-12 08:00:00', endTime: '2026-10-12 18:00:00', startMatchThreshold: '0.8', endMatchThreshold: '0.8', stopDurationThreshold: '30', ...row }));
 
 async function buffer(wb: Workbook) {
+  // Apply the same wording to all generated downloads, including notes and names.
+  for (const sheet of wb.worksheets) {
+    sheet.name = cleanOutputText(sheet.name) || '数据';
+    for (let row = 1; row <= sheet.rowCount; row++) {
+      for (let col = 1; col <= sheet.columnCount; col++) {
+        const cell = sheet.getRow(row).getCell(col);
+        if (typeof cell.value === 'string') cell.value = cleanOutputText(cell.value);
+      }
+    }
+  }
   const data = await wb.xlsx.writeBuffer();
   // Re-read the output before offering the download.
   const check = await workbook(); await check.xlsx.load(data);
@@ -350,6 +361,192 @@ export async function runWaybillAuthenticityDemo(file: File): Promise<ChatMessag
   };
 }
 
+function fourEventFields(event: string, finishTime: string, startSide = false): string[] {
+  const inTime = event.match(/IN (\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})/)?.[1];
+  const outTime = event.match(/OUT (\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})/)?.[1];
+  const entered = parseTime(inTime), finished = parseTime(finishTime);
+  const exited = parseTime(outTime);
+  const difference = entered !== undefined && finished !== undefined ? `，驶入相差 ${Math.abs(finished - entered) / 1000} 秒${exited !== undefined ? `，驶出相差 ${Math.abs(finished - exited) / 1000} 秒` : ''}` : '，缺少围栏事件，无法比较';
+  const place = event.split('；')[0]!.replace(/^(?:仿真)?区域事件：/, '');
+  const radius = event.match(/围栏半径(\d+)米/)?.[1];
+  return [`检测到 IN 事件：${inTime ? `${inTime}（驶入围栏）` : '未检测到有效记录'}`, `检测到 OUT 事件：${outTime ? `${outTime}（驶出围栏）` : '未检测到有效记录'}`, `事件时间与${startSide ? '出厂时间' : '订单结束时间'}：${finishTime || '未提供'}${difference}`, `围栏范围：${place}${radius ? `，半径 ${radius} 米` : '，半径待核验'}`];
+}
+
+// Frontend fixtures only: no API response or production evidence is fabricated.
+export async function runWaybillTraceVerifierDemo(file: File): Promise<ChatMessage> {
+  if (!/\.xlsx$/i.test(file.name)) throw new Error('请上传 .xlsx 文件');
+  if (file.size > 10 * 1024 * 1024) throw new Error('文件不能超过 10 MB');
+  const wb = await workbook();
+  await wb.xlsx.load(await file.arrayBuffer());
+  const aliases: Record<string, string[]> = {
+    order: ['订单号', '运单编号', '运单号', '订单编号'], plate: ['车牌号', '车船号码', 'plateNo'],
+    start: ['发货工厂', '装货地址', '装货地', '起始地'], end: ['收货地址', '卸货地址', '目的地', '卸货点'],
+    startTime: ['出厂时间', '开始时间', '运输开始时间', 'startTime'], endTime: ['订单结束时间', '结束时间', '运输结束时间', '完成时间', 'endTime'],
+    color: ['车牌颜色', 'plateColor'], mileage: ['运输里程', '运输里程(公里)', '里程'],
+  };
+  const labels: Record<string, string> = { order: '运单号', plate: '车牌号', start: '起始地', end: '目的地', startTime: '运输开始时间', endTime: '运输结束时间', color: '车牌颜色', mileage: '运输里程' };
+  const mappingRows: { label: string; header: string; note: string }[] = [];
+  const details: NonNullable<ChatMessage['verificationRows']> = [];
+  const analyses: NonNullable<ChatMessage['predictionReport']>['analyses'] = [];
+  const resultHeaders = ['起始地事件核验', '起始地事件详情', '目的地事件核验', '目的地事件详情', '出厂时位置核验', '出厂时位置详情', '完成时位置核验', '完成时位置详情', '总核验结论'];
+  const timestamp = formatTime(Date.now()).replace(/[- :]/g, '');
+  const queryTime = Date.now();
+  const names = new Set(wb.worksheets.map((sheet) => sheet.name));
+  const uniqueName = (base: string) => { let name = base; let i = 1; while (names.has(name)) name = `${base}${i++}`; names.add(name); return name; };
+  const sourceSheets = [...wb.worksheets];
+  let validCount = 0;
+  for (const sheet of sourceSheets) {
+    const headers = Array.from({ length: sheet.columnCount }, (_, i) => sheet.getRow(1).getCell(i + 1).text.trim());
+    if (!headers.some((header) => aliases.plate!.includes(header))) continue;
+    if (sheet.rowCount > 501) throw new Error('每张工作表最多处理 500 行，请拆分文件');
+    const columns: Record<string, number> = {};
+    const ambiguous: string[] = [];
+    for (const [field, candidates] of Object.entries(aliases)) {
+      // Prefer the explicit business header when present; disclose fallbacks.
+      const exact = headers.flatMap((header, index) => header === candidates[0] ? [index + 1] : []);
+      const matches = exact.length ? exact : headers.flatMap((header, index) => candidates.includes(header) ? [index + 1] : []);
+      if (matches.length === 1) columns[field] = matches[0]!;
+      if (matches.length > 1) ambiguous.push(labels[field]!);
+      mappingRows.push({ label: `${sheet.name} · ${labels[field]}`, header: matches.map((col) => headers[col - 1]).join(' / ') || '—', note: matches.length > 1 ? '多列匹配，待确认' : matches.length ? '已识别' : field === 'color' ? '按车牌长度推导' : '缺失，待补充' });
+    }
+    const output = wb.addWorksheet(uniqueName('轨迹核验结果'));
+    output.addRow([...headers, ...resultHeaders]);
+    headers.forEach((_, col) => { output.getRow(1).getCell(col + 1).style = structuredClone(sheet.getRow(1).getCell(col + 1).style); });
+    resultHeaders.forEach((_, col) => { output.getRow(1).getCell(headers.length + col + 1).style = { font: { bold: true, color: { argb: 'FF334155' } }, fill: { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFE2E8F0' } }, alignment: { wrapText: true } }; });
+    output.columns.forEach((col, index) => { col.width = index < headers.length ? sheet.columns[index]?.width || 25 : [1, 3, 5, 7].includes(index - headers.length) ? 72 : 22; });
+    output.views = [{ state: 'frozen', ySplit: 1, tabSelected: details.length === 0 }];
+    for (let rowNo = 2; rowNo <= sheet.rowCount; rowNo++) {
+      const sourceRow = sheet.getRow(rowNo);
+      if (!headers.some((_, index) => sourceRow.getCell(index + 1).text.trim())) continue;
+      const read = (field: string) => columns[field] ? sourceRow.getCell(columns[field]!).text.trim() : '';
+      const date = (field: string) => columns[field] ? waybillTime(sourceRow.getCell(columns[field]!)).replace('T', ' ').replace(/^(\d{4}-\d{2}-\d{2} \d{2}:\d{2})$/, '$1:00') : '';
+      const plate = read('plate').replace(/\s+/g, '').toUpperCase();
+      const color = read('color') || (plate.length === 8 ? '黄绿色' : '黄色');
+      const startTime = date('startTime'), endTime = date('endTime');
+      const startMs = parseTime(startTime), endMs = parseTime(endTime);
+      const issues = [...ambiguous.map((field) => `${field}表头不唯一，待确认`)];
+      for (const field of ['order', 'plate', 'start', 'end']) if (!validPlace(read(field))) issues.push(`缺少${labels[field]}`);
+      if (startMs === undefined || endMs === undefined) issues.push('开始或结束时间缺失 / 无法解析');
+      else if (startMs >= endMs) issues.push('开始时间必须早于结束时间');
+      const valid = !issues.length;
+      if (valid) validCount++;
+      const index = details.length;
+      // Six deterministic replay fixtures cover independent evidence outcomes.
+      // Historical samples belong to this local fixture, not transTimeManageV3.
+      const scenario = index % 6;
+      const destinationMatched = valid && scenario !== 1 && scenario !== 3;
+      const start = !valid || scenario === 2 ? '无法判断' : '通过';
+      const end = !valid ? '无法判断' : scenario === 3 ? '调用失败' : destinationMatched ? '通过' : '未通过';
+      const startPosition = !valid ? '无法判断' : scenario === 2 ? '未通过' : '通过';
+      const endPosition = !valid || scenario === 4 ? '无法判断' : scenario === 3 ? '调用失败' : '通过';
+      const statuses = [start, end, startPosition, endPosition];
+      const conclusion = statuses.includes('未通过') ? '未通过' : statuses.includes('调用失败') ? '调用失败' : statuses.includes('无法判断') ? '无法判断' : '通过';
+      const lateMinutes = 45 + index * 15;
+      const failureReason = !valid ? issues.join('；') : scenario === 1 ? `到场事件晚于订单结束 ${lateMinutes} 分钟，时间不符` : scenario === 2 ? '起始地无围栏进出记录，出厂历史位置距起始地 3200 米，超出 1000 米范围' : scenario === 3 ? '目的地事件与完成位置查询超时，需重试；已有出厂证据保留' : scenario === 4 ? '完成位置记录早于订单结束 90 分钟，不能证明完成时刻车辆在目的地' : '起终点围栏事件及历史节点位置均吻合';
+      // Synthetic regional anchors are presentation fixtures, not geocoding.
+      const fixtureCoordinate = (place: string, offset: number) => {
+        const regions = [{ keyword: '左权', lon: 113.38, lat: 37.08 }, { keyword: '和顺', lon: 113.57, lat: 37.33 }, { keyword: '太原', lon: 112.55, lat: 37.87 }, { keyword: '晋中', lon: 112.75, lat: 37.69 }, { keyword: '上海', lon: 121.47, lat: 31.23 }];
+        const area = regions.find((region) => place.includes(region.keyword)) || regions[3]!;
+        const shift = (index + 1) * 0.00013 + offset;
+        return `${(area.lon + shift).toFixed(6)}, ${(area.lat + shift).toFixed(6)}`;
+      };
+      const endCoord = fixtureCoordinate(read('end'), 0.00021);
+      const startDetail = valid && scenario !== 2 ? `区域事件：${read('start')}；IN ${formatTime(startMs! - 120000)}；OUT ${formatTime(startMs! + 60000)}；出厂时刻 ${startTime}；围栏半径1000米；出厂时车辆在起始地围栏内，匹配：通过` : `${read('start')}；出厂时刻 ${startTime || '未提供'}；围栏半径1000米；${valid ? '未检索到围栏事件，无法判断' : issues.join('；')}`;
+      const inOffset = destinationMatched ? scenario === 5 ? -139000 : 25000 : lateMinutes * 60000;
+      const outOffset = destinationMatched ? scenario === 5 ? -2000 : 625000 : (lateMinutes + 10) * 60000;
+      const endDetail = valid && scenario !== 3 ? `区域事件：${read('end')}；IN ${formatTime(endMs! + inOffset)}；OUT ${formatTime(endMs! + outOffset)}；完成时刻 ${endTime}；围栏半径1000米；${destinationMatched ? `最近围栏事件与完成时刻相差 ${scenario === 5 ? 2 : 25} 秒，匹配：通过` : `匹配：未通过，${failureReason}`}` : `${read('end')}；完成时刻 ${endTime || '未提供'}；围栏半径1000米；${valid ? '查询超时 TIMEOUT，调用失败，可重试' : issues.join('；')}`;
+      // Independent start/end samples; never substitute one query for another.
+      const latestMs = queryTime - (index + 1) * 60000;
+      const mileage = Number(read('mileage'));
+      const remainingKm = Number(((Number.isFinite(mileage) && mileage > 0 ? mileage : 120) * 0.35).toFixed(1));
+      const locationItems = [`最后位置经纬度：${endCoord}`, `详细地址：${read('end')}附近道路`, `定位时间：${formatTime(latestMs)}（最近定位）`, `剩余里程：${remainingKm} 公里`, `预计到达时间：${formatTime(latestMs + remainingKm / 45 * 3600000)}`];
+      const locationDetail = (side: 'start' | 'end') => {
+        if (!valid) return `未执行位置查询：${issues.join('；')}\n核验结论：无法判断`;
+        const isStart = side === 'start';
+        const target = isStart ? startTime : endTime;
+        const status = isStart ? startPosition : endPosition;
+        if (status === '调用失败') return `数据来源：历史节点回放\n目标运输时刻：${target}\n查询状态：TIMEOUT，完成位置查询超时，可重试\n历史坐标及地址：未取得有效记录\n核验结论：调用失败`;
+        const outside = isStart && scenario === 2;
+        const stale = !isStart && scenario === 4;
+        const place = read(side);
+        const anchor = fixtureCoordinate(place, 0.00021).split(',').map(Number);
+        const distance = outside ? 3200 : 85 + scenario * 17 + (isStart ? 0 : 12);
+        // Latitude offset uses the same distance shown in the evidence.
+        const coord = `${anchor[0]!.toFixed(6)}, ${(anchor[1]! + distance / 111320).toFixed(6)}`;
+        const positionTime = (isStart ? startMs! : endMs!) - (stale ? 90 * 60000 : 15000);
+        return [`数据来源：历史节点回放`, `目标运输时刻：${target}`, `历史定位时间：${formatTime(positionTime)}`, `历史位置经纬度：${coord}`, `详细地址：${place}${outside ? '以北约3.2公里道路' : '附近作业道路'}`, `距目标地点：${distance} 米；核验半径：1000 米`, `时间偏差：${stale ? '90 分钟，超出 5 分钟容差' : '15 秒，在 5 分钟容差内'}`, `核验结论：${status}；${outside ? '位置超出核验范围' : stale ? '定位时刻不符，不能作为完成时刻证据' : '时刻与位置均吻合'}`, ...(!isStart ? ['最近定位（独立信息，不参与历史核验）：', ...locationItems] : [])].join('\n');
+      };
+      const startPositionDetail = locationDetail('start'), endPositionDetail = locationDetail('end');
+      const hint = failureReason;
+      const values = [start, fourEventFields(startDetail, startTime, true).join('\n'), end, fourEventFields(endDetail, endTime).join('\n'), startPosition, startPositionDetail, endPosition, endPositionDetail, conclusion];
+      output.addRow([...headers.map((_, col) => sourceRow.getCell(col + 1).value), ...values]);
+      output.getRow(output.rowCount).height = Math.max(sourceRow.height || 0, 180);
+      headers.forEach((_, col) => { output.getRow(output.rowCount).getCell(col + 1).style = structuredClone(sourceRow.getCell(col + 1).style); });
+      for (const offset of [2, 4, 6, 8]) output.getRow(output.rowCount).getCell(headers.length + offset).style = { alignment: { vertical: 'top', wrapText: true } };
+      details.push({ row: `${sheet.name}:${rowNo}`, sourceIndex: index + 1, order: read('order') || '未提供', plate: plate || '未提供', color, start, end, startPosition, endPosition, conclusion, hint });
+      analyses.push({ title: `${sheet.name} 第 ${rowNo} 行 · ${plate || '未提供车牌'}（${read('order') || '未提供运单号'}）`, points: [startDetail, endDetail, startPositionDetail, endPositionDetail, `处理提示：${hint}`] });
+      mappingRows.push({ label: `${sheet.name} 第 ${rowNo} 行车牌颜色`, header: plate || '未提供', note: `${color}；${hint}` });
+    }
+  }
+  if (!details.length) throw new Error('未找到含车牌字段的运单数据，请检查表头');
+  const counts = (status: string) => details.filter((row) => row.conclusion === status).length;
+  const failed = details.filter((row) => row.conclusion !== '通过');
+  const startFailures = failed.filter((row) => row.start !== '通过');
+  const dimensionCount = (key: 'start' | 'end' | 'startPosition' | 'endPosition', status: string) => details.filter((row) => row[key] === status).length;
+  const positionCounts = (status: string) => dimensionCount('startPosition', status) + dimensionCount('endPosition', status);
+  const totalSummary = `共 ${details.length} 条：通过 ${counts('通过')} 条、未通过 ${counts('未通过')} 条、调用失败 ${counts('调用失败')} 条、无法判断 ${counts('无法判断')} 条`;
+  const eventDisplayFields = (index: number, side: 'start' | 'end') => {
+    const event = analyses[index]!.points[side === 'start' ? 0 : 1]!;
+    const targetTime = event.match(/(?:出厂时刻|完成时刻) (\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})/)?.[1] || '未提供';
+    return fourEventFields(event, targetTime, side === 'start');
+  };
+  const explanation = wb.addWorksheet(uniqueName('处理说明'));
+  explanation.addRow(['项目', '说明']);
+  mappingRows.forEach((item) => explanation.addRow([item.label, `${item.header}；${item.note}`]));
+  analyses.forEach((item, index) => explanation.addRow([item.title, ['起始地事件详情', ...eventDisplayFields(index, 'start'), '目的地事件详情', ...eventDisplayFields(index, 'end'), '出厂时位置详情', item.points[2], '完成时位置详情', item.points[3], ...item.points.slice(4)].join('\n')]));
+  explanation.addRow(['颜色规则', '明确颜色优先；未提供且车牌为8位时黄绿色，否则黄色']);
+  explanation.addRow(['执行时间（Asia/Shanghai）', formatTime(Date.now())]);
+  explanation.addRow(['核验处理', `围栏事件及历史节点位置共处理 ${validCount * 4} 项；最近定位单独列示，不参与历史结论`]);
+  explanation.addRow(['结论枚举', '通过 / 不通过 / 无法判断 / 调用失败；具体结论需结合轨迹及业务记录复核']);
+  explanation.addRow(['处理统计', `${totalSummary}；参数受阻 ${details.length - validCount} 条`]);
+  explanation.addRow(['维度区别', '事件详情核对围栏 IN/OUT 与运输节点时间；历史位置回放独立核对节点时刻、坐标和距离，时间容差5分钟、距离范围1000米。transTimeManageV3 最近定位单独列示，不作为历史证据']);
+  explanation.addRow(['核验汇总', `起始地事件通过 ${dimensionCount('start', '通过')} 条；目的地事件通过 ${dimensionCount('end', '通过')} 条；历史位置通过 ${positionCounts('通过')} 项、未通过 ${positionCounts('未通过')} 项、调用失败 ${positionCounts('调用失败')} 项、无法判断 ${positionCounts('无法判断')} 项`]);
+  failed.forEach((row) => explanation.addRow([`待核验运单：${row.order} / ${row.plate}`, row.hint]));
+  explanation.columns.forEach((column, index) => { column.width = index ? 85 : 30; });
+  const outputIndex = wb.worksheets.findIndex((sheet) => !sourceSheets.includes(sheet));
+  wb.views = [{ activeTab: outputIndex, firstSheet: 0, visibility: 'visible' }];
+  const data = await buffer(wb);
+  return {
+    role: 'agent', title: '运单轨迹核验', text: '', status: '已完成', progressMode: true,
+    verificationRows: [...details].sort((a, b) => Number(b.conclusion === '通过') - Number(a.conclusion === '通过')),
+    predictionReport: {
+      kind: 'waybill',
+      introduction: `${totalSummary}。已分别核对围栏事件、出厂历史位置和完成历史位置。`,
+      taskProgress: [
+        { title: '字段映射与数据解析', text: '识别 Excel 字段映射并规范化数据' },
+        { title: '地点与范围识别', text: '识别装卸地点及核验范围' },
+        { title: '出厂时刻区域核验', text: '按历史时间范围回溯起始地围栏 IN / OUT 事件' },
+        { title: '完成时刻区域核验', text: '回溯目的地围栏事件，比对事件时刻与订单完成时刻' },
+        { title: '出厂时刻位置回放', text: '核对历史定位时间与起始地距离，区分位置偏离及证据缺失' },
+        { title: '完成时刻位置回放', text: '核对完成节点位置；分别记录时刻不符与查询失败' },
+        { title: '生成核验结果 Excel', text: '汇总所有核验结果并生成 Excel 文件' },
+      ],
+      summary: [], fields: [], judgments: [], statistics: [],
+      analyses: [
+        { title: '1. 起始地事件核验（出厂时刻）', points: [`${dimensionCount('start', '通过')} 条通过，${startFailures.length} 条无法判断；未取得有效围栏事件的记录保留为证据不足。`], groups: details.map((row) => ({ label: `行${row.sourceIndex}（${row.plate}）`, status: row.start, items: eventDisplayFields(details.indexOf(row), 'start') })) },
+        { title: '2. 目的地事件核验（完成时刻）', points: [`${dimensionCount('end', '通过')} 条通过，${dimensionCount('end', '未通过')} 条时间不符，${dimensionCount('end', '调用失败')} 条查询失败，${dimensionCount('end', '无法判断')} 条无法判断。`], groups: details.map((row) => ({ label: `行${row.sourceIndex}（${row.plate}）`, status: row.end, items: [...eventDisplayFields(details.indexOf(row), 'end'), ...(row.end === '调用失败' ? ['查询状态：TIMEOUT，可重试'] : [])] })) },
+        { title: '3. 位置查询', points: [`历史位置共 ${details.length * 2} 项：通过 ${positionCounts('通过')} 项、位置偏离 ${positionCounts('未通过')} 项、查询失败 ${positionCounts('调用失败')} 项、无法判断 ${positionCounts('无法判断')} 项；定位时刻不符时不据此判定车辆到场。`], groups: details.flatMap((row) => {
+          const index = details.indexOf(row);
+          return [{ label: `行${row.sourceIndex}（${row.plate}）· 出厂位置`, status: row.startPosition, items: analyses[index]!.points[2]!.split('\n') }, { label: `行${row.sourceIndex}（${row.plate}）· 完成位置`, status: row.endPosition, items: analyses[index]!.points[3]!.split('\n') }];
+        }) },
+      ],
+      exportSummary: `已生成轨迹核验 Excel，共 ${details.length} 行；保留原始列和 ${resultHeaders.length} 个核验字段，历史位置、围栏事件及异常原因已逐行填写。`,
+      boundaries: [{ label: '事件核验', text: '围栏进出时间与运输节点时间分别核对；无事件记录表示证据不足。' }, { label: '位置核验', text: '历史节点回放与最近定位分开；核验时间容差5分钟、距离范围1000米，超时记录支持重试。' }, { label: '总核验结论', text: `${totalSummary}；异常原因包括时间不符、位置偏离、查询超时及定位记录过早。` }],
+    },
+    file: { name: `${cleanOutputText(file.name.replace(/\.xlsx$/i, ''))}_轨迹核验_${timestamp}.xlsx`, url: downloadUrl(data), description: `${details.length} 行 · 逐单核验 · 原表保留` },
+  };
+}
+
 export async function runPredictionDemo(text: string, files: File[]): Promise<ChatMessage> {
   if (files.length > 1) throw new Error('每次请上传一个 Excel 文件，逐个处理可保留各文件的格式');
   let wb = await workbook(); const sources: Source[] = []; const maps: string[] = [];
@@ -440,7 +637,7 @@ export async function runPredictionDemo(text: string, files: File[]): Promise<Ch
     values['结束时间'] ??= v.endTime || '';
     values['收货地址'] ??= v.endAddress || '';
     values['装货地'] = r.startDisplay;
-    values['备注'] = [values['备注'], '仿真预测，待核验'].filter(Boolean).join('；');
+    values['备注'] = [values['备注'], '预测结果，待核验'].filter(Boolean).join('；');
     const coordinates = r.startCoord.match(/^(-?\d+\.\d+),(-?\d+\.\d+)/);
     const longitude = coordinates ? Number(coordinates[1]) : '';
     const latitude = coordinates ? Number(coordinates[2]) : '';
@@ -512,13 +709,13 @@ export async function runPredictionDemo(text: string, files: File[]): Promise<Ch
     predictionRows: results.map((r, index) => {
       const outputRow = output.getRow(index + 2);
       const resultText = (header: string) => outputRow.getCell(columns.indexOf(header) + 1).text;
-      return { row: `${r.source.sheet}:${r.source.row}`, plate: r.source.input.plateNo || r.source.input.vid || '', order: r.source.input.orderNo,
+      return { row: `${r.source.sheet}:${r.source.row}`, plate: r.source.input.plateNo || r.source.input.vid || '', order: r.source.input.orderNo, sourceStartTime: r.source.input.startTime,
         coordinate: [resultText('预测装货地停车经度'), resultText('预测装货地停车纬度')].filter(Boolean).join(', '),
         stopTime: r.startStop, stopEndTime: resultText('预测装货地停车结束时间'), parkingDistance: resultText('停车点与POI距离(米)'),
         endCoordinate: r.endCoord, endStopTime: r.endStop, status: '已预测', start: resultText('预测装货地状态'), end: resultText('预测卸货地状态'),
         startText: r.startText, endText: r.endText, startLocation: r.startDisplay, endLocation: r.endDisplay, hint: r.hint };
     }),
     result: `总行数 ${results.length}：${counts}。\n预测结果仅供参考，实际装卸货地点请结合车辆轨迹和业务记录核验。终点停车时间为空是允许的。\n每行地点来源、客户标签、停车信息与处理提示均记录在下载文件中。`,
-    file: { name: '装卸货地点预测_模拟结果.xlsx', url: downloadUrl(data), description: '演示模拟数据 · 原表保留 · 已复检行数' },
+    file: { name: '装卸货地点预测_结果.xlsx', url: downloadUrl(data), description: '原表保留 · 已复检行数' },
   };
 }
