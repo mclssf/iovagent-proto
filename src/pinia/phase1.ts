@@ -1,15 +1,17 @@
 import { defineStore } from 'pinia';
 import type {P1Config,P1Order,P1SkillId,P1Event,P1Anomaly,P1Log,P1EventType,P1State} from '@/views/AgentWork/interface';
 import {phaseSkills,stateNames,dateText,nextWeatherMidnight} from '@/views/Phase1/catalog';
+import {defaultAssessments,assessmentConfig,simulateAssessment} from '@/views/Phase1/eventAssessment';
 export const demoEpoch=Date.parse('2026-10-14T10:00:00+08:00');
 export const clone=<T>(value:T):T=>JSON.parse(JSON.stringify(value));
-export const defaultP1Config:P1Config={version:1,selectedSkills:phaseSkills.filter(s=>s.id!=='p1-weather').map(s=>s.id),weather:{enabled:false},deviation:{enabled:true,radiusMeters:1000,repeatMinutes:10},offline:{enabled:true,thresholdMinutes:30,repeatMinutes:15},parking:{enabled:true,thresholdMinutes:30,repeatMinutes:15},fenceTargets:['origin','destination'],lateDeparture:{enabled:true,graceMinutes:30},lateArrival:{enabled:true,graceMinutes:30},statusUpdates:['loading','in_transit','arrived','completed']};
+export const defaultP1Config:P1Config={assessments:defaultAssessments(),version:1,selectedSkills:phaseSkills.filter(s=>s.id!=='p1-weather').map(s=>s.id),weather:{enabled:false},deviation:{enabled:true,radiusMeters:1000,repeatMinutes:10},offline:{enabled:true,thresholdMinutes:30,repeatMinutes:15},parking:{enabled:true,thresholdMinutes:30,repeatMinutes:15},fenceTargets:['origin','destination'],lateDeparture:{enabled:true,graceMinutes:30},lateArrival:{enabled:true,graceMinutes:30},statusUpdates:['loading','in_transit','arrived','completed']};
 const HOUR=3600000;const MINUTE=60000;
 const taskFor:Record<Exclude<P1EventType,'fence'|'weather'>,P1SkillId>={parking:'p1-parking',offline:'p1-offline',deviation:'p1-deviation'};
 const kindFor={parking:'超时停车',offline:'在途离线',deviation:'线路偏离'} as const;
 export type EventInput=Omit<P1Event,'projectId'|'receivedAt'|'result'|'taskIds'|'configVersion'>;
 export function p1ConfigError(c:P1Config){
  if(![c.deviation.radiusMeters,c.deviation.repeatMinutes,c.offline.thresholdMinutes,c.offline.repeatMinutes,c.parking.thresholdMinutes,c.parking.repeatMinutes,c.lateDeparture.graceMinutes,c.lateArrival.graceMinutes].every(n=>Number.isFinite(n)&&Number.isInteger(n)&&n>0))return '距离、时长、间隔均须为正整数。';
+ if(c.assessments&&Object.values(c.assessments).some(rule=>!Number.isInteger(rule.radiusMeters)||rule.radiusMeters<=0||typeof rule.filterRule!=='string'))return 'POI查询范围须为正整数米，过滤规则须为文本。';
  if(c.selectedSkills.some(id=>!phaseSkills.some(s=>s.id===id)))return '存在未知技能。';return '';
 }
 function transportEnabled(c:P1Config,type:'parking'|'offline'|'deviation'){return c.selectedSkills.includes(taskFor[type])&&c[type].enabled;}
@@ -47,13 +49,13 @@ export const usePhase1=defineStore('phase1-v11',{
    return '';
   },
   next(prefix:string){return `${prefix}-${++this.sequence}`;},
-  config(projectId:string):P1Config{const c=clone(this.configs[projectId]||defaultP1Config);c.weather??={enabled:false};return c;},
+  config(projectId:string):P1Config{const c=clone(this.configs[projectId]||defaultP1Config);c.weather??={enabled:false};c.assessments={...defaultAssessments(),...c.assessments};return c;},
   log(order:P1Order,taskId:P1SkillId,kind:P1Log['kind'],text:string){this.logs.push({id:this.next('LOG'),projectId:order.projectId,orderId:order.id,taskId,kind,at:this.now,text});},
   allLog(order:P1Order,kind:P1Log['kind'],text:string){for(const id of order.config.selectedSkills)if(!(id==='p1-weather'&&kind==='开始'))this.log(order,id,kind,text);},
   saveConfig(projectId:string,draft:P1Config,expectedVersion?:number){
    const error=p1ConfigError(draft);if(error){this.error=error;return false;}
    const previous=this.config(projectId);if(expectedVersion!==undefined&&previous.version!==expectedVersion){this.error='配置已被更新，请重新打开配置页面。';return false;}
-   const next={...clone(draft),weather:draft.weather||{enabled:false},version:previous.version+1};if(next.weather.enabled&&!next.selectedSkills.includes('p1-weather'))next.selectedSkills.push('p1-weather');this.configs[projectId]=next;this.error='';
+   const next={...clone(draft),assessments:{...defaultAssessments(),...draft.assessments},weather:draft.weather||{enabled:false},version:previous.version+1};if(next.weather.enabled&&!next.selectedSkills.includes('p1-weather'))next.selectedSkills.push('p1-weather');this.configs[projectId]=next;this.error='';
    const physical=(c:P1Config)=>JSON.stringify({skills:[...c.selectedSkills].sort(),parking:[c.parking.enabled,c.parking.thresholdMinutes],offline:[c.offline.enabled,c.offline.thresholdMinutes],deviation:[c.deviation.enabled,c.deviation.radiusMeters],fences:[...c.fenceTargets].sort()});
    for(const order of this.orders.filter(o=>o.projectId===projectId&&!['stopped','cleanup_pending'].includes(o.session))){
     const previousConfig=order.config;const resubscribe=physical(order.config)!==physical(next);for(const a of this.anomalies.filter(a=>a.orderId===order.id&&a.status==='active'&&!['p1-late','p1-weather'].includes(a.taskId))){const type=a.taskId==='p1-parking'?'parking':a.taskId==='p1-offline'?'offline':'deviation';if(previousConfig[type].repeatMinutes!==next[type].repeatMinutes)a.nextReminderAt=this.now+next[type].repeatMinutes*MINUTE;}for(const id of order.config.selectedSkills.filter(id=>!next.selectedSkills.includes(id)))this.log(order,id,'结束','本Skill取消选择，停止处理并释放该任务引用；其他任务保留。');const wasWeather=weatherEnabled(order.config);order.config=clone(next);if(wasWeather&&!weatherEnabled(next))this.log(order,'p1-weather','结束','天气监听已关闭，停止本单天气事件处理并释放引用；未恢复异常及历史结果保留。');if(!wasWeather&&weatherEnabled(next))this.startWeather(order);
@@ -128,6 +130,12 @@ export const usePhase1=defineStore('phase1-v11',{
     if(event.phase==='recovered'){
      const a=this.anomalies.find(a=>a.orderId===order.id&&a.kind===kindFor[event.type]&&a.status==='active');if(a){a.status='recovered';a.lastAt=this.now;event.result=`${a.id}已恢复`;this.log(order,task,'恢复',event.result);}else event.result='收到解除事实，无待恢复异常。';
     }else if(!order.departedAt||order.arrivedAt||order.completedAt)event.result='运输区间外的基础事实，未生成在途异常。';
+    else if((event.type==='parking'||event.type==='offline')&&assessmentConfig(order.config,event.type).enabled){
+     event.assessment=simulateAssessment(event,assessmentConfig(order.config,event.type));
+     this.log(order,task,'基础事件',`POI查询与LLM研判（模拟）：半径${event.assessment.radiusMeters}米；${event.assessment.pois.map(p=>`${p.name}（${p.category}，${p.distanceMeters}米）`).join('、')||'无有效POI证据'}。`);
+     if(event.assessment.verdict==='reasonable'){event.result=`合理事件，不生成异常（模拟研判）：${event.assessment.reason}`;this.log(order,task,'结果',event.result);}
+     else{const a=this.anomaly(order,kindFor[event.type],task,`需人工复核（模拟研判）：${event.assessment.reason}`,event.id);event.result=`${a.kind} ${a.id} · 需复核：${event.assessment.reason}`;}
+    }
     else{const a=this.anomaly(order,kindFor[event.type],task,`固定规则命中：${event.type==='deviation'?`${event.distanceMeters}米 ≥ ${order.config.deviation.radiusMeters}米`:`${event.durationMinutes}分钟 ≥ ${order.config[event.type].thresholdMinutes}分钟`}。不经过大模型研判。`,event.id);event.result=`${a.kind} ${a.id}`;}
     this.log(order,task,'结果',event.result);
    }

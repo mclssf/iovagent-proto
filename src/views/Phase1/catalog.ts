@@ -1,11 +1,11 @@
 import type { P1SkillId } from '@/views/AgentWork/interface';
 export const phaseSkills: {id:P1SkillId;name:string;description:string;icon:'truck'|'alert'|'route'|'locate'|'alarmClock'}[] = [
- {id:'p1-status',name:'运单状态自动更新',description:'读取起终点进出围栏事实，按勾选项更新状态。',icon:'locate'},
- {id:'p1-parking',name:'超时停车监听',description:'在途停车达到阈值，直接生成异常并按间隔提醒。',icon:'truck'},
- {id:'p1-offline',name:'在途离线监听',description:'记录供应商离线告警、持续提醒与恢复。',icon:'alert'},
- {id:'p1-deviation',name:'线路偏离监听',description:'根据容许偏离距离监控线路偏离及恢复。',icon:'route'},
- {id:'p1-weather',name:'恶劣天气预警监听',description:'订阅天气预警，次日0点预计生效；有效天气消息直接生成异常，不发送车机提醒。',icon:'alert'},
- {id:'p1-late',name:'晚发晚到监听',description:'按预计出发/到达时间与容许延迟检查事实里程碑。',icon:'alarmClock'},
+ {id:'p1-status',name:'运单状态自动更新',description:'自动记录运单的运输进展。',icon:'locate'},
+ {id:'p1-parking',name:'超时停车监听',description:'及时发现运输途中长时间停车。',icon:'truck'},
+ {id:'p1-offline',name:'在途离线监听',description:'及时发现车辆在途失联。',icon:'alert'},
+ {id:'p1-deviation',name:'线路偏离监听',description:'及时发现车辆偏离计划线路。',icon:'route'},
+ {id:'p1-weather',name:'恶劣天气预警监听',description:'提醒运输途中可能遇到的恶劣天气。',icon:'alert'},
+ {id:'p1-late',name:'晚发晚到监听',description:'及时发现运单晚发、晚到。',icon:'alarmClock'},
 ];
 export const stateNames={pending:'待发车',loading:'装货中',in_transit:'在途',arrived:'已到达',completed:'已完成'};
 export const eventNames={fence:'进出围栏',parking:'超时停车',offline:'在途离线',deviation:'线路偏离',weather:'恶劣天气预警'};

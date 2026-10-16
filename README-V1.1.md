@@ -22,3 +22,5 @@ v2.1评审方案已调整为自研事件监听：outputs/v1.1-review/self-develo
 天气预警扩展：项目配置开启恶劣天气监听后增加第六项任务；次日0点预计生效，等待期不延长72小时。可在任务页模拟推进和暴雨消息，事件直接异常，不发车机提醒。v2.2历史评审稿为outputs/v1.1-review/self-developed-v2.1/PRD-V1.1-需求评审与开发指导-v2.2.md；真实数据专用天气服务尚待确认。
 
 当前评审文档：outputs/v1.1-review/reorganized-v2.3/PRD-V1.1-需求评审与开发指导-v2.3.html（同名Markdown可编辑）。五类事件Tools均基于原有接口由我们开发；整理了重复章节并重采八张截图，保留六个业务Skill和36个验收场景。完整附件为outputs/v1.1-review/V1.1-需求评审包-v2.3.zip。
+
+最新需求评审稿：outputs/v1.1-review/reorganized-v2.4/PRD-V1.1-需求评审与开发指导-v2.4.html（同名Markdown可编辑），纳入任务编辑/局部规则确认、项目自然语言配置和POI与LLM研判。原型中POI与研判为模拟，自定义规则暂只保存；生产接入要求见第6章和第8章。

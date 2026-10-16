@@ -302,7 +302,11 @@ export interface EmailOrderResult {
 export type P1SkillId = 'p1-status' | 'p1-parking' | 'p1-offline' | 'p1-deviation' | 'p1-late' | 'p1-weather';
 export type P1State = 'pending' | 'loading' | 'in_transit' | 'arrived' | 'completed';
 export type P1EventType = 'fence' | 'parking' | 'offline' | 'deviation' | 'weather';
+export interface P1AssessmentConfig {enabled:boolean;radiusMeters:number;filterRule:string}
+export interface P1PoiEvidence {source:'mock';pois:{name:string;category:string;distanceMeters:number;inside:boolean}[];normalActivityConfirmed?:boolean;durationMatches?:boolean;dangerousLocation?:boolean;signalRecovered?:boolean;trackContinuous?:boolean}
 export interface P1Config {
+ assessments:{parking:P1AssessmentConfig;offline:P1AssessmentConfig};
+ resumeSettings?:{statusUpdates?:Exclude<P1State,'pending'>[];lateDeparture?:boolean;lateArrival?:boolean};
  version:number; selectedSkills:P1SkillId[];weather:{enabled:boolean};
  deviation:{enabled:boolean;radiusMeters:number;repeatMinutes:number};
  offline:{enabled:boolean;thresholdMinutes:number;repeatMinutes:number};
@@ -325,6 +329,7 @@ export interface P1Order {
  cleanupWillFail:boolean;cleanupAttempts:number;subscriptionRevision:number;deviationBlocked:boolean;
 }
 export interface P1Event {
+ poiEvidence?:P1PoiEvidence;assessment?:{verdict:'reasonable'|'review';reason:string;radiusMeters:number;rule:string;pois:P1PoiEvidence['pois'];source:'mock'};
  id:string;orderId:string;projectId:string;type:P1EventType;phase:'started'|'recovered'|'enter'|'exit';
  occurredAt:number;receivedAt:number;address:string;durationMinutes:number;distanceMeters:number;
  weatherType?:string;message?:string;sourceMessageId?:string;

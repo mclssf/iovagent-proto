@@ -1,5 +1,7 @@
 <script lang="ts" setup>
 import {usePhase1} from '@/pinia/phase1';
+import RuleAssistant from '@/views/Phase1/RuleAssistant.vue';
+import type {RuleProposal} from '@/views/Phase1/ruleLanguage';
 import ConfigEditor from '@/views/Phase1/ConfigEditor.vue';
 import {phaseSkills} from '@/views/Phase1/catalog';
 import type {P1SkillId} from '../interface';
@@ -609,6 +611,7 @@ function viewMailboxTask() {
   goPage('dailyTasks', { projectId: project.id, taskId: `email-order-${project.id}` });
 }
 
+function applyProjectProposal(p:RuleProposal){if(p.name)projectName.value=p.name;selectedLogisticsSkillIds.value=[...selectedLogisticsSkillIds.value.filter(id=>!phaseSkills.some(t=>t.id===id)),...p.config.selectedSkills];phaseConfigEditor.value?.applyDraft(p.config);}
 function goNext() {
   const cleanName = projectName.value.trim();
   if (!cleanName) {
@@ -629,7 +632,8 @@ function goNext() {
     phaseProjectId=store.addSkillProject(cleanName, skillNames, skillIds, mailboxDraft.value ?? undefined);
   }
   if(props.embedded){const phase=usePhase1();const config=phase.config(phaseProjectId);config.selectedSkills=skillIds.filter(id=>phaseSkills.some(s=>s.id===id)) as P1SkillId[];phase.saveConfig(phaseProjectId,config,config.version);}
-  else phaseConfigEditor.value?.commit(phaseProjectId);
+  else if(!phaseConfigEditor.value?.commit(phaseProjectId)){ElMessage.error(usePhase1().error||'项目配置未保存，请重试');return;}
+  const finalProject=store.projects.find(p=>p.id===phaseProjectId);if(finalProject)finalProject.skillIds=[...(finalProject.skillIds||[]).filter(id=>!phaseSkills.some(s=>s.id===id)),...usePhase1().config(phaseProjectId).selectedSkills];
   if(!props.embedded)goPage('projects');
   else ElMessage.success('项目内容已保存');
 }
@@ -657,6 +661,7 @@ onBeforeUnmount(() => {
       </button>
     </div>
 
+    <details v-if="!embedded" class="shrink-0 max-h-[38vh] overflow-auto px-4 border-b border-[#e2e2dc]" open><summary class="py-2 text-sm font-medium cursor-pointer">用自然语言创建或调整项目</summary><RuleAssistant :config="phaseConfigEditor?.getDraft() || usePhase1().config(editingProject?.id||'')" @confirm="applyProjectProposal"/></details>
     <div class="shrink-0 border-b border-[#e2e2dc] px-4 py-3">
       <label class="mb-1.5 block text-xs font-medium text-slate-600" for="project-name">项目名称</label>
       <div class="flex items-center rounded-md border border-[#deded9] bg-[#fbfbfa] px-3">
