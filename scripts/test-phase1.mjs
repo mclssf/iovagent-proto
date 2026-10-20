@@ -5,6 +5,14 @@ try{
  const fresh=()=>{setActivePinia(createPinia());return usePhase1();};
  const place={name:'装货工厂',lat:31.3,lon:121.3,radiusMeters:500,regionCode:'310114'};
  const create=(s,id='T1',extra={})=>s.createOrder({id,projectId:'P001',plate:`沪A${id==='T1'?'12345':'99999'}`,plateColor:2,driver:'司机',source:'手动录入',origin:place,destination:{...place,name:'目的仓'},plannedDeparture:s.now+60*60000,plannedArrival:s.now+180*60000,...extra});
+ // S00 initializes from planned times once; it does not fabricate actual milestones.
+ for(const [dep,arr,expected] of [[60,180,'pending'],[0,180,'in_transit'],[-60,60,'in_transit'],[-180,0,'completed'],[-180,-60,'completed'],[null,null,'pending'],[null,-60,'completed'],[-60,null,'in_transit']]){
+  const sample=fresh();const cfg=sample.config('P001');cfg.weather.enabled=true;cfg.selectedSkills.push('p1-weather');sample.configs.P001=cfg;
+  assert(create(sample,'INIT',{plannedDeparture:dep===null?null:sample.now+dep*60000,plannedArrival:arr===null?null:sample.now+arr*60000}));
+  const initialized=sample.orders[0];assert.equal(initialized.state,expected);assert.equal(initialized.initialization.state,expected);assert.equal(initialized.departedAt,undefined);assert.equal(initialized.completedAt,undefined);
+  if(expected==='completed'){assert.equal(initialized.session,'stopped');assert.equal(initialized.subscriptionRevision,0);assert.equal(initialized.weatherRequestedAt,undefined);assert(!sample.logs.some(l=>l.kind==='开始'));sample.advance(10);assert.equal(sample.events.length,0);assert.equal(sample.anomalies.length,0);}
+  else{assert.equal(initialized.session,'subscribing');const init=initialized.initialization.at;sample.advance(10);assert.equal(initialized.initialization.at,init);}
+ }
  let s=fresh();assert(create(s));const o=s.orders[0];assert.equal(o.config.version,1);assert.match(s.event(o.id,'fence','enter','origin'),/未生效/);assert.equal(s.events.length,0);s.advance(10);
  for(const [target,phase,state] of [['origin','enter','loading'],['origin','exit','in_transit'],['destination','enter','arrived'],['destination','exit','completed']]){assert.equal(s.event(o.id,'fence',phase,target),'');assert.equal(o.state,state);}
  assert.equal(o.session,'stopped');assert(s.logs.some(l=>l.kind==='结束'));assert.match(s.event(o.id,'parking'),/停止/);

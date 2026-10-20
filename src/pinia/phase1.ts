@@ -2,6 +2,11 @@ import { defineStore } from 'pinia';
 import type {P1Config,P1Order,P1SkillId,P1Event,P1Anomaly,P1Log,P1EventType,P1State} from '@/views/AgentWork/interface';
 import {phaseSkills,stateNames,dateText,nextWeatherMidnight} from '@/views/Phase1/catalog';
 import {defaultAssessments,assessmentConfig,simulateAssessment} from '@/views/Phase1/eventAssessment';
+export function initialPlanState(departure:number|null,arrival:number|null,now:number):P1State {
+ if(arrival!==null&&now>=arrival)return 'completed';
+ if(departure!==null&&now>=departure)return 'in_transit';
+ return 'pending';
+}
 export const demoEpoch=Date.parse('2026-10-14T10:00:00+08:00');
 export const clone=<T>(value:T):T=>JSON.parse(JSON.stringify(value));
 export const defaultP1Config:P1Config={assessments:defaultAssessments(),version:1,selectedSkills:phaseSkills.filter(s=>s.id!=='p1-weather').map(s=>s.id),weather:{enabled:false},deviation:{enabled:true,radiusMeters:1000,repeatMinutes:10},offline:{enabled:true,thresholdMinutes:30,repeatMinutes:15},parking:{enabled:true,thresholdMinutes:30,repeatMinutes:15},fenceTargets:['origin','destination'],lateDeparture:{enabled:true,graceMinutes:30},lateArrival:{enabled:true,graceMinutes:30},statusUpdates:['loading','in_transit','arrived','completed']};
@@ -72,7 +77,12 @@ export const usePhase1=defineStore('phase1-v11',{
    for(const p of [input.origin,input.destination])if(!p.name.trim()||!p.regionCode||!Number.isFinite(p.lat)||!Number.isFinite(p.lon)||Math.abs(p.lat)>90||Math.abs(p.lon)>180||!Number.isFinite(p.radiusMeters)||p.radiusMeters<=0){this.error='请填写起終点名称、区县编码、有效坐标和围栏半径。';return false;}
    if([input.plannedDeparture,input.plannedArrival].some(t=>t!==null&&!Number.isFinite(t))||input.plannedDeparture!==null&&input.plannedArrival!==null&&input.plannedArrival<input.plannedDeparture){this.error='计划时间无效，预计到达不能早于预计出发。';return false;}
    const config=this.config(input.projectId);const order:P1Order={...clone(input),createdAt,state:'pending',expiresAt:createdAt+72*HOUR,activateAt:createdAt+10*MINUTE,config,session:anyWatch(config)?'subscribing':'paused',endReason:'',cleanupWillFail:false,cleanupAttempts:0,subscriptionRevision:1,providerMode:this.capability,deviationBlocked:this.capability==='whitepaper'&&transportEnabled(config,'deviation')};
-   this.orders.push(order);this.allLog(order,'开始',`新增运单读取共享Skill：${order.id}，${order.plate}；项目最新配置v${config.version}，来源${order.source}，无需SaaS写单。${order.session==='paused'?'监听未开启':'请求模拟订阅，约10分钟后生效'}；固定截止${dateText(order.expiresAt)}。`);
+   order.state=initialPlanState(order.plannedDeparture,order.plannedArrival,this.now);
+   const missing=order.plannedDeparture===null||order.plannedArrival===null;
+   order.initialization={at:this.now,state:order.state,basis:`按计划时间初始化：预计出发${dateText(order.plannedDeparture)}，预计到达${dateText(order.plannedArrival)}；当前${dateText(this.now)}，默认为${stateNames[order.state]}。${missing?'计划时间缺失，请补齐；未使用创建时间替代。':''}此为计划推定，未核验实际轨迹或围栏，不写入实际里程碑时间。`};
+   this.orders.push(order);this.allLog(order,'配置',`S00 运单读取与监听编排：${order.initialization.basis}`);
+   if(order.state==='completed'){order.session='stopped';order.endReason='S00按计划到达时间初始化为已完成，不注册在途监控';order.subscriptionRevision=0;order.deviationBlocked=false;this.allLog(order,'结束',order.endReason+'；不注册天气订阅、围栏及其他事件监听，不启动计时或重复提醒。');this.error='';return true;}
+   this.allLog(order,'开始',`新增运单读取共享Skill：${order.id}，${order.plate}；项目最新配置v${config.version}，来源${order.source}，无需SaaS写单。${order.session==='paused'?'监听未开启':'请求模拟订阅，约10分钟后生效'}；固定截止${dateText(order.expiresAt)}。`);
    for(const type of ['parking','offline'] as const)if(order.providerMode==='whitepaper'&&transportEnabled(config,type)&&config[type].thresholdMinutes%10!==0)this.log(order,taskFor[type],'失败','白皮书约束模式：持续时长不是10分钟的倍数，该项未生效。');
    if(config.selectedSkills.includes('p1-late')&&(!config.fenceTargets.includes('origin')||!config.fenceTargets.includes('destination')))this.log(order,'p1-late','失败','缺少所选起始地/目的地围栏事实源，对应晚发/晚到规则不生成异常。');
    if(order.deviationBlocked)this.log(order,'p1-deviation','失败','CAPABILITY_UNSUPPORTED：白皮书没有线路偏离半径参数，该项未生效。');
@@ -192,9 +202,10 @@ export const usePhase1=defineStore('phase1-v11',{
    const add=(n:number,created:number,dep:number|null,arr:number|null)=>this.createOrder({id:`V11-WB${String(n).padStart(3,'0')}`,projectId:'P001',plate:`沪A${12340+n}`,plateColor:2,driver:`演示司机${n}`,source:['手动录入','Excel导入','上游系统'][n%3]!,origin,destination,plannedDeparture:dep,plannedArrival:arr},created);
    add(1,this.now-3*HOUR,this.now-2*HOUR,this.now+3*HOUR);
    add(2,this.now-2*HOUR,this.now-HOUR,this.now+4*HOUR);
-   add(3,this.now-5*HOUR,this.now-4*HOUR,this.now-HOUR);
+   add(3,this.now-5*HOUR,this.now-4*HOUR,this.now+HOUR);
+   this.orders.find(o=>o.id==='V11-WB003')!.plannedArrival=this.now-HOUR;
    add(4,this.now-20*HOUR,this.now-19*HOUR,this.now-16*HOUR);
-   add(5,this.now-73*HOUR,this.now-72*HOUR,this.now-65*HOUR);
+   add(5,this.now-73*HOUR,this.now-72*HOUR,this.now+HOUR);
    add(6,this.now-4*HOUR,this.now-3*HOUR,this.now+HOUR);
    add(7,this.now-HOUR,null,null);
    this.tick();

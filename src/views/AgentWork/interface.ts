@@ -320,6 +320,7 @@ export interface P1Correction {at:number;reason:string;before:string;after:strin
 export interface P1Order {
  id:string;projectId:string;plate:string;plateColor:1|2;driver:string;source:string;
  origin:P1Place;destination:P1Place;plannedDeparture:number|null;plannedArrival:number|null;
+ initialization?:{at:number;state:P1State;basis:string};
  milestoneMethods?:Partial<Record<P1State,string>>;corrections?:P1Correction[];
  createdAt:number;state:P1State;enteredAt?:number;departedAt?:number;arrivedAt?:number;completedAt?:number;
  weatherRequestedAt?:number;weatherEffectiveAt?:number;weatherActiveLogged?:boolean;
