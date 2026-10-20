@@ -29,7 +29,7 @@ export function handleRouter(_routerList: any) {
         redirect: { name: 'agent-work-agent' },
         children: [
           {path:'events',name:'agent-work-events',component:()=>import('@/views/Phase1/Events.vue')},
-          {path:'projects/config',redirect:to=>({path:'/index/projects/detail',query:{...to.query,tab:'config'}})},
+          {path:'projects/config',redirect:to=>({path:'/index/projects/detail',query:{...to.query,tab:'skills'}})},
           {path:'projects/detail',name:'agent-work-phase-config',component:()=>import('@/views/Phase1/ProjectConfig.vue')},
           {
             path: 'agent',

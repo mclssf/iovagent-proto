@@ -180,7 +180,7 @@ const skillDescriptions: Record<string, string> = {
 };
 
 function createSkills(): ManagedSkill[] {
-  return [...phaseSkills.map((skill):ManagedSkill=>({id:skill.id,name:skill.name,category:'在途专家',description:skill.description,content:`# ${skill.name}\n\n一期固定规则；由共享新运单读取流程读取最新配置并合并订阅，记录基础事件、结果和72小时结束日志。`,fileName:`${skill.id}.skill.md`,enabled:true,privateToolIds:[],updatedAt:'2026-10-14 10:00',updatedBy:'系统管理员',group:'基础 Skill 组'})),...skillSeed.map((skill, index):ManagedSkill => ({
+  return [...phaseSkills.map((skill):ManagedSkill=>({id:skill.id,name:skill.name,category:'在途专家',description:skill.description,content:`# ${skill.name}\n\n一期固定规则；由系统固定代码读取最新配置并编排监听，记录基础事件、结果和72小时结束日志。`,fileName:`${skill.id}.skill.md`,enabled:true,privateToolIds:[],updatedAt:'2026-10-14 10:00',updatedBy:'系统管理员',group:'基础 Skill 组'})),...skillSeed.map((skill, index):ManagedSkill => ({
     ...skill,
     content: `# ${skill.name}\n\n## 适用范围\n${skill.category}\n\n## 执行指引\n根据用户任务识别所需数据和业务约束，调用 ${skill.name} 完成处理，并返回结构化结果与必要的执行说明。`,
     description: skillDescriptions[skill.id] ?? '',

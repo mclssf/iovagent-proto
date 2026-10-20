@@ -2,11 +2,17 @@
 import {usePhase1} from '@/pinia/phase1';
 import RuleAssistant from '@/views/Phase1/RuleAssistant.vue';
 import type {RuleProposal} from '@/views/Phase1/ruleLanguage';
+import MonitorTaskDialog from '@/views/Phase1/MonitorTaskDialog.vue';
 import ConfigEditor from '@/views/Phase1/ConfigEditor.vue';
 import {phaseSkills} from '@/views/Phase1/catalog';
 import type {P1SkillId} from '../interface';
 const props=defineProps<{embedded?:boolean}>();
 const phaseConfigEditor=ref<InstanceType<typeof ConfigEditor>>();
+const configuringSkill=ref<P1SkillId>();
+const selectedPhaseSkillIds=computed(()=>selectedLogisticsSkillIds.value.filter(id=>phaseSkills.some(s=>s.id===id)) as P1SkillId[]);
+const skillConfigDraft=ref<import('../interface').P1Config>();
+function openSkillConfig(id:P1SkillId){skillConfigDraft.value=phaseConfigEditor.value?.getDraft();configuringSkill.value=id;}
+function applySkillConfig(c:import('../interface').P1Config){phaseConfigEditor.value?.applyDraft(c);selectedLogisticsSkillIds.value=[...selectedLogisticsSkillIds.value.filter(id=>!phaseSkills.some(t=>t.id===id)),...c.selectedSkills];}
 
 import { migrateCapacitySkillIds } from '@/pinia/capacitySkills';
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref } from 'vue';
@@ -622,7 +628,7 @@ function goNext() {
     ElMessage.warning('请选择至少一项项目技能');
     return;
   }
-  if(!props.embedded&&!phaseConfigEditor.value?.validate()) {ElMessage.warning('请检查一期配置参数');return;}
+  if(!phaseConfigEditor.value?.validate()) {ElMessage.warning('请检查一期配置参数');return;}
   const skillNames = selectedSkills.value.map((skill) => skill.name);
   const skillIds = selectedSkills.value.map((skill) => skill.id);
   let phaseProjectId=editingProject.value?.id||'';
@@ -631,8 +637,7 @@ function goNext() {
   } else {
     phaseProjectId=store.addSkillProject(cleanName, skillNames, skillIds, mailboxDraft.value ?? undefined);
   }
-  if(props.embedded){const phase=usePhase1();const config=phase.config(phaseProjectId);config.selectedSkills=skillIds.filter(id=>phaseSkills.some(s=>s.id===id)) as P1SkillId[];phase.saveConfig(phaseProjectId,config,config.version);}
-  else if(!phaseConfigEditor.value?.commit(phaseProjectId)){ElMessage.error(usePhase1().error||'项目配置未保存，请重试');return;}
+  if(!phaseConfigEditor.value?.commit(phaseProjectId)){ElMessage.error(usePhase1().error||'技能配置未保存，请重试');return;}
   const finalProject=store.projects.find(p=>p.id===phaseProjectId);if(finalProject)finalProject.skillIds=[...(finalProject.skillIds||[]).filter(id=>!phaseSkills.some(s=>s.id===id)),...usePhase1().config(phaseProjectId).selectedSkills];
   if(!props.embedded)goPage('projects');
   else ElMessage.success('项目内容已保存');
@@ -750,9 +755,10 @@ onBeforeUnmount(() => {
               <button v-else type="button" :disabled="!editingProject?.mailbox" class="shrink-0 rounded-md border border-[#deded9] px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-[#f7f7f5] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-slate-900 disabled:cursor-default disabled:opacity-50" @click="viewMailboxTask">查看任务</button>
             </div>
           </article>
-          <button
+          <div
             v-else
-            type="button"
+            role="button" tabindex="0"
+            @keydown.enter.self="toggleSkill(skill)" @keydown.space.prevent.self="toggleSkill(skill)"
             class="group flex min-h-[172px] flex-col rounded-lg border bg-white p-4 text-left shadow-sm transition"
             :class="
               isSkillConnecting(skill)
@@ -804,8 +810,9 @@ onBeforeUnmount(() => {
               >
                 {{ requiredMonitorSkillIds.includes(skill.id) ? '必选 · 状态流转' : isSkillSelected(skill) ? '已选择' : '未选择' }}
               </span>
+              <button v-if="phaseSkills.some(t=>t.id===skill.id)" type="button" class="ml-auto rounded border border-slate-300 px-3 py-1 text-xs text-slate-700" :aria-label="`配置 ${skill.name}`" @click.stop="openSkillConfig(skill.id as P1SkillId)">配置</button>
             </div>
-          </button>
+          </div>
           </template>
         </div>
         <div v-else class="flex h-full min-h-[220px] flex-col items-center justify-center text-center">
@@ -816,7 +823,7 @@ onBeforeUnmount(() => {
         </div>
       </div>
 
-      <details v-if="!props.embedded" class="mx-5 mb-4 shrink-0 max-h-[40vh] overflow-auto border-t border-[#deded9]"><summary class="cursor-pointer py-3 text-sm font-medium">一期监听与规则配置</summary><ConfigEditor ref="phaseConfigEditor" :project-id="editingProject?.id" :selected-skills="selectedLogisticsSkillIds.filter(id=>phaseSkills.some(s=>s.id===id)) as P1SkillId[]" embedded/></details>
+      <div hidden><ConfigEditor ref="phaseConfigEditor" :project-id="editingProject?.id" :selected-skills="selectedPhaseSkillIds" embedded/></div><MonitorTaskDialog v-if="configuringSkill" :task-id="configuringSkill" :project-id="editingProject?.id||''" :draft-config="skillConfigDraft" draft-only @saved="applySkillConfig" @close="configuringSkill=undefined"/>
       <div class="mx-5 mb-5 flex h-14 shrink-0 items-center justify-between gap-3 rounded-lg bg-white px-4 shadow-sm">
         <div class="min-w-0 truncate text-xs text-slate-500">
           {{ selectedSkills.length ? selectedSkills.map((skill) => skill.name).join('、') : '请选择项目技能' }}

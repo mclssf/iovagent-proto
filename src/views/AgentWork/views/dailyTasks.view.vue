@@ -64,10 +64,12 @@ function smartOrderEntryFlow(task: DailyTask) {
   return `${sources || '未配置'} → ${target}`;
 }
 watch([projectId, () => route.query.taskId], () => {
+  if(props.monitorCount!==undefined&&String(route.query.taskId||'').startsWith('p1-'))typeFilter.value='monitor';
   selectedId.value = props.monitorCount!==undefined?'':projectTasks.value.find((task) => task.id === route.query.taskId)?.id ?? projectTasks.value[0]?.id ?? '';
-  search.value = ''; filter.value = 'all'; typeFilter.value = 'all'; showForm.value = false;
+  search.value = ''; filter.value = 'all'; typeFilter.value = props.monitorCount!==undefined&&String(route.query.taskId||'').startsWith('p1-')?'monitor':'all'; showForm.value = false;
 }, { immediate: true });
 watch(selectedId, () => { showBackground.value = false; });
+watch(typeFilter,value=>{if(value==='monitor')selectedId.value='';else emit('select-legacy');});
 watch(filteredTasks, (tasks) => {
   if (selectedId.value && !tasks.some((task) => task.id === selectedId.value)) selectedId.value = '';
 }, { flush: 'post' });
@@ -152,12 +154,12 @@ async function remove(task: DailyTask) {
     <div class="dt-page-body" :class="{ 'has-panel': selected || monitorSelected }">
       <div class="dt-task-column">
         <div class="dt-list-toolbar">
-          <div class="dt-list-heading"><span>{{ projectTasks.length + (monitorCount||0) }} 项任务 <span class="dt-secondary">· {{ projectTasks.filter(task => getTaskStatus(task) === 'running').length + (monitorRunning||0) }} 项执行中</span></span><button class="dt-button primary" type="button" @click="create"><Icon :svg="strokeIconPaths.plus" :size="15" />新建任务</button></div>
-          <div class="dt-type-filter" role="group" aria-label="任务类型筛选"><button type="button" :aria-pressed="typeFilter === 'all'" @click="typeFilter = 'all'">全部</button><button v-for="[type, label] in (monitorCount===undefined?availableTaskTypes:availableTaskTypes.slice(0,1))" :key="type" type="button" :aria-pressed="typeFilter === type" @click="typeFilter = type">{{ label }}</button><button v-if="monitorCount!==undefined" type="button" :aria-pressed="typeFilter==='monitor'" @click="typeFilter='monitor'">监控任务</button><button v-for="[type,label] in (monitorCount===undefined?[]:availableTaskTypes.slice(1))" :key="type" type="button" :aria-pressed="typeFilter===type" @click="typeFilter=type">{{label}}</button></div>
+          <div class="dt-list-heading"><span>{{ typeFilter==='monitor'?(monitorCount||0):projectTasks.length }} 项任务 <span class="dt-secondary">· {{ typeFilter==='monitor'?(monitorRunning||0):projectTasks.filter(task => getTaskStatus(task) === 'running').length }} 项执行中</span></span><button class="dt-button primary" type="button" @click="create"><Icon :svg="strokeIconPaths.plus" :size="15" />新建任务</button></div>
+          <div class="dt-type-filter" role="group" aria-label="任务类型筛选"><button type="button" :aria-pressed="typeFilter === 'all'" @click="typeFilter = 'all'">全部</button><button v-for="[type, label] in (monitorCount===undefined?availableTaskTypes:availableTaskTypes.slice(0,1))" :key="type" type="button" :aria-pressed="typeFilter === type" @click="typeFilter = type">{{ label }}</button><button v-if="monitorCount!==undefined" type="button" :aria-pressed="typeFilter==='monitor'" @click="typeFilter='monitor'">系统任务</button><button v-for="[type,label] in (monitorCount===undefined?[]:availableTaskTypes.slice(1))" :key="type" type="button" :aria-pressed="typeFilter===type" @click="typeFilter=type">{{label}}</button></div>
           <div class="dt-filters"><div class="dt-search"><Icon :svg="strokeIconPaths.search" :size="14" /><input v-model="search" aria-label="搜索任务" placeholder="搜索任务" /></div><select v-model="filter" aria-label="任务状态筛选"><option value="all">全部状态</option><option v-for="(label, value) in taskStatusLabels" :key="value" :value="value">{{ label }}</option></select></div>
         </div>
         <section class="dt-task-area" :aria-label="isPersonal ? '个人做任务列表' : '项目做任务列表'">
-          <div v-if="filteredTasks.length || monitorCount && (typeFilter==='all'||typeFilter==='monitor')" class="dt-task-grid"><slot name="monitor-cards" :search="search" :status="filter" :type="typeFilter"/>
+          <div v-if="filteredTasks.length || monitorCount && typeFilter==='monitor'" class="dt-task-grid"><slot name="monitor-cards" :search="search" :status="filter" :type="typeFilter"/>
             <article v-for="task in filteredTasks" :key="task.id" class="dt-task-card" :class="{ selected: selectedId === task.id }">
               <button type="button" class="dt-task-main" :aria-label="`查看任务 ${task.name}`" :aria-pressed="selectedId === task.id" @click="emit('select-legacy');selectTask(task.id)">
                 <div class="dt-task-heading"><span class="dt-task-symbol"><Icon :svg="task.taskTemplate === 'email-order' ? strokeIconPaths.messageText : task.trigger === 'once' ? strokeIconPaths.file : task.trigger === 'event' ? strokeIconPaths.zap : strokeIconPaths.alarmClock" :size="17" /></span><h2>{{ task.name }}</h2><span v-if="store.unreadResultsByTask[task.id]" class="dt-unread-badge" :aria-label="`${store.unreadResultsByTask[task.id]} 条未读结果`">{{ store.unreadResultsByTask[task.id] }}</span><span class="dt-badge" :class="{ success: getTaskStatus(task) === 'complete', blue: getTaskStatus(task) === 'running' }">{{ status(task) }}</span></div>

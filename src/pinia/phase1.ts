@@ -2,6 +2,7 @@ import { defineStore } from 'pinia';
 import type {P1Config,P1Order,P1SkillId,P1Event,P1Anomaly,P1Log,P1EventType,P1State} from '@/views/AgentWork/interface';
 import {phaseSkills,stateNames,dateText,nextWeatherMidnight} from '@/views/Phase1/catalog';
 import {defaultAssessments,assessmentConfig,simulateAssessment} from '@/views/Phase1/eventAssessment';
+// 系统固定分支：不调用LLM，不接受自然语言替换判断或订阅时限。
 export function initialPlanState(departure:number|null,arrival:number|null,now:number):P1State {
  if(arrival!==null&&now>=arrival)return 'completed';
  if(departure!==null&&now>=departure)return 'in_transit';
@@ -77,12 +78,13 @@ export const usePhase1=defineStore('phase1-v11',{
    for(const p of [input.origin,input.destination])if(!p.name.trim()||!p.regionCode||!Number.isFinite(p.lat)||!Number.isFinite(p.lon)||Math.abs(p.lat)>90||Math.abs(p.lon)>180||!Number.isFinite(p.radiusMeters)||p.radiusMeters<=0){this.error='请填写起終点名称、区县编码、有效坐标和围栏半径。';return false;}
    if([input.plannedDeparture,input.plannedArrival].some(t=>t!==null&&!Number.isFinite(t))||input.plannedDeparture!==null&&input.plannedArrival!==null&&input.plannedArrival<input.plannedDeparture){this.error='计划时间无效，预计到达不能早于预计出发。';return false;}
    const config=this.config(input.projectId);const order:P1Order={...clone(input),createdAt,state:'pending',expiresAt:createdAt+72*HOUR,activateAt:createdAt+10*MINUTE,config,session:anyWatch(config)?'subscribing':'paused',endReason:'',cleanupWillFail:false,cleanupAttempts:0,subscriptionRevision:1,providerMode:this.capability,deviationBlocked:this.capability==='whitepaper'&&transportEnabled(config,'deviation')};
+   // 固定顺序：校验→读取配置→计划初始化→已完成短路→按开关建立模拟订阅。
    order.state=initialPlanState(order.plannedDeparture,order.plannedArrival,this.now);
    const missing=order.plannedDeparture===null||order.plannedArrival===null;
    order.initialization={at:this.now,state:order.state,basis:`按计划时间初始化：预计出发${dateText(order.plannedDeparture)}，预计到达${dateText(order.plannedArrival)}；当前${dateText(this.now)}，默认为${stateNames[order.state]}。${missing?'计划时间缺失，请补齐；未使用创建时间替代。':''}此为计划推定，未核验实际轨迹或围栏，不写入实际里程碑时间。`};
-   this.orders.push(order);this.allLog(order,'配置',`S00 运单读取与监听编排：${order.initialization.basis}`);
-   if(order.state==='completed'){order.session='stopped';order.endReason='S00按计划到达时间初始化为已完成，不注册在途监控';order.subscriptionRevision=0;order.deviationBlocked=false;this.allLog(order,'结束',order.endReason+'；不注册天气订阅、围栏及其他事件监听，不启动计时或重复提醒。');this.error='';return true;}
-   this.allLog(order,'开始',`新增运单读取共享Skill：${order.id}，${order.plate}；项目最新配置v${config.version}，来源${order.source}，无需SaaS写单。${order.session==='paused'?'监听未开启':'请求模拟订阅，约10分钟后生效'}；固定截止${dateText(order.expiresAt)}。`);
+   this.orders.push(order);this.allLog(order,'配置',`系统运单接入流程：${order.initialization.basis}`);
+   if(order.state==='completed'){order.session='stopped';order.endReason='系统按计划到达时间初始化为已完成，不注册在途监控';order.subscriptionRevision=0;order.deviationBlocked=false;this.allLog(order,'结束',order.endReason+'；不注册天气订阅、围栏及其他事件监听，不启动计时或重复提醒。');this.error='';return true;}
+   this.allLog(order,'开始',`系统监听注册：${order.id}，${order.plate}；项目最新配置v${config.version}，来源${order.source}，无需SaaS写单。${order.session==='paused'?'监听未开启':'请求模拟订阅，约10分钟后生效'}；固定截止${dateText(order.expiresAt)}。`);
    for(const type of ['parking','offline'] as const)if(order.providerMode==='whitepaper'&&transportEnabled(config,type)&&config[type].thresholdMinutes%10!==0)this.log(order,taskFor[type],'失败','白皮书约束模式：持续时长不是10分钟的倍数，该项未生效。');
    if(config.selectedSkills.includes('p1-late')&&(!config.fenceTargets.includes('origin')||!config.fenceTargets.includes('destination')))this.log(order,'p1-late','失败','缺少所选起始地/目的地围栏事实源，对应晚发/晚到规则不生成异常。');
    if(order.deviationBlocked)this.log(order,'p1-deviation','失败','CAPABILITY_UNSUPPORTED：白皮书没有线路偏离半径参数，该项未生效。');
