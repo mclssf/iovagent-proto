@@ -10,7 +10,7 @@ export function initialPlanState(departure:number|null,arrival:number|null,now:n
 }
 export const demoEpoch=Date.parse('2026-10-14T10:00:00+08:00');
 export const clone=<T>(value:T):T=>JSON.parse(JSON.stringify(value));
-export const defaultP1Config:P1Config={assessments:defaultAssessments(),version:1,selectedSkills:phaseSkills.filter(s=>s.id!=='p1-weather').map(s=>s.id),weather:{enabled:false},deviation:{enabled:true,radiusMeters:1000,repeatMinutes:10},offline:{enabled:true,thresholdMinutes:30,repeatMinutes:15},parking:{enabled:true,thresholdMinutes:30,repeatMinutes:15},fenceTargets:['origin','destination'],lateDeparture:{enabled:true,graceMinutes:30},lateArrival:{enabled:true,graceMinutes:30},statusUpdates:['loading','in_transit','arrived','completed']};
+export const defaultP1Config:P1Config={assessments:defaultAssessments(),version:1,missingPass:{origin:false,destination:false},selectedSkills:phaseSkills.filter(s=>s.id!=='p1-weather').map(s=>s.id),weather:{enabled:false},deviation:{enabled:true,radiusMeters:1000,repeatMinutes:10},offline:{enabled:true,thresholdMinutes:30,repeatMinutes:15},parking:{enabled:true,thresholdMinutes:30,repeatMinutes:15},fenceTargets:['origin','destination'],lateDeparture:{enabled:true,graceMinutes:30},lateArrival:{enabled:true,graceMinutes:30},statusUpdates:['loading','in_transit','arrived','completed']};
 const HOUR=3600000;const MINUTE=60000;
 const taskFor:Record<Exclude<P1EventType,'fence'|'weather'>,P1SkillId>={parking:'p1-parking',offline:'p1-offline',deviation:'p1-deviation'};
 const kindFor={parking:'超时停车',offline:'在途离线',deviation:'线路偏离'} as const;
@@ -26,7 +26,7 @@ function anyWatch(c:P1Config){return weatherEnabled(c)||c.selectedSkills.length>
 export const usePhase1=defineStore('phase1-v11',{
  state:()=>({now:demoEpoch,configs:{P001:clone(defaultP1Config)} as Record<string,P1Config>,orders:[] as P1Order[],events:[] as P1Event[],anomalies:[] as P1Anomaly[],logs:[] as P1Log[],sequence:0,error:'',capability:'mock' as 'mock'|'whitepaper',ready:false,lastResetSnapshot:''}),
  actions:{
-  progress(id:string,next:P1State,reason=''){
+  progress(id:string,next:P1State,reason='',source:'手动'|'运单状态同步'|'对话触发'|'超时结束'='手动'){
    const o=this.orders.find(o=>o.id===id);if(!o)return '运单不存在';
    const states:P1State[]=['pending','loading','in_transit','arrived','completed'];
    if(!reason.trim()&&states.indexOf(next)!==states.indexOf(o.state)+1)return '请按运输顺序推进；纠正状态需要填写原因。';
@@ -36,9 +36,9 @@ export const usePhase1=defineStore('phase1-v11',{
     for(const state of states.slice(states.indexOf(next)+1))if(state!=='pending')delete o[key[state]];
    }
    o.state=next;if(next!=='pending')o[key[next]]=this.now;
-   (o.milestoneMethods??={})[next]=reason?'人工纠正':'人工操作';
-   this.log(o,'p1-status','结果',`${reason?'状态纠正':'人工操作'}：${stateNames[before]} → ${stateNames[next]}${reason?`；原因：${reason}`:''}。`);
-   this.correctLate(o);if(next==='completed')this.stop(id,'人工确认运输完成');
+   (o.milestoneMethods??={})[next]=reason?'人工纠正':source==='手动'?'人工操作':source;
+   this.log(o,'p1-status','结果',`${reason?'状态纠正':source}：${stateNames[before]} → ${stateNames[next]}${reason?`；原因：${reason}`:''}。`);
+   if(before!==next)this.checkMissingPass(o,source);this.correctLate(o);if(next==='completed')this.stop(id,'人工确认运输完成');
    return '';
   },
   correctResult(id:string,conclusion:string,reason:string){
@@ -55,7 +55,7 @@ export const usePhase1=defineStore('phase1-v11',{
    return '';
   },
   next(prefix:string){return `${prefix}-${++this.sequence}`;},
-  config(projectId:string):P1Config{const c=clone(this.configs[projectId]||defaultP1Config);c.weather??={enabled:false};c.assessments={...defaultAssessments(),...c.assessments};return c;},
+  config(projectId:string):P1Config{const c=clone(this.configs[projectId]||defaultP1Config);c.weather??={enabled:false};c.missingPass??={origin:false,destination:false};c.assessments={...defaultAssessments(),...c.assessments};return c;},
   log(order:P1Order,taskId:P1SkillId,kind:P1Log['kind'],text:string){this.logs.push({id:this.next('LOG'),projectId:order.projectId,orderId:order.id,taskId,kind,at:this.now,text});},
   allLog(order:P1Order,kind:P1Log['kind'],text:string){for(const id of order.config.selectedSkills)if(!(id==='p1-weather'&&kind==='开始'))this.log(order,id,kind,text);},
   saveConfig(projectId:string,draft:P1Config,expectedVersion?:number){
@@ -166,6 +166,18 @@ export const usePhase1=defineStore('phase1-v11',{
    this.log(order,'p1-weather','基础事件',`${input.weatherType} · ${dateText(input.occurredAt)} · ${input.address}；${input.message}；来源：模拟天气预警消息。`);
    const a=this.anomaly(order,'恶劣天气','p1-weather',`${input.weatherType}：${input.message} 获取有效天气事件直接生成异常，无额外研判配置，不发送车机提醒。`,event.id);event.result=`恶劣天气 ${a.id}`;return '';
   },
+  checkMissingPass(order:P1Order,source:string){
+   const c=order.config;if(!c.selectedSkills.includes('p1-late'))return;
+   const rank={pending:0,loading:1,in_transit:2,arrived:3,completed:4};
+   for(const target of ['origin','destination'] as const){
+    if(!c.missingPass?.[target]||rank[order.state]<(target==='origin'?1:3))continue;
+    const kind=target==='origin'?'未经过起始地':'未经过目的地';
+    const evidence=this.events.some(e=>e.orderId===order.id&&e.type==='fence'&&e.target===target&&['enter','exit'].includes(e.phase)&&e.occurredAt<=this.now);
+    if(evidence){this.log(order,'p1-late','结果',`${source}：状态${stateNames[order.state]}，已有${target==='origin'?'起始地':'目的地'}进出围栏记录，不生成${kind}异常。`);continue;}
+    if(this.anomalies.some(a=>a.orderId===order.id&&a.kind===kind))continue;
+    this.anomaly(order,kind,'p1-late',`${source}：运单状态更新为${stateNames[order.state]}，截至${dateText(this.now)}未取得${target==='origin'?'起始地':'目的地'}进入或离开围栏事件。缺少记录不等于已证实车辆未经过，可人工核实并纠正。`);
+   }
+  },
   correctLate(order:P1Order){for(const a of this.anomalies.filter(a=>a.orderId===order.id&&['晚发','晚到'].includes(a.kind)&&a.status==='active')){
    const actual=a.kind==='晚发'?order.departedAt:order.arrivedAt||order.completedAt;const plan=a.kind==='晚发'?order.plannedDeparture:order.plannedArrival;const grace=a.kind==='晚发'?order.config.lateDeparture.graceMinutes:order.config.lateArrival.graceMinutes;
    if(actual&&plan&&actual<=(a.deadlineAt||plan+grace*MINUTE)){a.status='corrected';a.reason+=' 迟到证据证明按时完成，已纠正。';this.log(order,'p1-late','结果',`${a.id}迟到证据纠正；保留原异常记录。`);}
@@ -173,7 +185,7 @@ export const usePhase1=defineStore('phase1-v11',{
   tick(){
    for(const order of this.orders){
     if(['stopped','cleanup_pending'].includes(order.session))continue;
-    if(this.now>=order.expiresAt){this.stop(order.id,'超过72小时监听上限');continue;}
+    if(this.now>=order.expiresAt){this.checkMissingPass(order,'超时结束');this.stop(order.id,'超过72小时监听上限');continue;}
     if(order.session==='subscribing'&&this.now>=order.activateAt){order.session='active';const watched=(['parking','offline','deviation'] as const).filter(type=>transportEnabled(order.config,type)&&!(type==='deviation'&&order.deviationBlocked));this.allLog(order,'开始',`模拟订阅已生效；${watched.length?`线路RID-${order.id}-v${order.subscriptionRevision}供${watched.map(t=>kindFor[t]).join('、')}共享`:'当前无线路订阅，执行所选围栏/本地规则'}。`);}
     if(order.session!=='active')continue;
     const c=order.config;if(weatherEnabled(c)&&!order.weatherRequestedAt)this.startWeather(order);if(weatherEnabled(c)&&!order.weatherActiveLogged&&this.now>=(order.weatherEffectiveAt||Infinity)){order.weatherActiveLogged=true;this.log(order,'p1-weather','开始',`已到预计生效时间${dateText(order.weatherEffectiveAt)}，本地模拟天气监听开始；真实接入须确认订阅结果，不发送车机提醒。`);}

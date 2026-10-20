@@ -312,6 +312,7 @@ export interface P1Config {
  offline:{enabled:boolean;thresholdMinutes:number;repeatMinutes:number};
  parking:{enabled:boolean;thresholdMinutes:number;repeatMinutes:number};
  fenceTargets:('origin'|'destination')[];
+ missingPass?:{origin:boolean;destination:boolean};
  lateDeparture:{enabled:boolean;graceMinutes:number};lateArrival:{enabled:boolean;graceMinutes:number};
  statusUpdates:Exclude<P1State,'pending'>[];
 }
@@ -337,7 +338,7 @@ export interface P1Event {
  originalResult?:string;corrections?:P1Correction[];target?:'origin'|'destination';result:string;taskIds:P1SkillId[];configVersion:number;
 }
 export interface P1Anomaly {
- id:string;orderId:string;kind:'超时停车'|'在途离线'|'线路偏离'|'晚发'|'晚到'|'恶劣天气';
+ id:string;orderId:string;kind:'超时停车'|'在途离线'|'线路偏离'|'晚发'|'晚到'|'恶劣天气'|'未经过起始地'|'未经过目的地';
  status:'active'|'recovered'|'corrected';firstAt:number;lastAt:number;nextReminderAt:number;
  originalReason?:string;corrections?:P1Correction[];repeatCount:number;reason:string;deadlineAt?:number;eventId?:string;configVersion:number;taskId:P1SkillId;
 }
