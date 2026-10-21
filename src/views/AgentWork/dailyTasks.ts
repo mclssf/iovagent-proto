@@ -106,6 +106,8 @@ export interface TaskAgentDecision {
 
 export interface DailyTask extends Omit<DailyTaskDraft, 'trigger'> {
   trigger: 'once' | 'email';
+  scenario?: 'waybill-evidence';
+  enterpriseName?: string;
   taskTemplate?: 'email-order';
   mailbox?: ProjectMailbox;
   enabled?: boolean;

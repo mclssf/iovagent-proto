@@ -9,6 +9,7 @@
     "preview": "vite preview --host 0.0.0.0"
   },
   "dependencies": {
+    "@amap/screenshot": "0.0.3",
     "animate.css": "^4.1.1",
     "dompurify": "^3.4.17",
     "element-plus": "^2.10.7",

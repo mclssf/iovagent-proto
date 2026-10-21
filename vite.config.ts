@@ -13,14 +13,14 @@ function createAmapConfigScript(env: Record<string, string>) {
   })};\n`;
 }
 
-async function proxyAmapRequest(requestUrl: string, securityCode: string) {
+async function proxyAmapRequest(requestUrl: string, securityCode: string, referer?: string) {
   const parsed = new URL(requestUrl, 'http://localhost');
   const upstreamPath = parsed.pathname.replace(/^\/_AMapService\/?/, '');
   const origin = upstreamPath.startsWith('v4/map/styles') ? 'https://webapi.amap.com/' : 'https://restapi.amap.com/';
   const upstream = new URL(upstreamPath, origin);
   parsed.searchParams.forEach((value, key) => upstream.searchParams.append(key, value));
   upstream.searchParams.set('jscode', securityCode);
-  return fetch(upstream);
+  return fetch(upstream, { headers: referer ? { Referer: referer } : undefined });
 }
 
 function amapIntegration(env: Record<string, string>): Plugin {
@@ -44,7 +44,7 @@ function amapIntegration(env: Record<string, string>): Plugin {
           return;
         }
         try {
-          const upstream = await proxyAmapRequest(request.url, env.AMAP_SECURITY_CODE);
+          const upstream = await proxyAmapRequest(request.url, env.AMAP_SECURITY_CODE, request.headers.referer);
           response.statusCode = upstream.status;
           const contentType = upstream.headers.get('content-type');
           const cacheControl = upstream.headers.get('cache-control');

@@ -1,0 +1,97 @@
+import assert from 'node:assert/strict';
+import { fileURLToPath } from 'node:url';
+import { createServer } from 'vite';
+import { unzipSync } from 'fflate';
+import { read, utils } from 'xlsx';
+import { createPinia, setActivePinia } from 'pinia';
+
+const root = fileURLToPath(new URL('../', import.meta.url));
+const server = await createServer({ configFile: false, root, resolve: { alias: { '@': `${root}src` } }, optimizeDeps: { noDiscovery: true, include: [] }, server: { middlewareMode: true, hmr: false, ws: false }, appType: 'custom' });
+const data = new Map([['iovagent-ordinary-tasks-v2', '[]'], ['iovagent_login_enterprise_name', '测试客户企业']]);
+globalThis.window = { localStorage: { getItem: key => data.get(key) ?? null, setItem: (key, value) => data.set(key, value) } };
+try {
+  const evidence = await server.ssrLoadModule('/src/views/AgentWork/waybillEvidence.ts');
+  const ordinary = await server.ssrLoadModule('/src/views/AgentWork/ordinaryTasks.ts');
+  const skills = await server.ssrLoadModule('/src/views/AgentWork/ordinaryTaskSkills.ts');
+  const { createWaybillEvidenceResult } = await server.ssrLoadModule('/src/views/AgentWork/waybillEvidenceResult.ts');
+  const { useAgentDailyTasks } = await server.ssrLoadModule('/src/pinia/agentDailyTasks.ts');
+  const prompt = evidence.evidenceExamplePrompt;
+  assert(evidence.hasWaybillEvidenceIntent(prompt));
+  assert(evidence.hasWaybillEvidenceIntent('帮我完善完整运单的装货地和装货时间，截图留证'));
+  assert(evidence.hasWaybillEvidenceIntent('反推运单卸货地点并加水印截图'));
+  assert(!evidence.hasWaybillEvidenceIntent('补全车辆位置、预计到达时间和异常信息'));
+  assert(!evidence.hasWaybillEvidenceIntent('查询车辆轨迹并截图'));
+  assert.equal(skills.resolveOrdinarySkill(prompt, true, true).id, 'waybill-reconstruction-evidence');
+  assert.equal(skills.resolveOrdinarySkill('补全在途状态', true).id, 'logistics-spreadsheet');
+  const blankMap = new Uint8ClampedArray(400 * 200 * 4);
+  for (let index = 0; index < blankMap.length; index += 4) blankMap.set([238, 243, 246, 255], index);
+  for (let y = 20; y < 180; y++) for (let x = 190; x < 200; x++) blankMap.set([36, 117, 191, 255], (y * 400 + x) * 4);
+  assert.equal(evidence.hasEvidenceMapDetails(blankMap, 400, 200), false, 'a blue route on a missing base map is not a successful capture');
+  for (let y = 40; y < 80; y++) for (let x = 40; x < 100; x++) blankMap.set([90, 93, 94, 255], (y * 400 + x) * 4);
+  assert.equal(evidence.hasEvidenceMapDetails(blankMap, 400, 200), true);
+  const rows = evidence.evidenceSampleRows().map(row => Object.fromEntries(Object.entries(row).map(([key, value]) => [key, String(value)])));
+  assert.equal(evidence.parseEvidenceInput(rows[0]).unloading.poi, '杭州钱塘物流园');
+  assert.equal(evidence.parseEvidenceInput(rows[1]).loading.poi, '上海嘉定汽车城物流园');
+  assert.match(evidence.evidenceInputError({ ...rows[0], 车牌号: '' }), /车牌/);
+  assert.match(evidence.evidenceInputError({ ...rows[0], 卸货地经度: '181' }), /经纬度/);
+  assert.match(evidence.evidenceInputError({ ...rows[0], 卸货地纬度: '' }), /成对/);
+  assert.match(evidence.evidenceInputError({ ...rows[0], 卸货时间: '', 运单开始时间: '' }), /时间/);
+  assert.match(evidence.evidenceInputError({ ...rows[0], 装货时间: '2026-10-16 17:00:00' }), /晚于/);
+  const loadingInput = evidence.parseEvidenceInput(rows[1]);
+  const times = evidence.evidenceTimes(loadingInput, 7200, 0);
+  assert.equal(times.loading, loadingInput.loading.time);
+  assert(times.unloading > times.loading);
+  const unloadingInput = evidence.parseEvidenceInput(rows[0]);
+  assert.equal(evidence.evidenceTimes(unloadingInput, 7200, 0).unloading, unloadingInput.unloading.time);
+  const attachments = [{ name: '样表.xlsx', size: 1000, lastModified: 1, type: '', records: [...rows, { ...rows[0], 车牌号: '' }], rowCount: 7 }];
+  setActivePinia(createPinia());
+  const store = useAgentDailyTasks();
+  assert.throws(() => store.saveTask('', { name: '', trigger: 'once', prompt }), /上传/);
+  assert.throws(() => store.saveTask('', { name: '', trigger: 'once', prompt, attachments: [{ ...attachments[0], records: Array.from({ length: 51 }, () => rows[0]) }] }), /最多 50/);
+  const id = store.saveTask('', { name: '', trigger: 'once', prompt, attachments });
+  const task = store.tasks.find(task => task.id === id);
+  assert.equal(task.name, '运单补全与轨迹留证');
+  assert.equal(task.enterpriseName, '测试客户企业');
+  assert.equal(task.scenario, 'waybill-evidence');
+  assert(task.runs[0].steps.some(step => step.title.includes('水印')));
+  const controller = new AbortController();
+  let destroyed = 0;
+  const factory = async () => ({ destroy: () => destroyed++, render: async (input, index, enterprise) => {
+    assert.equal(enterprise, '测试客户企业');
+    const times = evidence.evidenceTimes(input, 7200, index);
+    return { bytes: Uint8Array.from([255, 216, 255, 224, index, 255, 217]), trip: {
+      order: input.order, plate: input.plate, distance: 130000, duration: 7200, path: [[121.176, 31.332], [120.48, 30.307]], basis: '模拟规则',
+      loading: { poi: input.loading.poi || '演示装货候选点', coordinate: input.loading.coordinate || [121.176, 31.332], time: times.loading, inferred: !input.loading.poi, timeInferred: input.loading.time === null },
+      unloading: { poi: input.unloading.poi || '演示卸货候选点', coordinate: input.unloading.coordinate || [120.48, 30.307], time: times.unloading, inferred: !input.unloading.poi, timeInferred: input.unloading.time === null },
+    } };
+  } });
+  const result = await createWaybillEvidenceResult(task, task.runs[0], controller.signal, () => {}, factory);
+  assert.deepEqual(result.progress, { total: 7, processed: 7, success: 6, failed: 1 });
+  assert.equal(destroyed, 1);
+  assert.equal(result.files.length, 1);
+  assert.match(result.text, /6 张/);
+  const archive = unzipSync(ordinary.resultFileBytes(result.files[0]));
+  const names = Object.keys(archive);
+  assert.equal(names.filter(name => name.endsWith('.jpg')).length, 6);
+  assert.equal(new Set(names).size, names.length);
+  const report = read(archive['执行报告.xlsx'], { type: 'array' });
+  const details = read(archive['运单补全明细.xlsx'], { type: 'array' });
+  const detailRows = utils.sheet_to_json(details.Sheets[details.SheetNames[0]]);
+  assert.equal(detailRows.length, 6);
+  assert.equal(detailRows[0].卸货地, rows[0].卸货地, 'known fields stay untouched');
+  assert.equal(detailRows[1].装货时间, rows[1].装货时间);
+  assert(detailRows.every(row => row.企业名称 === '测试客户企业' && row.核验状态.includes('演示')));
+  assert.equal(utils.sheet_to_json(report.Sheets[report.SheetNames[0]]).filter(row => row.执行状态 === '失败').length, 1);
+  store.receiveOrdinaryResult(id, task.runs[0].toolJobId, result);
+  assert.equal(store.resultDownloads.filter(file => file.taskId === id).length, 1);
+  const cancelled = new AbortController(); cancelled.abort();
+  const stopped = await createWaybillEvidenceResult(task, task.runs[0], cancelled.signal, () => {}, async () => { throw new Error('must not initialize maps'); });
+  assert.equal(stopped.progress.processed, 0);
+  assert.match(stopped.text, /任务已停止/);
+  assert.equal(Object.keys(unzipSync(ordinary.resultFileBytes(stopped.files[0]))).filter(name => name.endsWith('.jpg')).length, 0);
+  const unavailable = await createWaybillEvidenceResult(task, task.runs[0], new AbortController().signal, () => {}, async () => { throw new Error('高德服务不可用'); });
+  assert.equal(unavailable.progress.success, 0);
+  assert.equal(unavailable.progress.failed, 7);
+  assert.match(unavailable.text, /未生成有效截图/);
+  console.log('PASS: intent isolation, input/coordinate/time validation, both known endpoints, company snapshot, 50-row guard, per-row images, ZIP/report reconciliation, partial failure, cancellation, map failure and shared downloads.');
+} finally { delete globalThis.window; await server.close(); }

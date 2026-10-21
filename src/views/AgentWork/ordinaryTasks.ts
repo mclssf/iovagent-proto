@@ -2,6 +2,10 @@ import { read, utils, write } from 'xlsx';
 import { strToU8, zipSync } from 'fflate';
 import type { DailyTask, TaskAgentDecision, TaskAttachment, TaskResultFile, TaskRun } from './dailyTasks';
 import { excelParsingSkill, hasHistoryTaskIntent, ordinaryTaskLimits, resolveOrdinarySkill } from './ordinaryTaskSkills';
+import { extractTaskPlates, parseWaybillTimestamp, recordValue } from './taskInput';
+import { evidenceInputError, hasWaybillEvidenceIntent, waybillEvidenceSteps } from './waybillEvidence';
+
+export { extractTaskPlates, parseWaybillTimestamp } from './taskInput';
 
 const DAY = 86400000;
 const chinaDateFormat = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit', day: '2-digit' });
@@ -29,11 +33,8 @@ export function resolveAsyncTool(prompt: string, now = Date.now()) {
     ? { id: 'vehicle.track.archive', name: '历史轨迹归档查询', execution: 'async' as const, date } : null;
 }
 
-export function extractTaskPlates(prompt: string) {
-  return [...new Set(prompt.toUpperCase().match(/[京津沪渝冀豫云辽黑湘皖鲁新苏浙赣鄂桂甘晋蒙陕吉闽贵粤青藏川宁琼][A-Z][A-Z0-9]{5,6}/g) ?? [])];
-}
-
 export function ordinaryTaskName(prompt: string) {
+  if (hasWaybillEvidenceIntent(prompt)) return '运单补全与轨迹留证';
   if (hasHistoryTaskIntent(prompt)) return `${extractTaskPlates(prompt)[0] ?? '批量运单'}历史轨迹查询`;
   return prompt.trim().replace(/\s+/g, ' ').slice(0, 24);
 }
@@ -93,44 +94,7 @@ export function taskRecords(task: DailyTask): Record<string, string>[] {
   return records.length ? records : extractTaskPlates(task.prompt).map(plate => ({ 车牌号: plate }));
 }
 
-function recordValue(record: Record<string, string>, fields: string[]) {
-  for (const field of fields) {
-    const value = Object.entries(record).find(([key]) => key.replace(/\s/g, '').toLowerCase() === field.toLowerCase())?.[1];
-    if (value?.trim()) return value.trim();
-  }
-  return '';
-}
-
 const waybillTimeFields = ['运单开始时间', '运单时间', '订单开始时间', '发车时间', '实际出发时间', '装货开始时间', '装货时间', '开始时间', 'waybillStartTime', 'startTime'];
-
-export function parseWaybillTimestamp(value: string): number | null {
-  const text = value.trim();
-  if (!text) return null;
-  if (/^\d{10}(?:\d{3})?$/.test(text)) return Number(text) * (text.length === 10 ? 1000 : 1);
-  if (/^\d{1,7}(?:\.\d+)?$/.test(text)) {
-    const serial = Number(text);
-    return serial >= 1 && serial <= 2958465 ? Date.UTC(1899, 11, 30) + serial * DAY - 8 * 3600000 : null;
-  }
-  const normalized = text.replace(/年|月/g, '-').replace(/日/g, '').replace(/\//g, '-');
-  const iso = normalized.match(/^(\d{4})-(\d{1,2})-(\d{1,2})(?:[ T](\d{1,2}):(\d{2})(?::(\d{2})(?:\.\d+)?)?)?(Z|[+-]\d{2}:?\d{2})?$/i);
-  const formatted = text.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2}|\d{4})(?: (\d{1,2}):(\d{2})(?::(\d{2}))?)?$/);
-  if (!iso && !formatted) return null;
-  const yearText = iso?.[1] ?? formatted![3]!;
-  const year = yearText.length === 2 ? Number(yearText) + (Number(yearText) >= 70 ? 1900 : 2000) : Number(yearText);
-  const month = Number(iso?.[2] ?? formatted![1]);
-  const date = Number(iso?.[3] ?? formatted![2]);
-  const hour = Number(iso?.[4] ?? formatted?.[4] ?? 0);
-  const minute = Number(iso?.[5] ?? formatted?.[5] ?? 0);
-  const second = Number(iso?.[6] ?? formatted?.[6] ?? 0);
-  const timestamp = Date.UTC(year, month - 1, date, hour, minute, second);
-  const check = new Date(timestamp);
-  if (year < 1900 || check.getUTCFullYear() !== year || check.getUTCMonth() !== month - 1 || check.getUTCDate() !== date || hour > 23 || minute > 59 || second > 59) return null;
-  if (iso?.[7]) {
-    const zoned = Date.parse(`${year}-${String(month).padStart(2, '0')}-${String(date).padStart(2, '0')}T${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}:${String(second).padStart(2, '0')}${iso[7]}`);
-    return Number.isFinite(zoned) ? zoned : null;
-  }
-  return timestamp - 8 * 3600000;
-}
 
 // The workbench Agent decides the route from parsed rows; task execution reuses it.
 export function planWorkbenchExcelTask(files: TaskAttachment[], now = Date.now()): TaskAgentDecision | null {
@@ -153,6 +117,7 @@ export const isTaskDetailFile = (file: TaskResultFile) => file.detail || /_记�
 export const visibleTaskFiles = (files: TaskResultFile[] = []) => files.filter(file => /\.zip$/i.test(file.name));
 
 export function taskRecordError(task: DailyTask, record: Record<string, string>, index: number) {
+  if (task.scenario === 'waybill-evidence') return evidenceInputError(record);
   if (!hasHistoryTaskIntent(task.prompt) && !task.agentDecision?.historicalIndexes.includes(index)) return '';
   const plate = recordValue(record, ['车牌号', '车牌', '车辆号', '车辆牌照', 'plate']);
   return extractTaskPlates(plate).length ? '' : '缺少有效车牌号';
@@ -181,7 +146,7 @@ export function makeOrdinaryRun(task: DailyTask): TaskRun {
     status: 'ready', prompt: task.prompt, toolJobId: jobId, activeStep: 0, nextStepAt: now,
     result: '', executionMode: skill ? 'skill' : 'prompt', skills: skills.map(item => ({ ...item, status: 'loading' })),
     progress: rows ? { total: rows, processed: 0, success: 0, failed: 0 } : undefined,
-    steps: [
+    steps: task.scenario === 'waybill-evidence' ? waybillEvidenceSteps(rows, task.enterpriseName ?? '演示企业') : [
       { title: '解析任务', text: `已保存原始需求${files.length ? `及附件 ${files.map(file => file.name).join('、')}` : ''}，识别一次性任务目标。` },
       { title: '校验执行输入', text: `${rows ? `读取已保存的 ${rows} 条记录，保留原始行号并校验所需字段。` : '校验提示词中的查询对象和输出要求。'}${task.agentDecision ? `沿用工作台 Agent 的处理方案：${task.agentDecision.historicalIndexes.length ? `${task.agentDecision.historicalIndexes.length} 条超过 180 天的运单调用历史业务质量分析接口，其他记录使用常规能力。` : '超过 100 条运单，按普通批量任务处理，不调用历史业务质量分析接口。'}` : ''}` },
       { title: skill ? '加载执行能力' : '规划提示词执行', text: skill ? `${skill.name} v${skill.version}：${skill.description}${archive ? '按已确定的处理方案调用历史业务质量分析接口（演示）。' : ''}${tool && !files.length ? `查询日期 ${tool.date}。` : ''}` : '依据原始需求整理可用信息，生成一次性的处理结果。', tool: archive ? '历史业务质量分析接口' : skill?.name },
