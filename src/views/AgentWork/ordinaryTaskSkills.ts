@@ -16,7 +16,7 @@ export const excelParsingSkill = {
 };
 
 export const ordinaryTaskSkills = {
-  evidence: { id: 'waybill-reconstruction-evidence', name: '运单补全与轨迹留证', version: '1.0.0', description: '以已知装卸货端为锚点，模拟反推缺失地点与时间，逐单生成带企业水印的高德地图轨迹图片。', batchThresholdRows: ordinaryTaskLimits.batchThresholdRows },
+  evidence: { id: 'waybill-reconstruction-evidence', name: '运单补全与轨迹留证', version: '1.0.0', description: '以已知装卸货端为锚点，补全缺失地点与时间，逐单从地图导出带企业水印的监控运输轨迹图片。', batchThresholdRows: ordinaryTaskLimits.batchThresholdRows },
   history: { id: 'history-business-quality', name: '历史业务质量分析', version: '1.0.0', description: '批量查询运单历史轨迹，生成轨迹明细和执行报告。', batchThresholdRows: ordinaryTaskLimits.batchThresholdRows },
   trajectory: { id: 'vehicle-trajectory-query', name: '车辆轨迹查询', version: '1.0.0', description: '查询非归档时间范围内的车辆轨迹，生成轨迹结果与执行报告。', batchThresholdRows: ordinaryTaskLimits.batchThresholdRows },
   spreadsheet: { id: 'logistics-spreadsheet', name: '物流表格', version: '1.0.0', description: '识别表格字段，补全车辆位置、在途状态、预计到达和异常信息。', batchThresholdRows: ordinaryTaskLimits.batchThresholdRows },

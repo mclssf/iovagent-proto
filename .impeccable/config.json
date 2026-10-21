@@ -11,6 +11,24 @@
         ],
         "createdAt": "2026-10-13T09:54:49.448Z",
         "reason": "Assistant verified existing conditional color states: red background always uses white text; neutral slate background uses slate text. Detector merges mutually exclusive branches."
+      },
+      {
+        "rule": "gray-on-color",
+        "value": "*",
+        "files": [
+          "src/views/AgentOpsConfig.vue"
+        ],
+        "createdAt": "2026-10-21T05:17:53.875Z",
+        "reason": "Agent: both findings are existing delete/remove buttons; hover:bg-red-50 is explicitly paired with hover:text-red-600. The neutral default text is not rendered on red. Preserve the existing states; other detector rules remain active."
+      },
+      {
+        "rule": "gray-on-color",
+        "value": "*",
+        "files": [
+          "src/views/AgentWork/views/orderDetail.view.vue"
+        ],
+        "createdAt": "2026-10-21T08:57:37.569Z",
+        "reason": "Agent: existing mutually exclusive Vue branches pair red with white and slate with slate; detector combines colors from incompatible states."
       }
     ]
   }

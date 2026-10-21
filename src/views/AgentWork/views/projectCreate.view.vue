@@ -8,8 +8,11 @@ import { ElMessage } from 'element-plus';
 import AppDialog from '@/components/AppDialog.vue';
 
 import { agentWorkData } from '@/pinia/agentWork';
+import { useAgentOpsStore } from '@/pinia/agentOps';
+import type { WechatEmployeeSource } from '@/pinia/dataEmployeeSkills';
 import { createProjectMailbox, emailDemoMailbox, mailboxSkill } from '@/pinia/projectMailboxes';
 import type { ProjectMailbox } from '../interface';
+import WechatEmployeeDetails from '../component/wechatEmployeeDetails.comp.vue';
 
 import { strokeIconPaths } from '../strokeIconPaths';
 import { useAgentWorkNav } from '../useAgentWorkNav';
@@ -29,6 +32,7 @@ interface ProjectSkill {
   name: string;
   type: SkillType;
   usage: SkillUsage;
+  wechatSource?: WechatEmployeeSource;
 }
 
 interface LoginAgentMessage {
@@ -38,6 +42,7 @@ interface LoginAgentMessage {
 }
 
 const store = agentWorkData();
+const agentOpsStore = useAgentOpsStore();
 const { goPage } = useAgentWorkNav();
 const route = useRoute();
 const router = useRouter();
@@ -54,6 +59,7 @@ const selectedAnalysisSkillIds = ref<string[]>([]);
 const authorizedSkillIds = ref<string[]>([]);
 const connectingSkillExpectedTimes = ref<Record<string, string>>({});
 const pendingLoginSkill = ref<ProjectSkill | null>(null);
+const viewingWechatSkillId = ref('');
 const loginAgentStatus = ref<LoginAgentStatus>('idle');
 const loginAgentMessages = ref<LoginAgentMessage[]>([]);
 const loginVerificationCode = ref('');
@@ -84,7 +90,7 @@ const skillTypeLabels: Record<SkillType, string> = {
   operations: '运营助手',
 };
 
-const skills: ProjectSkill[] = [
+const defaultSkills: ProjectSkill[] = [
   ...monitorDefinitions.filter((monitor) => monitor.id !== 'parking').map((monitor): ProjectSkill => ({
     id: monitor.skillId,
     name: monitor.name,
@@ -121,7 +127,7 @@ const skills: ProjectSkill[] = [
     id: 'spreadsheet-waybill',
     name: '表格运单',
     type: 'data',
-    description: '通过表格导入运单数据，适合快速演示、离线对账和批量补录场景。',
+    description: '通过表格导入运单数据，适合离线对账和批量补录场景。',
     usage: '免费',
     icon: strokeIconPaths.list,
   },
@@ -317,10 +323,25 @@ const skills: ProjectSkill[] = [
   },
 ];
 
+const skills = computed<ProjectSkill[]>(() => [
+  ...agentOpsStore.visibleDataEmployeeSkills
+    .filter((skill) => skill.sourceType === 'wechat' && skill.wechatSource)
+    .map((skill): ProjectSkill => ({
+      id: skill.id,
+      name: skill.name,
+      type: 'data',
+      description: skill.description,
+      usage: '免费',
+      icon: strokeIconPaths.messages,
+      wechatSource: skill.wechatSource,
+    })),
+  ...defaultSkills,
+]);
+const viewingWechatSkill = computed(() => skills.value.find((skill) => skill.id === viewingWechatSkillId.value));
 const projectNameLength = computed(() => Array.from(projectName.value).length);
-const filteredSkills = computed(() => (activeTab.value === 'all' ? skills : skills.filter((skill) => skill.type === activeTab.value)));
+const filteredSkills = computed(() => (activeTab.value === 'all' ? skills.value : skills.value.filter((skill) => skill.type === activeTab.value)));
 const selectedSkills = computed(() =>
-  skills.filter(
+  skills.value.filter(
     (skill) =>
       selectedDataSkillIds.value.includes(skill.id) ||
       selectedLogisticsSkillIds.value.includes(skill.id) ||
@@ -350,7 +371,7 @@ function getProjectSkillIds() {
   const project = editingProject.value;
   if (!project) return [];
   if (project.skillIds?.length) return migrateCapacitySkillIds(project.skillIds);
-  return skills.filter((skill) => project.tmsUrl.includes(skill.name)).map((skill) => skill.id);
+  return skills.value.filter((skill) => !skill.wechatSource && project.tmsUrl.includes(skill.name)).map((skill) => skill.id);
 }
 
 function initializeProjectForm() {
@@ -373,13 +394,13 @@ function initializeProjectForm() {
   }
 
   const projectSkillIds = ensureRequiredMonitorSkills(getProjectSkillIds());
-  const dataSkills = skills.filter((skill) => projectSkillIds.includes(skill.id) && skill.type === 'data');
+  const dataSkills = skills.value.filter((skill) => projectSkillIds.includes(skill.id) && skill.type === 'data');
   projectName.value = project.name;
   selectedDataSkillIds.value = dataSkills.map((skill) => skill.id);
-  selectedLogisticsSkillIds.value = projectSkillIds.filter((id) => skills.some((skill) => skill.id === id && skill.type === 'logistics'));
-  selectedOperationsSkillIds.value = projectSkillIds.filter((id) => skills.some((skill) => skill.id === id && skill.type === 'operations'));
-  selectedCapacitySkillIds.value = projectSkillIds.filter((id) => skills.some((skill) => skill.id === id && skill.type === 'capacity'));
-  selectedAnalysisSkillIds.value = projectSkillIds.filter((id) => skills.some((skill) => skill.id === id && skill.type === 'analysis'));
+  selectedLogisticsSkillIds.value = projectSkillIds.filter((id) => skills.value.some((skill) => skill.id === id && skill.type === 'logistics'));
+  selectedOperationsSkillIds.value = projectSkillIds.filter((id) => skills.value.some((skill) => skill.id === id && skill.type === 'operations'));
+  selectedCapacitySkillIds.value = projectSkillIds.filter((id) => skills.value.some((skill) => skill.id === id && skill.type === 'capacity'));
+  selectedAnalysisSkillIds.value = projectSkillIds.filter((id) => skills.value.some((skill) => skill.id === id && skill.type === 'analysis'));
   authorizedSkillIds.value = dataSkills.filter((skill) => skill.usage === '需登录').map((skill) => skill.id);
 }
 
@@ -396,6 +417,14 @@ function isSkillSelected(skill: ProjectSkill) {
   if (skill.type === 'operations') return selectedOperationsSkillIds.value.includes(skill.id);
   if (skill.type === 'analysis') return selectedAnalysisSkillIds.value.includes(skill.id);
   return selectedCapacitySkillIds.value.includes(skill.id);
+}
+
+function getSkillDisplayName(skill: ProjectSkill) {
+  return skill.wechatSource ? `${skill.name}（${skill.wechatSource.groupName}）` : skill.name;
+}
+
+function closeWechatDetails() {
+  viewingWechatSkillId.value = '';
 }
 
 function isSkillConnecting(skill: ProjectSkill) {
@@ -619,7 +648,7 @@ function goNext() {
     ElMessage.warning('请选择至少一项项目技能');
     return;
   }
-  const skillNames = selectedSkills.value.map((skill) => skill.name);
+  const skillNames = selectedSkills.value.map(getSkillDisplayName);
   const skillIds = selectedSkills.value.map((skill) => skill.id);
   if (editingProject.value) {
     store.updateSkillProject(editingProject.value.id, cleanName, skillNames, skillIds, mailboxDraft.value ?? undefined);
@@ -716,7 +745,59 @@ onBeforeUnmount(() => {
         <div v-if="filteredSkills.length" class="grid grid-cols-1 gap-3 lg:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
           <template v-for="skill in filteredSkills" :key="skill.id">
           <article
-            v-if="skill.id === mailboxSkill.id"
+            v-if="skill.wechatSource"
+            class="flex min-h-[172px] min-w-0 flex-col overflow-hidden rounded-lg border bg-white transition"
+            :class="isSkillSelected(skill) ? 'border-slate-900' : 'border-[#deded9] hover:border-slate-400'"
+          >
+            <button
+              type="button"
+              class="flex min-w-0 flex-1 flex-col p-4 pb-3 text-left outline-none hover:bg-[#fbfcfa] focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-slate-800"
+              :aria-label="`查看${getSkillDisplayName(skill)}详情`"
+              @click="viewingWechatSkillId = skill.id"
+            >
+              <span class="flex items-start gap-3">
+                <span class="flex h-10 w-10 shrink-0 items-center justify-center rounded-full" :class="skillAvatarClass(skill)">
+                  <Icon :svg="skill.icon" :size="17" />
+                </span>
+                <span class="min-w-0">
+                  <span class="block text-sm font-semibold leading-5 text-slate-950">{{ skill.name }}</span>
+                  <span class="mt-1 block text-xs leading-4 text-slate-500">数据员工</span>
+                </span>
+              </span>
+              <span class="mt-4 block break-words text-xs leading-6 text-slate-600">{{ skill.description }}</span>
+              <span class="mt-3 flex flex-wrap items-center gap-2 text-xs leading-4">
+                <span class="rounded-md bg-[#eef6f1] px-2 py-1 text-emerald-700">微信消息</span>
+                <span
+                  class="inline-flex items-center gap-1.5 rounded-md px-2 py-1"
+                  :class="skill.wechatSource.onlineStatus === 'online' ? 'bg-emerald-50 text-emerald-700' : 'bg-amber-50 text-amber-800'"
+                >
+                  <span class="h-1.5 w-1.5 rounded-full bg-current" aria-hidden="true"></span>
+                  {{ skill.wechatSource.onlineStatus === 'online' ? '微信在线' : '微信离线' }}
+                </span>
+              </span>
+            </button>
+            <div class="flex items-center justify-between gap-3 border-t border-[#eeeee9] px-4 py-2.5">
+              <button
+                type="button"
+                class="rounded-sm text-xs font-medium leading-6 text-slate-600 hover:text-slate-950 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-slate-800"
+                :aria-label="`查看${getSkillDisplayName(skill)}详情`"
+                @click="viewingWechatSkillId = skill.id"
+              >查看详情</button>
+              <button
+                type="button"
+                class="inline-flex items-center gap-1.5 rounded-md border px-2.5 py-1 text-xs font-medium leading-5 transition focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-slate-800"
+                :class="isSkillSelected(skill) ? 'border-slate-900 bg-slate-900 text-white hover:bg-slate-700' : 'border-[#deded9] bg-white text-slate-700 hover:bg-[#f5f5f3]'"
+                :aria-pressed="isSkillSelected(skill)"
+                :aria-label="`${isSkillSelected(skill) ? '取消选择' : '选择'}${getSkillDisplayName(skill)}`"
+                @click="toggleSkill(skill)"
+              >
+                <Icon :svg="isSkillSelected(skill) ? strokeIconPaths.check : strokeIconPaths.plus" :size="13" />
+                {{ isSkillSelected(skill) ? '已选择' : '选择' }}
+              </button>
+            </div>
+          </article>
+          <article
+            v-else-if="skill.id === mailboxSkill.id"
             aria-label="邮箱连接"
             class="flex min-h-[172px] min-w-0 flex-col rounded-lg border bg-white p-4 text-left shadow-sm"
             :class="mailboxDraft ? 'border-slate-900 shadow-[0_0_0_1px_rgba(15,23,42,0.85)]' : 'border-[#deded9]'"
@@ -733,7 +814,7 @@ onBeforeUnmount(() => {
             </div>
             <p class="mt-4 text-xs leading-6 text-slate-600">{{ skill.description }}</p>
             <p class="mt-2 break-all text-sm font-medium text-slate-900">{{ mailboxDraft?.address ?? emailDemoMailbox }}</p>
-            <p class="mt-1 text-xs leading-5 text-slate-500">演示邮箱 · 模拟收件与回复</p>
+            <p class="mt-1 text-xs leading-5 text-slate-500">项目邮箱 · 订单邮件处理</p>
             <div class="mt-auto flex items-center justify-between gap-3 pt-3">
               <span class="text-xs leading-5 text-slate-500">{{ mailboxDraft && !editingProject?.mailbox ? '点击完成，保存邮箱绑定' : mailboxDraft ? '邮箱数据源已绑定' : '绑定项目邮箱数据源' }}</span>
               <button v-if="!mailboxDraft" type="button" class="shrink-0 rounded-md bg-slate-900 px-3 py-1.5 text-xs font-medium text-white hover:bg-slate-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-slate-900" @click="bindMailbox">绑定邮箱</button>
@@ -808,7 +889,7 @@ onBeforeUnmount(() => {
 
       <div class="mx-5 mb-5 flex h-14 shrink-0 items-center justify-between gap-3 rounded-lg bg-white px-4 shadow-sm">
         <div class="min-w-0 truncate text-xs text-slate-500">
-          {{ selectedSkills.length ? selectedSkills.map((skill) => skill.name).join('、') : '请选择项目技能' }}
+          {{ selectedSkills.length ? selectedSkills.map(getSkillDisplayName).join('、') : '请选择项目技能' }}
         </div>
         <button
           type="button"
@@ -821,6 +902,27 @@ onBeforeUnmount(() => {
         </button>
       </div>
     </section>
+
+    <AppDialog
+      v-if="viewingWechatSkill?.wechatSource"
+      :model-value="true"
+      :title="viewingWechatSkill.name"
+      width="580px"
+      @update:model-value="closeWechatDetails"
+    >
+      <WechatEmployeeDetails :source="viewingWechatSkill.wechatSource" />
+      <template #footer>
+        <div class="dialog-footer">
+          <p class="dialog-note">{{ isSkillSelected(viewingWechatSkill) ? '已选择为本项目运单数据源，点击完成后保存。' : '加入项目后，将作为本项目的运单数据源。' }}</p>
+          <div class="dialog-actions">
+            <button type="button" class="dialog-button" @click="closeWechatDetails">关闭</button>
+            <button type="button" class="dialog-button dialog-primary" @click="toggleSkill(viewingWechatSkill)">
+              {{ isSkillSelected(viewingWechatSkill) ? '移出项目' : '加入项目' }}
+            </button>
+          </div>
+        </div>
+      </template>
+    </AppDialog>
 
     <AppDialog v-if="pendingLoginSkill" :model-value="true" :title="pendingLoginSkill.name" width="560px" @update:model-value="cancelSkillLogin">
         <div class="space-y-4">

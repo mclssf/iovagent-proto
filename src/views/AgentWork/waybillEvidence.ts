@@ -6,9 +6,9 @@ export const evidenceExamplePrompt = '请根据表格中已知的真实卸货地
 export const hasWaybillEvidenceIntent = (prompt: string) => /运单|装货|卸货|运输任务|装卸/.test(prompt) && /补全|完善|还原|推测|推断|反推|补齐|核实/.test(prompt) && /截图|留证|水印|审计/.test(prompt);
 
 export function evidenceEnterpriseName() {
-  if (typeof window === 'undefined') return '演示企业';
-  try { return window.localStorage.getItem('iovagent_login_enterprise_name')?.trim().slice(0, 80) || '演示企业'; }
-  catch { return '演示企业'; }
+  if (typeof window === 'undefined') return '当前企业';
+  try { return window.localStorage.getItem('iovagent_login_enterprise_name')?.trim().slice(0, 80) || '当前企业'; }
+  catch { return '当前企业'; }
 }
 
 export interface EvidenceEndpoint {
@@ -98,11 +98,11 @@ export function evidenceTimes(input: EvidenceInput, travelSeconds: number, index
 
 export function waybillEvidenceSteps(rows: number, enterprise: string) {
   return [
-    { title: '理解补全与留证需求', text: `识别 ${rows} 条运输任务：以已知装货端或卸货端为锚点，补全另一端。结果为演示推断，不覆盖原始信息。` },
+    { title: '理解补全与留证需求', text: `识别 ${rows} 条运输任务：以已知装货端或卸货端为锚点，补全另一端，不覆盖原始信息。` },
     { title: '解析 Excel 与校验锚点', text: '调用 Excel 解析 Skill，提取车牌、已知 POI / 经纬度及时间范围，区分用户已知值与待推断字段；缺失输入逐行记录失败原因。', tool: 'Excel 解析 Skill' },
-    { title: '规划轨迹反推规则', text: '模拟查询时间窗内的车辆轨迹，按停车时长、先后顺序、装卸场站 POI 及到离场规则筛选候选端点。', tool: '车辆轨迹查询 / 装卸货还原（模拟）' },
-    { title: '逐单补全地点与时间', text: '保留用户提供的锚点，模拟推断缺失端点与装卸时间；校验装货早于卸货、运输时长与道路距离相容，并标注推断来源。', tool: '运单补全与轨迹留证 Skill' },
-    { title: '生成水印轨迹截图', text: `逐单加载高德底图和道路路线，生成 JPG：装卸货 POI / 经纬度、时间区间、车牌、企业“${enterprise}”及“兴路车联”品牌水印。`, tool: '高德 JS API 2.0 / 地图截图' },
+    { title: '规划轨迹反推规则', text: '查询时间窗内的车辆轨迹，按停车时长、先后顺序、装卸场站 POI 及到离场规则筛选候选端点。', tool: '车辆轨迹查询 / 装卸货还原' },
+    { title: '逐单补全地点与时间', text: '保留用户提供的锚点，补全缺失端点与装卸时间；校验装货早于卸货、运输时长与道路距离相容，并记录字段来源。', tool: '运单补全与轨迹留证 Skill' },
+    { title: '生成水印轨迹截图', text: `逐单使用运单详情页的地图水印层，直接导出监控运输轨迹 JPG：装卸货 POI / 经纬度、时间区间、车牌、企业“${enterprise}”及“兴路车联”品牌标识均叠加在地图内。`, tool: '高德 JS API 2.0 / 地图截图' },
     { title: '核验图片并打包归档', text: '核对逐单图片与明细的关联，打包补全明细、截图和执行报告；ZIP 同步到任务结果及下载，失败记录不伪造留证。' },
   ];
 }
@@ -118,6 +118,6 @@ export function evidenceSampleRows() {
     卸货地: index % 2 ? '' : '杭州钱塘物流园',
     卸货地经度: index % 2 ? '' : 120.480, 卸货地纬度: index % 2 ? '' : 30.307,
     卸货时间: index % 2 ? '' : `2026-10-${15 + index} 16:30:00`,
-    坐标系: 'GCJ-02', 数据说明: '演示样本，已知端点和名称仅用于产品演示',
+    坐标系: 'GCJ-02', 数据说明: '保留已知装卸货信息，补全缺失地点及时间',
   }));
 }

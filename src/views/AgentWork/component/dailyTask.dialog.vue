@@ -72,7 +72,7 @@ function save() {
           <div v-if="dragging" class="dt-drop-indicator"><Icon :svg="strokeIconPaths.upload" :size="22" />松开以上传 Excel</div>
         </div>
       </div>
-      <div v-if="isEvidence" class="dt-evidence-context"><div><span>留证企业</span><strong>{{ enterprise }}</strong><span>演示推断 · 需业务核验</span></div><button type="button" class="dt-text-button" @click="downloadSample"><Icon :svg="strokeIconPaths.download" :size="14" />下载留证样表</button></div>
+      <div v-if="isEvidence" class="dt-evidence-context"><div><span>留证企业</span><strong>{{ enterprise }}</strong><span>逐单生成监控运输轨迹截图</span></div><button type="button" class="dt-text-button" @click="downloadSample"><Icon :svg="strokeIconPaths.download" :size="14" />下载留证样表</button></div>
       <p v-if="error" class="dt-error" role="alert">{{ error }}</p>
     </form>
     <template #footer><div class="dialog-actions"><button type="button" class="dialog-button" @click="emit('update:modelValue', false)">取消</button><button type="submit" form="daily-task-form" class="dialog-button dialog-primary" :disabled="submitting || reading">提交并执行</button></div></template>

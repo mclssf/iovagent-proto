@@ -80,7 +80,9 @@ try {
   assert.equal(detailRows.length, 6);
   assert.equal(detailRows[0].卸货地, rows[0].卸货地, 'known fields stay untouched');
   assert.equal(detailRows[1].装货时间, rows[1].装货时间);
-  assert(detailRows.every(row => row.企业名称 === '测试客户企业' && row.核验状态.includes('演示')));
+  assert(detailRows.every(row => row.企业名称 === '测试客户企业' && row.核验状态 === '需业务核验'));
+  assert(!/演示|原型|模拟|非实测/.test(result.text));
+  assert.equal(detailRows[0].装货地来源, '规则推断', 'field provenance remains in the workbook, not on the map screenshot');
   assert.equal(utils.sheet_to_json(report.Sheets[report.SheetNames[0]]).filter(row => row.执行状态 === '失败').length, 1);
   store.receiveOrdinaryResult(id, task.runs[0].toolJobId, result);
   assert.equal(store.resultDownloads.filter(file => file.taskId === id).length, 1);

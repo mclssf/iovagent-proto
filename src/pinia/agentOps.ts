@@ -5,8 +5,8 @@ import { computed, readonly, ref } from 'vue';
 import type { DeepReadonly } from 'vue';
 import { analyzeAgentConflicts } from '@/views/AgentOps/agentConflicts';
 import type { AgentConflictReport } from '@/views/AgentOps/agentConflicts';
-import { createDataEmployeeSkills, dataEmployeeSkillGroup } from './dataEmployeeSkills';
-import type { DataEmployeeSkill } from './dataEmployeeSkills';
+import { createDataEmployeeSkills, dataEmployeeSkillGroup, filterDataEmployeeSkillsForEnterprise } from './dataEmployeeSkills';
+import type { DataEmployeeSkill, WechatEmployeeSource } from './dataEmployeeSkills';
 import agentRegistry from '@/data/agentOpsAgents.json';
 import codeRegistry from '@/data/agentOpsCodeTools.json';
 import { loadAgentRegistry, loadCodeToolRegistry, parseAgentRegistry, parseCodeToolRegistry } from '@/views/AgentOps/registry';
@@ -64,7 +64,7 @@ export interface AgentCallableSkill extends Omit<ManagedSkill, 'category' | 'gro
   group: SkillGroup;
   category: SkillCategory | '数据员工';
   source?: 'data-employee' | 'common';
-  sourceConfig?: { loginUrl: string; loginType: string; version: string };
+  sourceConfig?: { loginUrl: string; loginType: string; version: string; sourceType?: 'wechat'; wechatSource?: WechatEmployeeSource };
 }
 export interface ToolParameter {
   name: string;
@@ -233,6 +233,7 @@ function createMcpTools(): McpTool[] {
 export const useAgentOpsStore = defineStore('agentOps', () => {
   const skills = ref(createSkills());
   const dataEmployeeSkills = ref(createDataEmployeeSkills());
+  const visibleDataEmployeeSkills = computed(() => filterDataEmployeeSkillsForEnterprise(dataEmployeeSkills.value));
   // Data acquisition definitions have one source, shared by both configuration views.
   const agentCallableSkills = computed<AgentCallableSkill[]>(() => [
     ...skills.value.map((skill) => ({ ...skill, source: 'common' as const })),
@@ -241,7 +242,10 @@ export const useAgentOpsStore = defineStore('agentOps', () => {
       description: skill.description, content: skill.skillContent, fileName: skill.skillFileName,
       enabled: true, privateToolIds: skill.privateToolIds, group: skill.group,
       updatedAt: skill.skillUpdated, updatedBy: '数据员工配置',
-      sourceConfig: { loginUrl: skill.loginUrl, loginType: skill.loginType, version: skill.skillVersion },
+      sourceConfig: {
+        loginUrl: skill.loginUrl, loginType: skill.loginType, version: skill.skillVersion,
+        ...(skill.sourceType === 'wechat' ? { sourceType: skill.sourceType, wechatSource: skill.wechatSource } : {}),
+      },
     })),
   ]);
   const codeTools = ref(parseCodeToolRegistry(codeRegistry));
@@ -398,7 +402,7 @@ export const useAgentOpsStore = defineStore('agentOps', () => {
   }
   function saveDataEmployeeSkill(skill: DataEmployeeSkill) {
     const index = dataEmployeeSkills.value.findIndex((item) => item.id === skill.id);
-    const record = { ...skill, group: dataEmployeeSkillGroup, privateToolIds: [...new Set(skill.privateToolIds)] };
+    const record = { ...skill, group: dataEmployeeSkillGroup, privateToolIds: [...new Set(skill.privateToolIds)], ...(skill.wechatSource ? { wechatSource: { ...skill.wechatSource } } : {}) };
     if (index >= 0) dataEmployeeSkills.value[index] = record;
     else dataEmployeeSkills.value.unshift(record);
   }
@@ -505,7 +509,7 @@ export const useAgentOpsStore = defineStore('agentOps', () => {
     const privateLoading = skillsForTool(toolId).length > 0;
     return { direct, private: privateLoading, unloaded: !direct && !privateLoading };
   }
-  return { skills, dataEmployeeSkills, agentCallableSkills, availableSkillsForAgent, saveDataEmployeeSkill, tools, agents,
+  return { skills, dataEmployeeSkills, visibleDataEmployeeSkills, agentCallableSkills, availableSkillsForAgent, saveDataEmployeeSkill, tools, agents,
     agentDefaultConfig, customerAgentBindings, resolveAgentCapabilities, resolveAgentSystemPrompt, defaultFollowers, agentsUsingToolByDefault,
     customers, customerReports, saveCustomerAgents, resolveCustomerAgent, detectCustomerAgentConflicts,
     saveAgent, skillsForTool, customerAgentsForTool, getToolLoading, agentSync, codeToolSync, syncAgents, syncCodeTools, saveMcp, deleteMcp, mcpUsage, testMcpConnection, syncMcpTools };

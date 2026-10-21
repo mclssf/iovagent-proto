@@ -5,6 +5,7 @@ import { storeToRefs } from 'pinia';
 import { Icon } from '@packages/icon';
 import { ElMessage, ElMessageBox, ElOption, ElSelect } from 'element-plus';
 import AppDialog from '@/components/AppDialog.vue';
+import WechatEmployeeDetails from './AgentWork/component/wechatEmployeeDetails.comp.vue';
 
 import { agentWorkData } from '@/pinia/agentWork';
 import { commonSkillGroups, useAgentOpsStore } from '@/pinia/agentOps';
@@ -59,6 +60,8 @@ function editSkillFromTool(skill: AgentCallableSkill) {
 }
 
 const isCreateEmployeeModalOpen = ref(false);
+const isWechatEmployeeModalOpen = ref(false);
+const viewingWechatEmployee = ref<DataEmployee | null>(null);
 const isValidationModalOpen = ref(false);
 const isSkillFormModalOpen = ref(false);
 const isSkillPreviewModalOpen = ref(false);
@@ -157,6 +160,12 @@ function showSkill(employee: DataEmployee) {
   selectedEmployeeId.value = employee.id;
 }
 
+function viewWechatEmployee(employee: DataEmployee) {
+  showSkill(employee);
+  viewingWechatEmployee.value = employee;
+  isWechatEmployeeModalOpen.value = true;
+}
+
 function resetValidationForm() {
   validationForm.username = '';
   validationForm.password = '';
@@ -166,6 +175,10 @@ function resetValidationForm() {
 }
 
 function openValidationModal(employee: DataEmployee) {
+  if (employee.wechatSource) {
+    viewWechatEmployee(employee);
+    return;
+  }
   showSkill(employee);
   validatingEmployee.value = employee;
   resetValidationForm();
@@ -204,6 +217,10 @@ function openCreateEmployeeModal() {
 }
 
 function openEditEmployeeModal(employee: DataEmployee) {
+  if (employee.wechatSource) {
+    viewWechatEmployee(employee);
+    return;
+  }
   showSkill(employee);
   editingEmployeeId.value = employee.id;
   newEmployeeForm.name = employee.name;
@@ -593,7 +610,7 @@ function markTmsCustomerProcessed(customerId: string) {
           </button>
         </nav>
         <div class="border-t border-[#e2e2dc] px-4 py-3 text-xs leading-5 text-slate-500">
-          配置变更仅用于当前前端演示，不会写入生产环境。
+          按企业维护数据员工、技能与工具配置。
         </div>
       </aside>
 
@@ -628,10 +645,21 @@ function markTmsCustomerProcessed(customerId: string) {
                 >
                   <td class="px-4 py-4 align-middle">
                     <div class="font-medium text-slate-950">{{ employee.name }}</div>
-                    <div class="mt-1 max-w-[300px] truncate text-xs text-slate-500">{{ employee.description || '暂无描述' }}</div>
-                    <div class="mt-2 max-w-[400px] truncate font-mono text-xs text-slate-500">{{ employee.loginUrl }}</div>
+                    <div class="mt-1 max-w-[300px] text-xs leading-5 text-slate-500" :class="employee.wechatSource ? 'break-words' : 'truncate'">{{ employee.description || '暂无描述' }}</div>
+                    <div v-if="employee.wechatSource" class="mt-2 space-y-1 text-xs leading-5 text-slate-600">
+                      <p class="break-words">来源群：{{ employee.wechatSource.groupName }}</p>
+                      <p class="break-words">所属企业：{{ employee.wechatSource.enterpriseName }}</p>
+                    </div>
+                    <div v-else class="mt-2 max-w-[400px] truncate font-mono text-xs text-slate-500">{{ employee.loginUrl }}</div>
                     <div class="mt-2 flex flex-wrap items-center gap-1.5">
-                      <span class="inline-flex rounded-md border px-2 py-0.5 text-xs font-medium" :class="loginTypeClass(employee.loginType)">{{ employee.loginType }}</span>
+                      <template v-if="employee.wechatSource">
+                        <span class="inline-flex rounded-md border border-[#deded9] bg-white px-2 py-0.5 text-xs text-slate-600">微信消息</span>
+                        <span class="inline-flex items-center gap-1.5 rounded-md px-2 py-0.5 text-xs font-medium" :class="employee.wechatSource.onlineStatus === 'online' ? 'bg-emerald-50 text-emerald-700' : 'bg-amber-50 text-amber-800'">
+                          <span class="h-1.5 w-1.5 rounded-full bg-current" aria-hidden="true"></span>
+                          {{ employee.wechatSource.onlineStatus === 'online' ? '微信在线' : '微信离线' }}
+                        </span>
+                      </template>
+                      <span v-else class="inline-flex rounded-md border px-2 py-0.5 text-xs font-medium" :class="loginTypeClass(employee.loginType)">{{ employee.loginType }}</span>
                       <span class="inline-flex max-w-[230px] truncate rounded-md border border-[#deded9] bg-white px-2 py-0.5 text-xs text-slate-600" :title="employee.group">
                         {{ employee.group }}
                       </span>
@@ -640,10 +668,13 @@ function markTmsCustomerProcessed(customerId: string) {
                   </td>
                   <td class="px-4 py-4 align-middle">
                     <div class="flex flex-wrap items-center gap-2">
-                      <button type="button" class="rounded-md border border-[#deded9] px-2 py-1 text-xs hover:bg-white" @click.stop="openEditEmployeeModal(employee)">
+                      <button v-if="employee.wechatSource" type="button" class="rounded-md border border-[#deded9] px-2 py-1 text-xs hover:bg-white focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-slate-900" :aria-label="`查看绑定：${employee.wechatSource.groupName}`" @click.stop="viewWechatEmployee(employee)">
+                        查看绑定
+                      </button>
+                      <button v-else type="button" class="rounded-md border border-[#deded9] px-2 py-1 text-xs hover:bg-white" @click.stop="openEditEmployeeModal(employee)">
                         编辑
                       </button>
-                      <button type="button" class="rounded-md border border-[#deded9] px-2 py-1 text-xs hover:bg-white" @click.stop="openValidationModal(employee)">
+                      <button v-if="!employee.wechatSource" type="button" class="rounded-md border border-[#deded9] px-2 py-1 text-xs hover:bg-white" @click.stop="openValidationModal(employee)">
                         验证
                       </button>
                       <label class="cursor-pointer rounded-md bg-slate-900 px-2 py-1 text-xs font-medium text-white hover:bg-slate-800" @click.stop>
@@ -673,7 +704,14 @@ function markTmsCustomerProcessed(customerId: string) {
               <span class="truncate font-mono text-slate-700">{{ selectedEmployee.skillFileName }}</span>
             </div>
           </div>
-          <pre class="min-h-0 flex-1 overflow-auto whitespace-pre-wrap bg-[#fbfbfa] p-4 text-xs leading-5 text-slate-700">{{ selectedEmployee.skillContent }}</pre>
+          <div v-if="selectedEmployee.wechatSource" class="min-h-0 flex-1 overflow-auto bg-[#fbfbfa] p-4">
+            <WechatEmployeeDetails :source="selectedEmployee.wechatSource" />
+            <details class="mt-5 border-t border-[#e2e2dc] pt-4 text-xs text-slate-600">
+              <summary class="cursor-pointer font-medium">查看识别 Skill</summary>
+              <pre class="mt-3 whitespace-pre-wrap break-words text-xs leading-5 text-slate-700">{{ selectedEmployee.skillContent }}</pre>
+            </details>
+          </div>
+          <pre v-else class="min-h-0 flex-1 overflow-auto whitespace-pre-wrap bg-[#fbfbfa] p-4 text-xs leading-5 text-slate-700">{{ selectedEmployee.skillContent }}</pre>
         </aside>
       </section>
 
@@ -927,6 +965,11 @@ function markTmsCustomerProcessed(customerId: string) {
         </div>
         <pre class="overflow-auto whitespace-pre-wrap rounded-md bg-[#f8f9fa] p-4 text-xs leading-6 text-slate-700">{{ previewingSkill.content }}</pre>
         <template #footer><div class="dialog-actions"><button type="button" class="dialog-button" @click="closeSkillPreviewModal">关闭</button><button type="button" class="dialog-button dialog-primary" @click="downloadTextFile(previewingSkill.fileName, previewingSkill.content)"><Icon :svg="strokeIconPaths.download" :size="15" />下载</button></div></template>
+    </AppDialog>
+
+    <AppDialog v-if="viewingWechatEmployee?.wechatSource" v-model="isWechatEmployeeModalOpen" title="群消息录单员" width="620px">
+      <WechatEmployeeDetails :source="viewingWechatEmployee.wechatSource" />
+      <template #footer><div class="dialog-actions"><button type="button" class="dialog-button" @click="isWechatEmployeeModalOpen = false">关闭</button></div></template>
     </AppDialog>
 
     <AppDialog v-if="validatingEmployee" :model-value="isValidationModalOpen" title="验证数据员工" width="760px" @update:model-value="closeValidationModal">

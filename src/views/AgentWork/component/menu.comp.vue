@@ -27,7 +27,7 @@ const dismissedConversationCaseIds = ref<string[]>([]);
 const conversationTitleInputRef = ref<HTMLInputElement | HTMLInputElement[] | null>(null);
 
 const currentUserName = computed(
-  () => localStorage.getItem('iovagent_login_user') || import.meta.env.VITE_APP_DEFAULT_LOGIN_USERNAME || '演示用户',
+  () => localStorage.getItem('iovagent_login_user') || import.meta.env.VITE_APP_DEFAULT_LOGIN_USERNAME || '物流运营员',
 );
 
 const publicNavs: { icon: string; id: PageId; label: string }[] = [

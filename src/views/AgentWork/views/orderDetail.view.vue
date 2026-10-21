@@ -2,20 +2,66 @@
 import type { TimelineEvent } from '../interface';
 
 import { Icon } from '@packages/icon';
-import { nextTick, onBeforeUnmount, onMounted, ref } from 'vue';
+import { ElMessage, ElSwitch } from 'element-plus';
+import { nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 
 import { agentWorkData } from '@/pinia/agentWork';
 import { convertGpsCoordinates, loadAMap, searchDrivingRoute, type AMapCoordinate } from '@/utils/amap';
 
 import { strokeIconPaths } from '../strokeIconPaths';
 import { badgeToneClass } from '../utils';
+import { evidenceEnterpriseName } from '../waybillEvidence';
+import { captureTransportMap, mountTransportMapWatermark } from '../transportMapWatermark';
 
 const store = agentWorkData();
 const mapRef = ref<HTMLDivElement | null>(null);
 const routeDistance = ref('--');
 const routeDuration = ref('--');
+const watermarkEnabled = ref(false);
+const capturing = ref(false);
+const mapReady = ref(false);
 
 let mapInstance: AMap.Map | null = null;
+let watermark: ReturnType<typeof mountTransportMapWatermark> | undefined;
+let routeOverlay: AMap.Polyline | undefined;
+let markerCoordinates: AMapCoordinate[] = [];
+let disposed = false;
+const captureController = new AbortController();
+
+function syncWatermark() {
+  watermark?.destroy();
+  watermark = undefined;
+  if (!mapInstance || !mapReady.value) return;
+  if (watermarkEnabled.value) {
+    const order = store.currentDetailOrder;
+    watermark = mountTransportMapWatermark(mapInstance, {
+      enterprise: evidenceEnterpriseName(), plate: order.plate, order: order.id,
+      loading: { poi: mapPoints[0]!.name.replace('装货地 · ', ''), coordinate: markerCoordinates[0], time: order.startTime },
+      unloading: { poi: mapPoints[mapPoints.length - 1]!.name.replace('卸货地 · ', ''), coordinate: markerCoordinates[mapPoints.length - 1], time: '待卸货' },
+      distance: routeDistance.value, period: `${order.startTime} 至今`,
+    });
+  }
+  if (routeOverlay) mapInstance.setFitView([routeOverlay], true, watermark?.padding() ?? [34, 34, 34, 34]);
+}
+
+watch(watermarkEnabled, syncWatermark);
+
+async function downloadScreenshot() {
+  if (!mapInstance || !mapReady.value || capturing.value) return;
+  capturing.value = true;
+  try {
+    const bytes = await captureTransportMap(mapInstance, captureController.signal);
+    if (disposed) return;
+    const url = URL.createObjectURL(new Blob([new Uint8Array(bytes).buffer], { type: 'image/jpeg' }));
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `${store.currentDetailOrder.id}_${store.currentDetailOrder.plate}_监控运输轨迹${watermarkEnabled.value ? '_水印' : ''}.jpg`;
+    link.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  } catch (error) {
+    if (!disposed) ElMessage.error((error as Error).message);
+  } finally { capturing.value = false; }
+}
 
 type GpsCoordinate = [number, number];
 
@@ -153,6 +199,7 @@ function drawRoute(amap: typeof AMap, route: AMapCoordinate[], riskPoints: AMapC
   if (!mapInstance) return;
 
   const routeShadow = new amap.Polyline({ path: route, strokeColor: '#ffffff', strokeOpacity: 0.9, strokeWeight: 9 });
+  routeOverlay = routeShadow;
   const routeLine = new amap.Polyline({ path: route, strokeColor: '#0f172a', strokeOpacity: 0.9, strokeWeight: 5 });
   mapInstance.add([routeShadow, routeLine]);
 
@@ -214,26 +261,32 @@ async function initMap() {
     const convertedFallback = await convertGpsCoordinates(amap, fallbackRoute.map(([lat, lng]) => [lng, lat]));
     const convertedMarkers = await convertGpsCoordinates(amap, mapPoints.map(({ coord: [lat, lng] }) => [lng, lat]));
     const riskPoints = await convertGpsCoordinates(amap, [[112.9388, 28.2282], [113.8546, 27.6229]]);
+    if (disposed || !mapRef.value) return;
+    markerCoordinates = convertedMarkers;
 
     mapInstance = new amap.Map(mapRef.value, {
       center: [117.15, 27.35],
       mapStyle: 'amap://styles/whitesmoke',
       viewMode: '2D',
       zoom: 6,
+      WebGLParams: { preserveDrawingBuffer: true },
     });
     mapInstance.addControl(new amap.ToolBar({ position: 'RB' }));
 
     try {
       const roadRoute = await searchDrivingRoute(amap, convertedWaypoints);
+      if (disposed) return;
       routeDistance.value = `${Math.round(roadRoute.distance / 1000).toLocaleString()} km`;
       routeDuration.value = formatDuration(roadRoute.duration);
       drawRoute(amap, roadRoute.path, riskPoints);
+      mapReady.value = true;
     } catch {
       routeDistance.value = '约 1,650 km';
       routeDuration.value = '约 22h';
       drawRoute(amap, convertedFallback, riskPoints);
     }
     drawMarkers(amap, convertedMarkers);
+    syncWatermark();
   } catch {
     routeDistance.value = '地图加载失败';
     routeDuration.value = '请稍后重试';
@@ -246,6 +299,9 @@ onMounted(() => {
 });
 
 onBeforeUnmount(() => {
+  disposed = true;
+  captureController.abort();
+  watermark?.destroy();
   mapInstance?.destroy();
   mapInstance = null;
 });
@@ -262,6 +318,10 @@ onBeforeUnmount(() => {
           <div>
             <h1 class="text-sm font-semibold leading-5 text-slate-950">运单详情与地图轨迹</h1>
           </div>
+        </div>
+        <div class="detail-capture-actions">
+          <div class="detail-watermark-toggle"><span>水印</span><ElSwitch v-model="watermarkEnabled" aria-label="显示地图水印" :disabled="capturing" /></div>
+          <button type="button" class="detail-capture-button" :disabled="!mapReady || capturing" :title="mapReady ? '下载当前地图截图' : '地图轨迹加载后可下载'" @click="downloadScreenshot"><Icon :svg="strokeIconPaths.download" :size="14" />{{ capturing ? '生成中…' : '下载截图' }}</button>
         </div>
       </div>
       <div class="grid grid-cols-6 gap-3 p-4 text-sm">
@@ -285,8 +345,8 @@ onBeforeUnmount(() => {
           </div>
         </div>
         <div class="relative min-h-[590px] flex-1 overflow-hidden">
-          <div ref="mapRef" class="h-full min-h-[590px] w-full"></div>
-          <div class="pointer-events-none absolute top-4 left-4 z-[1000] rounded-md border border-[#deded9] bg-white/95 px-3 py-2 text-xs text-slate-700">
+          <div ref="mapRef" class="h-full min-h-[590px] w-full" style="color:#253440;background-color:#eef3f6;font-family:sans-serif"></div>
+          <div v-if="!watermarkEnabled || !mapReady" class="pointer-events-none absolute top-4 left-4 z-[1000] rounded-md border border-[#deded9] bg-white/95 px-3 py-2 text-xs text-slate-700">
             <div class="font-semibold text-slate-900">上海一厂 → 广州仓</div>
             <div class="mt-1 flex gap-3 text-slate-500">
               <span>{{ routeDistance }}</span>
@@ -366,6 +426,13 @@ onBeforeUnmount(() => {
 </template>
 
 <style lang="scss" scoped>
+.detail-capture-actions { display: flex; align-items: center; gap: 16px; flex-shrink: 0; }
+.detail-watermark-toggle { display: flex; align-items: center; gap: 8px; font-size: 12px; color: #465663; }
+.detail-capture-button { display: inline-flex; align-items: center; gap: 6px; height: 30px; padding: 0 10px; border: 1px solid #deded9; border-radius: 6px; background: #fff; color: #334155; font-size: 12px; }
+.detail-capture-button:hover:not(:disabled) { background: #f7f7f5; }
+.detail-capture-button:focus-visible { outline: 2px solid #4f8af0; outline-offset: 2px; }
+.detail-capture-button:disabled { opacity: .5; cursor: not-allowed; }
+
 :deep(.amap-container) {
   background: #e2e8f0;
   color: #0f172a;

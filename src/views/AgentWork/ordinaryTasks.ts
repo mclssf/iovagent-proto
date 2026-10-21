@@ -146,7 +146,7 @@ export function makeOrdinaryRun(task: DailyTask): TaskRun {
     status: 'ready', prompt: task.prompt, toolJobId: jobId, activeStep: 0, nextStepAt: now,
     result: '', executionMode: skill ? 'skill' : 'prompt', skills: skills.map(item => ({ ...item, status: 'loading' })),
     progress: rows ? { total: rows, processed: 0, success: 0, failed: 0 } : undefined,
-    steps: task.scenario === 'waybill-evidence' ? waybillEvidenceSteps(rows, task.enterpriseName ?? '演示企业') : [
+    steps: task.scenario === 'waybill-evidence' ? waybillEvidenceSteps(rows, task.enterpriseName ?? '当前企业') : [
       { title: '解析任务', text: `已保存原始需求${files.length ? `及附件 ${files.map(file => file.name).join('、')}` : ''}，识别一次性任务目标。` },
       { title: '校验执行输入', text: `${rows ? `读取已保存的 ${rows} 条记录，保留原始行号并校验所需字段。` : '校验提示词中的查询对象和输出要求。'}${task.agentDecision ? `沿用工作台 Agent 的处理方案：${task.agentDecision.historicalIndexes.length ? `${task.agentDecision.historicalIndexes.length} 条超过 180 天的运单调用历史业务质量分析接口，其他记录使用常规能力。` : '超过 100 条运单，按普通批量任务处理，不调用历史业务质量分析接口。'}` : ''}` },
       { title: skill ? '加载执行能力' : '规划提示词执行', text: skill ? `${skill.name} v${skill.version}：${skill.description}${archive ? '按已确定的处理方案调用历史业务质量分析接口（演示）。' : ''}${tool && !files.length ? `查询日期 ${tool.date}。` : ''}` : '依据原始需求整理可用信息，生成一次性的处理结果。', tool: archive ? '历史业务质量分析接口' : skill?.name },
