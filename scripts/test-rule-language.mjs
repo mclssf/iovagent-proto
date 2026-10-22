@@ -21,6 +21,6 @@ try{
  p=parseRuleRequest('重复提醒间隔改为20分钟',paused,'p1-parking');
  assert.equal(p.config.parking.enabled,false);assert.equal(p.config.parking.thresholdMinutes,paused.parking.thresholdMinutes);assert.equal(p.config.parking.repeatMinutes,20);assert.deepEqual(p.config.offline,paused.offline);assert.deepEqual(p.config.selectedSkills,paused.selectedSkills);
  p=parseRuleRequest('晚发容许时间改为45分钟',defaultP1Config,'p1-late');assert.equal(p.config.lateDeparture.graceMinutes,45);assert.deepEqual(p.config.lateArrival,defaultP1Config.lateArrival);
- const {taskParameters}=await server.ssrLoadModule('/src/views/Phase1/ruleLanguage.ts');assert.equal(taskParameters(paused,'p1-parking').length,4);assert.equal(taskParameters(paused,'p1-status').length,6);assert.equal(taskParameters(paused,'p1-late').length,6);assert.deepEqual(taskParameters(paused,'p1-late').slice(0,2).map(p=>p.key),['missing-origin','missing-destination']);
+ const {taskParameters}=await server.ssrLoadModule('/src/views/Phase1/ruleLanguage.ts');assert.equal(taskParameters(paused,'p1-parking').length,6);assert.equal(taskParameters(paused,'p1-status').length,8);assert.equal(taskParameters(paused,'p1-late').length,6);assert.deepEqual(taskParameters(paused,'p1-late').slice(0,2).map(p=>p.key),['missing-origin','missing-destination']);
  console.log('PASS: proposed changes, no base mutation, threshold/reminder separation, units, multiple late limits, weather selection, project name, unsupported/invalid input, scoped editing and fence/state selection');
 }finally{await server.close();}

@@ -28,9 +28,9 @@ export function handleRouter(_routerList: any) {
         component: () => import('@/views/AgentWork/index.view.vue'),
         redirect: { name: 'agent-work-agent' },
         children: [
-          {path:'events',name:'agent-work-events',component:()=>import('@/views/Phase1/Events.vue')},
+          {path:'events',redirect:'/index/orders'},
           {path:'projects/config',redirect:to=>({path:'/index/projects/detail',query:{...to.query,tab:'skills'}})},
-          {path:'projects/detail',name:'agent-work-phase-config',component:()=>import('@/views/Phase1/ProjectConfig.vue')},
+          {path:'projects/detail',redirect:to=>({path:'/index/projects/new',query:{projectId:to.query.projectId}})},
           {
             path: 'agent',
             name: 'agent-work-agent',
@@ -49,19 +49,19 @@ export function handleRouter(_routerList: any) {
           {
             path: 'orders',
             name: 'agent-work-orders',
-            component: () => import('@/views/Phase1/OrderWorkspace.vue'),
+            component: () => import('@/views/AgentWork/views/orderList.view.vue'),
             props: { listMode: 'orders' as const },
           },
           {
             path: 'risk',
             name: 'agent-work-risk',
-            component: () => import('@/views/Phase1/OrderWorkspace.vue'),
+            component: () => import('@/views/AgentWork/views/orderList.view.vue'),
             props: { listMode: 'risk' as const },
           },
           {
             path: 'detail',
             name: 'agent-work-detail',
-            component: () => import('@/views/Phase1/OrderWorkspace.vue'),
+            component: () => import('@/views/Phase1/WaybillDetail.vue'),
           },
           {
             path: 'cargo-sources',

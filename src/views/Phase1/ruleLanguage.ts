@@ -6,7 +6,7 @@ export function taskRule(c:P1Config,id:string):string {
  if(id==='p1-deviation')return `${c.deviation.enabled?'开启':'关闭'}线路偏离监听；偏离计划线路超过${c.deviation.radiusMeters}米生成异常，同一异常每${c.deviation.repeatMinutes}分钟提醒一次。`;
  if(id==='p1-weather')return `${c.weather.enabled?'开启':'关闭'}恶劣天气监听；有效天气消息直接生成异常，预计次日0点生效，运单结束或监听满72小时停止。`;
  if(id==='p1-late')return `晚发${c.lateDeparture.enabled?'开启':'关闭'}，允许延迟${c.lateDeparture.graceMinutes}分钟；晚到${c.lateArrival.enabled?'开启':'关闭'}，允许延迟${c.lateArrival.graceMinutes}分钟；未经过起始地异常${c.missingPass?.origin?'开启':'关闭'}，未经过目的地异常${c.missingPass?.destination?'开启':'关闭'}。`;
- return `监听${c.fenceTargets.map(x=>x==='origin'?'起始地':'目的地').join('、')||'未选择的'}围栏；自动更新${c.statusUpdates.map(x=>stateNames[x]).join('、')||'未选择的状态'}。未勾选的状态不自动更新，围栏事实仍保留。`;
+ return `监听${c.fenceTargets.map(x=>x==='origin'?'起始地':'目的地').join('、')||'未选择的'}围栏，起始地半径${c.fenceRadiusMeters?.origin??5000}米、目的地半径${c.fenceRadiusMeters?.destination??5000}米；自动更新${c.statusUpdates.map(x=>stateNames[x]).join('、')||'未选择的状态'}。未勾选的状态不自动更新，围栏事实仍保留。`;
 }
 export interface RuleProposal {config:P1Config; changes:string[]; unresolved:string[]; name?:string}
 export function parseRuleRequest(text:string,base:P1Config,scope?:P1SkillId):RuleProposal {
@@ -44,6 +44,8 @@ export function parseRuleRequest(text:string,base:P1Config,scope?:P1SkillId):Rul
    for(const [word,key] of [['晚发','lateDeparture'],['晚到','lateArrival']] as const){if(!clause.includes(word))continue;const match=clause.match(new RegExp(word+'[^0-9]*([0-9]+(?:\\.[0-9]+)?)\\s*(分钟|小时)'));const n=match?{value:Number(match[1])*(match[2]==='小时'?60:1)}:undefined;if(n){config[key].graceMinutes=n.value;handled=true;}if(on||off){config[key].enabled=!off;handled=true;}if(n&&!scope&&!off)config[key].enabled=true;}
    if(handled&&!scope)add('p1-late');
   }else{
+   const distances=numbers.filter(n=>['米','公里','千米'].includes(n.unit));
+   if(distances.length){const targets=(['origin','destination'] as const).filter(t=>clause.includes(t==='origin'?'起始地':'目的地'));if(!targets.length&&/围栏/.test(clause))targets.push('origin','destination');if(distances.length===1&&targets.length){config.fenceRadiusMeters??={origin:5000,destination:5000};for(const t of targets)config.fenceRadiusMeters[t]=distances[0].value;handled=true;}else{unresolved.push(clause+'：请分别说明起始地和目的地的半径');continue;}}
    for(const [word,target] of [['起始地','origin'],['目的地','destination']] as const){if(clause.includes(word)&&/围栏/.test(clause)&&(on||off)){config.fenceTargets=off?config.fenceTargets.filter(x=>x!==target):[...new Set([...config.fenceTargets,target])];handled=true;}}
    for(const [state,label] of Object.entries(stateNames)){if(state==='pending')continue;if(clause.includes(label)&&/更新/.test(clause)){const value=state as P1Config['statusUpdates'][number];config.statusUpdates=off?config.statusUpdates.filter(x=>x!==value):[...new Set([...config.statusUpdates,value])];handled=true;}}
    if(handled&&!scope)add('p1-status');
@@ -81,5 +83,7 @@ export function taskParameters(c:P1Config,id:string):{key:string;label:string;va
  return [
   {key:'origin',label:'起始地围栏监听',value:switchText(c.fenceTargets.includes('origin')),note:'采集进入和离开起始地的事件。'},
   {key:'destination',label:'目的地围栏监听',value:switchText(c.fenceTargets.includes('destination')),note:'采集进入和离开目的地的事件。'},
+  {key:'origin-radius',label:'起始地围栏半径',value:`${c.fenceRadiusMeters?.origin??5000}米`,note:'以起始地坐标为圆心，默认5公里。'},
+  {key:'destination-radius',label:'目的地围栏半径',value:`${c.fenceRadiusMeters?.destination??5000}米`,note:'以目的地坐标为圆心，默认5公里。'},
   ...(['loading','in_transit','arrived','completed'] as const).map((state,i)=>({key:state,label:`自动更新为${stateNames[state]}`,value:switchText(c.statusUpdates.includes(state)),note:['进入起始地时更新。','离开起始地时更新。','进入目的地时更新。','离开目的地时更新。'][i]}))];
 }

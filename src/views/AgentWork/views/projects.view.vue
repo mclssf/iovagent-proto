@@ -68,10 +68,9 @@ const { goPage } = useAgentWorkNav();
                   <button type="button" class="rounded-md border border-[#deded9] px-3 py-1.5 text-xs hover:bg-[#f7f7f5]" @click="store.refreshProject(p)">
                     <Icon :svg="strokeIconPaths.refresh" :size="13" svg-class="mr-1 inline" />刷新
                   </button>
-                  <button type="button" class="rounded-md border border-[#deded9] px-3 py-1.5 text-xs hover:bg-[#f7f7f5]" @click="phaseRouter.push({path:'/index/projects/detail',query:{projectId:p.id}})">
+                  <button type="button" class="rounded-md border border-[#deded9] px-3 py-1.5 text-xs hover:bg-[#f7f7f5]" @click="phaseRouter.push({path:'/index/projects/new',query:{projectId:p.id}})">
                     编辑
                   </button>
-<button type="button" class="rounded-md border border-[#deded9] px-3 py-1.5 text-xs" @click="phaseRouter.push({path:'/index/projects/detail',query:{projectId:p.id,tab:'config'}})">监听配置</button>
                   <button type="button" class="rounded-md border border-red-200 px-3 py-1.5 text-xs text-red-600 hover:bg-red-50" @click="store.removeProjectAt(i)">
                     删除
                   </button>

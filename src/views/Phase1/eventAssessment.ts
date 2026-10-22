@@ -1,7 +1,7 @@
 import type {P1Config,P1Event,P1AssessmentConfig} from '@/views/AgentWork/interface';
 export const defaultParkingFilter='结合事件位置、停车时长、前后轨迹及周边POI判断。车辆确实位于加油站、服务区、合法停车场或维修场所内，且有加油、休息、维修等正常停靠证据，停车时长与用途相符时，判为合理，不生成异常。仅附近存在相关POI不能作为过滤依据；高速主线、应急车道、出入口或危险路段停车、位置不匹配、停留明显过长，以及证据不足时，不自动过滤，保留异常并提示人工复核。';
 export const defaultOfflineFilter='结合最后有效位置、定位时间、离线时长、行驶方向、前后轨迹及周边POI判断。仅在有证据表明车辆进入隧道、地下通道等信号遮挡区域，且失联区间与通行过程相符、恢复后的轨迹能正常衔接时，判为合理，不生成异常。仅靠近隧道、加油站或服务区不足以判为合理；未恢复、离线明显超出通行需要、轨迹无法衔接或证据不足时，保留异常并提示人工复核。不得据此断定司机断电或轨迹造假。';
-export function defaultAssessments():P1Config['assessments']{return {parking:{enabled:false,radiusMeters:500,filterRule:''},offline:{enabled:false,radiusMeters:500,filterRule:''}};}
+export function defaultAssessments():P1Config['assessments']{return {parking:{enabled:true,radiusMeters:500,filterRule:''},offline:{enabled:true,radiusMeters:500,filterRule:''}};}
 export function assessmentConfig(c:P1Config,type:'parking'|'offline'):P1AssessmentConfig{return c.assessments?.[type]||defaultAssessments()[type];}
 export function effectiveFilter(c:P1AssessmentConfig,type:'parking'|'offline'){return c.filterRule.trim()||(type==='parking'?defaultParkingFilter:defaultOfflineFilter);}
 export function simulateAssessment(event:P1Event,c:P1AssessmentConfig){

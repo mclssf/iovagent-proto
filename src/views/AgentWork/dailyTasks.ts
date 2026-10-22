@@ -167,7 +167,7 @@ export const taskTypeLabels = { once: '普通任务', event: '条件触发', sch
 export const taskRunLabels: Record<TaskRun['status'], string> = { running: '执行中', waiting: '待确认', complete: '已完成', cancelled: '已取消' };
 
 export type DailyTaskStatus = 'complete' | 'running' | 'paused';
-export const taskStatusLabels: Record<DailyTaskStatus, string> = { complete: '已完成', running: '执行中', paused: '已暂停' };
+export const taskStatusLabels: Record<DailyTaskStatus, string> = { complete: '已完成', running: '执行中', paused: '已停止' };
 
 export function hasTaskResult(run: TaskRun) {
   return run.status !== 'running' && Boolean(run.result.trim() || run.files?.length);

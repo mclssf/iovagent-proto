@@ -1,19 +1,6 @@
 <script lang="ts" setup>
 import {usePhase1} from '@/pinia/phase1';
-import RuleAssistant from '@/views/Phase1/RuleAssistant.vue';
-import type {RuleProposal} from '@/views/Phase1/ruleLanguage';
-import MonitorTaskDialog from '@/views/Phase1/MonitorTaskDialog.vue';
-import ConfigEditor from '@/views/Phase1/ConfigEditor.vue';
 import {phaseSkills} from '@/views/Phase1/catalog';
-import type {P1SkillId} from '../interface';
-const props=defineProps<{embedded?:boolean}>();
-const phaseConfigEditor=ref<InstanceType<typeof ConfigEditor>>();
-const configuringSkill=ref<P1SkillId>();
-const selectedPhaseSkillIds=computed(()=>selectedLogisticsSkillIds.value.filter(id=>phaseSkills.some(s=>s.id===id)) as P1SkillId[]);
-const skillConfigDraft=ref<import('../interface').P1Config>();
-function openSkillConfig(id:P1SkillId){skillConfigDraft.value=phaseConfigEditor.value?.getDraft();configuringSkill.value=id;}
-function applySkillConfig(c:import('../interface').P1Config){phaseConfigEditor.value?.applyDraft(c);selectedLogisticsSkillIds.value=[...selectedLogisticsSkillIds.value.filter(id=>!phaseSkills.some(t=>t.id===id)),...c.selectedSkills];}
-
 import { migrateCapacitySkillIds } from '@/pinia/capacitySkills';
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
@@ -57,7 +44,7 @@ const { goPage } = useAgentWorkNav();
 const route = useRoute();
 const router = useRouter();
 const maxProjectNameLength = 20;
-const defaultLogisticsSkillIds = phaseSkills.filter(s=>s.id!=='p1-weather').map(s=>s.id);
+const defaultLogisticsSkillIds = phaseSkills.map(s=>s.id);
 const projectName = ref('');
 const activeTab = ref<SkillTab>('all');
 const selectedDataSkillIds = ref<string[]>([]);
@@ -422,39 +409,15 @@ function skillAvatarClass(skill: ProjectSkill) {
   return 'bg-[#eef2f7] text-slate-700';
 }
 
-function toggleSkill(skill: ProjectSkill) {
-  if (skill.id === mailboxSkill.id) return;
-  if (isSkillConnecting(skill) || requiredMonitorSkillIds.includes(skill.id)) return;
-  if (skill.type === 'data') {
-    if (selectedDataSkillIds.value.includes(skill.id)) {
-      selectedDataSkillIds.value = selectedDataSkillIds.value.filter((id) => id !== skill.id);
-      return;
-    }
-    if (skill.usage === '需登录' && !authorizedSkillIds.value.includes(skill.id)) {
-      pendingLoginSkill.value = skill;
-      resetLoginAgentState();
-      loginForm.systemAddress = '';
-      loginForm.username = '';
-      loginForm.password = '';
-      return;
-    }
-    selectedDataSkillIds.value = [...selectedDataSkillIds.value, skill.id];
-    return;
+function connectDataSkill(skill: ProjectSkill) {
+  if (skill.type !== 'data' || isSkillConnecting(skill) || authorizedSkillIds.value.includes(skill.id)) return;
+  if (skill.usage === '需登录') {
+    pendingLoginSkill.value = skill;
+    resetLoginAgentState();
+    loginForm.systemAddress = '';
+    loginForm.username = '';
+    loginForm.password = '';
   }
-
-  const selectedSkillIds =
-    skill.type === 'logistics'
-      ? selectedLogisticsSkillIds
-      : skill.type === 'operations'
-        ? selectedOperationsSkillIds
-        : skill.type === 'analysis'
-          ? selectedAnalysisSkillIds
-          : selectedCapacitySkillIds;
-  if (selectedSkillIds.value.includes(skill.id)) {
-    selectedSkillIds.value = selectedSkillIds.value.filter((id) => id !== skill.id);
-    return;
-  }
-  selectedSkillIds.value = [...selectedSkillIds.value, skill.id];
 }
 
 function clearLoginAgentTimers() {
@@ -617,7 +580,6 @@ function viewMailboxTask() {
   goPage('dailyTasks', { projectId: project.id, taskId: `email-order-${project.id}` });
 }
 
-function applyProjectProposal(p:RuleProposal){if(p.name)projectName.value=p.name;selectedLogisticsSkillIds.value=[...selectedLogisticsSkillIds.value.filter(id=>!phaseSkills.some(t=>t.id===id)),...p.config.selectedSkills];phaseConfigEditor.value?.applyDraft(p.config);}
 function goNext() {
   const cleanName = projectName.value.trim();
   if (!cleanName) {
@@ -628,7 +590,6 @@ function goNext() {
     ElMessage.warning('请选择至少一项项目技能');
     return;
   }
-  if(!phaseConfigEditor.value?.validate()) {ElMessage.warning('请检查一期配置参数');return;}
   const skillNames = selectedSkills.value.map((skill) => skill.name);
   const skillIds = selectedSkills.value.map((skill) => skill.id);
   let phaseProjectId=editingProject.value?.id||'';
@@ -637,10 +598,8 @@ function goNext() {
   } else {
     phaseProjectId=store.addSkillProject(cleanName, skillNames, skillIds, mailboxDraft.value ?? undefined);
   }
-  if(!phaseConfigEditor.value?.commit(phaseProjectId)){ElMessage.error(usePhase1().error||'技能配置未保存，请重试');return;}
-  const finalProject=store.projects.find(p=>p.id===phaseProjectId);if(finalProject)finalProject.skillIds=[...(finalProject.skillIds||[]).filter(id=>!phaseSkills.some(s=>s.id===id)),...usePhase1().config(phaseProjectId).selectedSkills];
-  if(!props.embedded)goPage('projects');
-  else ElMessage.success('项目内容已保存');
+  if(!editingProject.value){const c=usePhase1().config(phaseProjectId);c.selectedSkills=phaseSkills.map(t=>t.id);usePhase1().saveConfig(phaseProjectId,c);}
+  goPage('projects');
 }
 
 onMounted(() => {
@@ -666,7 +625,6 @@ onBeforeUnmount(() => {
       </button>
     </div>
 
-    <details v-if="!embedded" class="shrink-0 max-h-[38vh] overflow-auto px-4 border-b border-[#e2e2dc]" open><summary class="py-2 text-sm font-medium cursor-pointer">用自然语言创建或调整项目</summary><RuleAssistant :config="phaseConfigEditor?.getDraft() || usePhase1().config(editingProject?.id||'')" @confirm="applyProjectProposal"/></details>
     <div class="shrink-0 border-b border-[#e2e2dc] px-4 py-3">
       <label class="mb-1.5 block text-xs font-medium text-slate-600" for="project-name">项目名称</label>
       <div class="flex items-center rounded-md border border-[#deded9] bg-[#fbfbfa] px-3">
@@ -709,7 +667,7 @@ onBeforeUnmount(() => {
           <h2 class="text-lg font-semibold leading-6 text-slate-950">数字人技能</h2>
           <span class="text-sm font-semibold leading-5 text-slate-400">技能库</span>
         </div>
-        <div class="shrink-0 rounded-md bg-white px-2.5 py-1 text-xs font-medium text-slate-600 shadow-sm">已选 {{ selectedSkills.length }} 项</div>
+        <div class="shrink-0 rounded-md bg-white px-2.5 py-1 text-xs font-medium text-slate-600 shadow-sm">项目技能</div>
       </div>
 
       <div class="flex shrink-0 items-center px-5 pt-3">
@@ -746,7 +704,7 @@ onBeforeUnmount(() => {
               <span v-if="mailboxDraft" class="shrink-0 rounded-md bg-emerald-50 px-2 py-1 text-xs font-medium text-emerald-700">已绑定</span>
               <span v-else class="shrink-0 rounded-md bg-[#f1f1ef] px-2 py-1 text-xs font-medium text-slate-600">未绑定</span>
             </div>
-            <p class="mt-4 text-xs leading-6 text-slate-600">{{ skill.description }}</p>
+            <p class="mt-4 text-xs leading-6 text-slate-600">{{ skill.description }}</p><button v-if="skill.type==='data' && skill.usage==='需登录'" type="button" class="mt-3 self-start rounded-md border border-[#deded9] px-3 py-1.5 text-xs" :disabled="isSkillConnecting(skill)||authorizedSkillIds.includes(skill.id)" @click="connectDataSkill(skill)">{{authorizedSkillIds.includes(skill.id)?'已连接':'连接系统'}}</button>
             <p class="mt-2 break-all text-sm font-medium text-slate-900">{{ mailboxDraft?.address ?? emailDemoMailbox }}</p>
             <p class="mt-1 text-xs leading-5 text-slate-500">演示邮箱 · 模拟收件与回复</p>
             <div class="mt-auto flex items-center justify-between gap-3 pt-3">
@@ -757,19 +715,15 @@ onBeforeUnmount(() => {
           </article>
           <div
             v-else
-            role="button" tabindex="0"
-            @keydown.enter.self="toggleSkill(skill)" @keydown.space.prevent.self="toggleSkill(skill)"
+            role="group"
             class="group flex min-h-[172px] flex-col rounded-lg border bg-white p-4 text-left shadow-sm transition"
             :class="
               isSkillConnecting(skill)
                 ? 'cursor-wait border-[#deded9] bg-[#fafaf8] opacity-80 shadow-none'
-                : isSkillSelected(skill)
-                ? 'border-slate-900 shadow-[0_0_0_1px_rgba(15,23,42,0.85),0_10px_22px_rgba(15,23,42,0.08)]'
-                : 'border-transparent hover:border-[#deded9] hover:shadow-md'
+                : 'border-[#deded9]'
             "
-            :disabled="isSkillConnecting(skill) || requiredMonitorSkillIds.includes(skill.id)"
-            :aria-pressed="isSkillSelected(skill)"
-            @click="toggleSkill(skill)"
+
+
           >
             <div class="flex items-start justify-between gap-3">
               <div class="flex min-w-0 items-start gap-3">
@@ -781,13 +735,7 @@ onBeforeUnmount(() => {
                   <span class="mt-1 block truncate text-xs leading-4 text-slate-500">{{ skillTypeLabels[skill.type] }}</span>
                 </span>
               </div>
-              <span
-                v-if="!isSkillConnecting(skill)"
-                class="flex h-6 w-6 shrink-0 items-center justify-center rounded-full border"
-                :class="isSkillSelected(skill) ? 'border-slate-900 bg-slate-900 text-white' : 'border-[#deded9] text-transparent group-hover:text-slate-300'"
-              >
-                <Icon :svg="strokeIconPaths.check" :size="14" />
-              </span>
+
             </div>
 
             <p class="mt-4 line-clamp-2 flex-1 text-xs leading-6 text-slate-600">{{ skill.description }}</p>
@@ -804,13 +752,7 @@ onBeforeUnmount(() => {
               <span class="rounded-md bg-[#f1f1ef] px-2 py-1 text-xs leading-4 text-slate-600">
                 {{ skill.usage }}
               </span>
-              <span
-                class="rounded-md px-2 py-1 text-xs font-medium leading-4"
-                :class="isSkillSelected(skill) ? 'bg-slate-900 text-white' : 'bg-[#f1f1ef] text-slate-600'"
-              >
-                {{ requiredMonitorSkillIds.includes(skill.id) ? '必选 · 状态流转' : isSkillSelected(skill) ? '已选择' : '未选择' }}
-              </span>
-              <button v-if="phaseSkills.some(t=>t.id===skill.id)" type="button" class="ml-auto rounded border border-slate-300 px-3 py-1 text-xs text-slate-700" :aria-label="`配置 ${skill.name}`" @click.stop="openSkillConfig(skill.id as P1SkillId)">配置</button>
+
             </div>
           </div>
           </template>
@@ -823,10 +765,9 @@ onBeforeUnmount(() => {
         </div>
       </div>
 
-      <div hidden><ConfigEditor ref="phaseConfigEditor" :project-id="editingProject?.id" :selected-skills="selectedPhaseSkillIds" embedded/></div><MonitorTaskDialog v-if="configuringSkill" :task-id="configuringSkill" :project-id="editingProject?.id||''" :draft-config="skillConfigDraft" draft-only @saved="applySkillConfig" @close="configuringSkill=undefined"/>
       <div class="mx-5 mb-5 flex h-14 shrink-0 items-center justify-between gap-3 rounded-lg bg-white px-4 shadow-sm">
         <div class="min-w-0 truncate text-xs text-slate-500">
-          {{ selectedSkills.length ? selectedSkills.map((skill) => skill.name).join('、') : '请选择项目技能' }}
+          技能参数请在“做任务”中编辑系统任务。
         </div>
         <button
           type="button"

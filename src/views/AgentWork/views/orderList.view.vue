@@ -1,7 +1,11 @@
 <script lang="ts" setup>
 import { Icon } from '@packages/icon';
 import { storeToRefs } from 'pinia';
-import { onMounted } from 'vue';
+import { computed,ref } from 'vue';
+import {useRouter} from 'vue-router';
+import {usePhase1} from '@/pinia/phase1';
+import {eventRisk} from '@/views/Phase1/eventRisk';
+import {stateNames,dateText} from '@/views/Phase1/catalog';
 
 import { agentWorkData } from '@/pinia/agentWork';
 
@@ -15,28 +19,25 @@ const props = defineProps<{
 
 const store = agentWorkData();
 const {
-  ordersSeed,
+
   ordersRiskFilter,
   ordersStatusFilter,
   ordersKeyword,
-  ordersStartDate,
-  ordersEndDate,
   riskOrdersRisk,
   riskOrdersSource,
   riskOrdersKeyword,
 } = storeToRefs(store);
-const { goPage, openOrderDetail, createDownload } = useAgentWorkNav();
+const ordersStartDate=ref('');const ordersEndDate=ref('');
+const router=useRouter();const phase=usePhase1();const brief=ref('');
+const ordersSeed=computed(()=>phase.orders.filter(o=>o.projectId===store.currentProjectId).map(o=>{const anomalies=phase.anomalies.filter(a=>a.orderId===o.id&&a.status==='active');const low=phase.events.some(e=>e.orderId===o.id&&eventRisk(e,phase.anomalies)==='低风险');const review=anomalies.some(a=>phase.events.some(e=>e.id===a.eventId&&e.assessment));return {id:o.id,plate:o.plate,driver:o.driver,carrier:store.currentProject.name,route:`${o.origin.name} → ${o.destination.name}`,factory:o.origin.name,status:stateNames[o.state],risk:anomalies.length?'高风险':low?'低风险':'无风险',issue:anomalies.map(a=>a.kind).join('、')||(low?'停车/离线研判合理，低风险记录':'暂无未处理异常'),source:anomalies.length?(review?'智能研判':'规则预警'):low?'智能研判':o.source,startTime:dateText(o.createdAt),updated:dateText(o.createdAt),eta:dateText(o.plannedArrival)};}));
+const filtered=computed(()=>ordersSeed.value.filter(o=>{const risk=isOrders()?ordersRiskFilter.value:riskOrdersRisk.value;const keyword=isOrders()?ordersKeyword.value:riskOrdersKeyword.value;return (isOrders()||o.risk!=='无风险')&&(['全部','全部异常'].includes(risk)||o.risk===risk)&&(!isOrders()||ordersStatusFilter.value==='全部'||o.status===ordersStatusFilter.value)&&(isOrders()||riskOrdersSource.value==='全部来源'||o.source.includes(riskOrdersSource.value))&&(!ordersStartDate.value||o.startTime.slice(0,10)>=ordersStartDate.value)&&(!ordersEndDate.value||o.startTime.slice(0,10)<=ordersEndDate.value)&&Object.values(o).join(' ').includes(keyword);}));
+function openOrderDetail(o:{id:string}){router.push({path:'/index/detail',query:{orderId:o.id}});}
+function createDownload(_name:string){const quote=(v:string)=>'"'+v.replaceAll('"','""')+'"';const csv=[['运单','车牌','司机','线路','状态','风险','异常','来源','开始时间'],...filtered.value.map(o=>[o.id,o.plate,o.driver,o.route,o.status,o.risk,o.issue,o.source,o.startTime])].map(row=>row.map(quote).join(',')).join('\r\n');const url=URL.createObjectURL(new Blob(['\ufeff'+csv],{type:'text/csv;charset=utf-8'}));const a=document.createElement('a');a.href=url;a.download='运单筛选结果.csv';a.click();URL.revokeObjectURL(url);}
+
 
 const isOrders = () => props.listMode === 'orders';
 
-onMounted(() => {
-  store.ensureOrdersDateRange();
-});
-
-function generateRiskBrief() {
-  store.generateRiskBrief();
-  goPage('agent');
-}
+function generateRiskBrief(){brief.value=`当前筛选共${filtered.value.length}张异常运单，高风险${filtered.value.filter(o=>o.risk==='高风险').length}张，低风险${filtered.value.filter(o=>o.risk==='低风险').length}张。${filtered.value.map(o=>`${o.id}：${o.issue}`).join('；')}`;}
 </script>
 
 <template>
@@ -103,15 +104,15 @@ function generateRiskBrief() {
             <Icon :svg="strokeIconPaths.shield" :size="14" />
           </div>
           <div>
-            <div class="text-sm font-semibold text-orange-900">当日异常运单分析</div>
+            <div class="text-sm font-semibold text-orange-900">异常运单分析</div>
             <div class="mt-1 text-sm leading-6 text-orange-800">
-              {{ store.riskOrdersSummary }}建议优先复核非目的地物流园长停和轨迹造假高风险事件。
+              当前筛选共{{filtered.length}}张异常运单。异常类型：{{[...new Set(filtered.flatMap(o=>o.issue.split('、')))].join('、')||'暂无未处理异常'}}。
             </div>
           </div>
         </div>
       </div>
     </div>
-    <div class="flex h-0 flex-1 flex-col rounded-md border border-[#deded9] bg-white p-3">
+    <p v-if="brief" class="rounded-md border border-[#deded9] bg-white p-3 text-sm">{{brief}}</p><div class="flex h-0 flex-1 flex-col rounded-md border border-[#deded9] bg-white p-3">
       <div class="mb-4 flex flex-wrap items-end gap-3">
         <template v-if="isOrders()">
           <label class="text-xs text-slate-500">
@@ -145,9 +146,9 @@ function generateRiskBrief() {
             ><span class="mb-1 block">运单状态</span>
             <select v-model="ordersStatusFilter" class="min-h-[40px] rounded-md border border-[#deded9] bg-[#fbfbfa] px-3 py-2 text-sm text-slate-700">
               <option>全部</option>
-              <option>在途</option>
+              <option>待发车</option><option>在途</option>
               <option>装货中</option>
-              <option>已到货</option>
+              <option>已到达</option>
               <option>已完成</option>
             </select>
           </label>
@@ -191,8 +192,8 @@ function generateRiskBrief() {
             <select v-model="riskOrdersSource" class="min-h-[40px] rounded-md border border-[#deded9] bg-[#fbfbfa] px-3 py-2 text-sm text-slate-700">
               <option>全部来源</option>
               <option>规则预警</option>
-              <option>智能轨迹分析</option>
-              <option>GPS分析</option>
+              <option>智能研判</option>
+
             </select>
           </label>
           <label class="min-w-[320px] flex-1 text-xs text-slate-500"
@@ -218,7 +219,7 @@ function generateRiskBrief() {
             </tr>
           </thead>
           <tbody class="divide-y divide-[#ededea] bg-white">
-            <tr v-for="o in isOrders() ? store.ordersFiltered : store.riskOrdersFiltered" :key="o.id" class="hover:bg-[#f7f7f5]">
+            <tr v-for="o in filtered" :key="o.id" class="hover:bg-[#f7f7f5]">
               <td class="px-4 py-4 align-middle">
                 <div class="font-semibold text-slate-900">
                   {{ o.id }}
@@ -256,7 +257,7 @@ function generateRiskBrief() {
                 </button>
               </td>
             </tr>
-            <tr v-if="(isOrders() ? store.ordersFiltered : store.riskOrdersFiltered).length === 0">
+            <tr v-if="(filtered).length === 0">
               <td colspan="7" class="p-8 text-center text-slate-400">暂无符合条件的数据</td>
             </tr>
           </tbody>
