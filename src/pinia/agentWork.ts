@@ -348,7 +348,7 @@ const timelineSeed: TimelineEvent[] = [
     agentVerdict: '高风险',
     agentTone: 'red',
   },
-  { id: 5, type: 'risk', title: '轨迹造假高风险事件', time: '19:12', place: '沪昆高速附近', desc: '轨迹出现断点和速度异常，外部算法输出高风险。' },
+  { id: 5, type: 'risk', title: '轨迹造假高风险事件', time: '19:12', place: '沪昆高速附近', desc: '轨迹出现断点和速度异常，外部算法输出高风险。', agentVerdict: '高风险', agentTone: 'red' },
   { id: 6, type: 'normal', title: '到达卸货地', time: '次日 01:52', place: '广州仓', desc: '车辆进入卸货地围栏，等待卸货确认。' },
 ];
 
@@ -2101,17 +2101,6 @@ export const agentWorkData = defineStore('agentWork', {
     },
     editProject(project: Project) {
       ElMessage.info(`编辑项目：${project.name}`);
-    },
-    generateRiskBrief() {
-      this.agentMessages = [
-        ...this.agentMessages,
-        {
-          role: 'agent',
-          text: `今日异常简报：${summarizeOrders(this.riskOrdersFiltered)}建议优先处理高风险非目的地物流园长停和轨迹造假高风险事件。`,
-        },
-      ];
-      this.rightPanel = 'risk';
-      ElMessage.success('已生成异常简报');
     },
     ensureOrdersDateRange() {
       if (this.ordersStartDate && this.ordersEndDate) return;

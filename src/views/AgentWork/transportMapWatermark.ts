@@ -1,4 +1,5 @@
 import { Screenshot } from '@amap/screenshot';
+import sinoiovLogoUrl from '@/assets/imgs/sinoiov-logo.png';
 import type { AMapCoordinate } from '@/utils/amap';
 import { evidenceTime, hasEvidenceMapDetails } from './waybillEvidence';
 
@@ -20,28 +21,37 @@ function text(tag: string, value: string, css = '') {
 }
 
 // The detail page and batch screenshots use the same in-map DOM, not a second image layout.
-export function mountTransportMapWatermark(map: AMap.Map, data: TransportMapWatermarkData) {
+export function mountTransportMapWatermark(map: AMap.Map, data: TransportMapWatermarkData, options: { topInset?: number } = {}) {
   const container = map.getContainer();
   const root = document.createElement('div');
   root.dataset.transportWatermark = 'true';
   root.setAttribute('aria-label', '运输轨迹水印');
-  root.style.cssText = 'position:absolute;inset:0;z-index:500;pointer-events:none;font-family:sans-serif;color:#253440;font-size:12px;line-height:1.5;letter-spacing:0;overflow:hidden;';
+  root.style.cssText = 'position:absolute;inset:0;z-index:500;pointer-events:none;font-family:sans-serif;color:#253440;font-size:12px;line-height:1.5;letter-spacing:0;overflow:hidden;background:transparent;text-shadow:0 1px 2px #ffffff,1px 0 2px #ffffff,-1px 0 2px #ffffff;';
   const header = document.createElement('div');
-  header.style.cssText = 'position:absolute;top:16px;left:16px;right:16px;display:flex;justify-content:space-between;align-items:flex-start;gap:16px;padding:12px 14px;background:rgba(255,255,255,.96);border-radius:6px;';
+  header.dataset.watermarkPart = 'header';
+  header.style.cssText = `position:absolute;top:${options.topInset ?? 24}px;left:24px;right:112px;background:transparent;`;
   const identity = document.createElement('div');
   identity.style.cssText = 'min-width:0;overflow-wrap:anywhere;';
+  const logo = document.createElement('img');
+  logo.src = sinoiovLogoUrl;
+  logo.alt = '兴路车联';
+  logo.width = 160;
+  logo.height = 37;
+  logo.style.cssText = 'display:block;width:160px;max-width:100%;height:auto;aspect-ratio:4109/952;object-fit:contain;object-position:left;';
   identity.append(
-    text('div', '监控运输轨迹', 'font-size:16px;font-weight:600;color:#1f2933;'),
+    logo,
+    text('div', '监控运输轨迹', 'margin-top:10px;font-size:16px;font-weight:600;color:#1f2933;'),
     text('div', `车牌号 ${data.plate}  ·  运单号 ${data.order}`, 'margin-top:4px;font-weight:600;'),
     text('div', `所属企业：${data.enterprise}`, 'margin-top:3px;color:#465663;'),
   );
-  header.append(identity, text('div', '兴路车联', 'flex-shrink:0;font-size:19px;font-weight:700;color:#2563a5;'));
+  header.append(identity);
   const pattern = document.createElement('div');
   pattern.setAttribute('aria-hidden', 'true');
-  pattern.style.cssText = 'position:absolute;inset:25% 4% 25%;display:flex;flex-direction:column;justify-content:space-around;align-items:center;overflow:hidden;';
-  for (let index = 0; index < 3; index++) pattern.append(text('div', `${data.enterprise}  ·  ${data.plate}  ·  兴路车联`, 'max-width:92%;overflow-wrap:anywhere;text-align:center;transform:rotate(-20deg);font-size:20px;font-weight:600;color:rgba(36,73,106,.17);'));
+  pattern.style.cssText = 'position:absolute;inset:25% 4% 25%;display:flex;flex-direction:column;justify-content:space-around;align-items:center;overflow:hidden;text-shadow:none;';
+  for (let index = 0; index < 3; index++) pattern.append(text('div', `${data.enterprise}  ·  ${data.plate}`, 'max-width:92%;overflow-wrap:anywhere;text-align:center;transform:rotate(-20deg);font-size:20px;font-weight:600;color:rgba(36,73,106,.17);'));
   const footer = document.createElement('div');
-  footer.style.cssText = 'position:absolute;left:16px;right:16px;bottom:42px;padding:12px 14px;background:rgba(255,255,255,.96);border-radius:6px;';
+  footer.dataset.watermarkPart = 'footer';
+  footer.style.cssText = 'position:absolute;left:24px;right:68px;bottom:36px;background:transparent;';
   const endpoints = document.createElement('div');
   endpoints.style.cssText = 'display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px;';
   for (const [title, endpoint, color] of [['装货', data.loading, '#267457'], ['卸货', data.unloading, '#a44b2b']] as const) {
@@ -56,7 +66,7 @@ export function mountTransportMapWatermark(map: AMap.Map, data: TransportMapWate
     endpoints.append(block);
   }
   footer.append(endpoints,
-    text('div', `运输时间：${data.period}（北京时间）`, 'margin-top:10px;padding-top:8px;border-top:1px solid #e0e5e8;font-weight:600;overflow-wrap:anywhere;'),
+    text('div', `运输时间：${data.period}（北京时间）`, 'margin-top:10px;padding-top:4px;font-weight:600;overflow-wrap:anywhere;'),
     text('div', `道路里程 ${data.distance}  ·  生成时间 ${evidenceTime(Date.now())}`, 'margin-top:3px;color:#465663;overflow-wrap:anywhere;'),
   );
   root.append(pattern, header, footer);
@@ -70,7 +80,7 @@ export function mountTransportMapWatermark(map: AMap.Map, data: TransportMapWate
   return {
     element: root,
     // AMap uses top, bottom, left, right rather than CSS shorthand order.
-    padding: () => [header.offsetHeight + 80, footer.offsetHeight + 90, 48, 48] as [number, number, number, number],
+    padding: () => [header.offsetTop + header.offsetHeight + 48, footer.offsetHeight + 84, 48, 68] as [number, number, number, number],
     destroy() { observer.disconnect(); root.remove(); },
   };
 }

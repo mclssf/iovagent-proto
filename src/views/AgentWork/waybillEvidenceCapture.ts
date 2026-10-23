@@ -46,7 +46,7 @@ export async function createEvidenceRenderer(signal: AbortSignal): Promise<Evide
   element.setAttribute('aria-hidden', 'true'); element.dataset.evidenceCapture = 'true';
   Object.assign(element.style, { position: 'fixed', left: '-1600px', top: '0', width: '1440px', height: '960px', pointerEvents: 'none', color: '#253440', backgroundColor: '#eef3f6', fontFamily: 'Arial, sans-serif' });
   document.body.append(element);
-  const map = new amap.Map(element, { viewMode: '2D', zoom: 8, center: [120.6, 31], mapStyle: 'amap://styles/whitesmoke', animateEnable: false, WebGLParams: { preserveDrawingBuffer: true } });
+  const map = new amap.Map(element, { viewMode: '2D', zoom: 8, center: [120.6, 31], mapStyle: 'amap://styles/macaron', animateEnable: false, WebGLParams: { preserveDrawingBuffer: true } });
   let watermark: ReturnType<typeof mountTransportMapWatermark> | undefined;
   const geocoder = new amap.Geocoder({ city: '全国' });
   const cache = new Map<string, AMapCoordinate>();

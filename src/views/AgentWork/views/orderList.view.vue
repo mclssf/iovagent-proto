@@ -25,53 +25,40 @@ const {
   riskOrdersSource,
   riskOrdersKeyword,
 } = storeToRefs(store);
-const { goPage, openOrderDetail, createDownload } = useAgentWorkNav();
+const { openOrderDetail, createDownload } = useAgentWorkNav();
 
 const isOrders = () => props.listMode === 'orders';
 
 onMounted(() => {
   store.ensureOrdersDateRange();
 });
-
-function generateRiskBrief() {
-  store.generateRiskBrief();
-  goPage('agent');
-}
 </script>
 
 <template>
-  <div class="flex h-full flex-col space-y-3">
-    <div class="overflow-hidden rounded-md border border-[#deded9] bg-white">
+  <div class="order-list-page flex h-full min-h-0 min-w-0 flex-col bg-white">
+    <div class="shrink-0">
       <div class="flex h-12 items-center justify-between gap-4 border-b border-[#e2e2dc] px-4">
         <div class="flex items-center gap-2.5">
-          <div class="flex h-7 w-7 items-center justify-center rounded-md bg-[#f2f2ef] text-slate-700">
+          <div class="flex items-center justify-center text-slate-700">
             <Icon :svg="strokeIconPaths.list" :size="16" />
           </div>
           <div>
-            <h1 class="text-sm font-semibold leading-5 text-slate-950">
+            <h1 class="text-[13px] font-semibold leading-5 text-slate-950">
               {{ isOrders() ? '运单列表' : '异常运单列表' }}
             </h1>
           </div>
         </div>
-        <div class="flex gap-2">
-          <button
-            v-if="!isOrders()"
-            type="button"
-            class="rounded-md border border-[#deded9] bg-[#f7f7f5] px-4 py-2 text-sm font-medium text-slate-700 hover:bg-white hover:text-slate-900"
-            @click="generateRiskBrief()"
-          >
-            生成简报
-          </button>
+        <div v-if="isOrders()" class="flex gap-2">
           <button
             type="button"
             class="flex items-center rounded-md bg-slate-900 px-4 py-2 text-sm font-medium text-white"
-            @click="createDownload(isOrders() ? '当前运单列表筛选结果' : '当前异常运单筛选结果')"
+            @click="createDownload('当前运单列表筛选结果')"
           >
             <Icon :svg="strokeIconPaths.download" :size="18" svg-class="mr-1 inline" /> 下载当前结果
           </button>
         </div>
       </div>
-      <div v-if="isOrders()" class="grid grid-cols-4 gap-3 p-4">
+      <div v-if="isOrders()" class="grid grid-cols-4 gap-3 border-b border-[#e2e2dc] p-4">
         <div class="rounded-md bg-[#f7f7f5] p-3">
           <div class="text-xs text-slate-500">全部</div>
           <div class="mt-1 text-xl font-semibold text-slate-900">
@@ -97,7 +84,7 @@ function generateRiskBrief() {
           </div>
         </div>
       </div>
-      <div v-else class="m-4 rounded-md border border-orange-200 bg-orange-50 px-4 py-3">
+      <div v-else class="border-b border-orange-100 bg-orange-50 px-4 py-3">
         <div class="flex items-start gap-3">
           <div class="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-orange-100 text-orange-700">
             <Icon :svg="strokeIconPaths.shield" :size="14" />
@@ -111,8 +98,8 @@ function generateRiskBrief() {
         </div>
       </div>
     </div>
-    <div class="flex h-0 flex-1 flex-col rounded-md border border-[#deded9] bg-white p-3">
-      <div class="mb-4 flex flex-wrap items-end gap-3">
+    <div class="flex min-h-0 min-w-0 flex-1 flex-col">
+      <div class="order-list-filters flex shrink-0 flex-wrap items-end gap-3 border-b border-[#e2e2dc] px-4 py-3">
         <template v-if="isOrders()">
           <label class="text-xs text-slate-500">
             <span class="mb-1 block">时间筛选</span>
@@ -151,11 +138,11 @@ function generateRiskBrief() {
               <option>已完成</option>
             </select>
           </label>
-          <label class="min-w-[280px] flex-1 text-xs text-slate-500"
+          <label class="min-w-0 flex-1 basis-[280px] text-xs text-slate-500"
             ><span class="mb-1 block">关键词</span>
             <div class="flex min-h-[40px] items-center rounded-md border border-[#deded9] bg-[#fbfbfa] px-3">
               <Icon :svg="strokeIconPaths.search" :size="15" svg-class="text-slate-400" />
-              <input v-model="ordersKeyword" class="w-full px-2 py-2 text-sm outline-none" placeholder="运单号 / 车牌 / 承运商 / 线路" />
+              <input v-model="ordersKeyword" class="min-w-0 w-full px-2 py-2 text-sm outline-none" placeholder="运单号 / 车牌 / 承运商 / 线路" />
             </div>
           </label>
         </template>
@@ -195,18 +182,18 @@ function generateRiskBrief() {
               <option>GPS分析</option>
             </select>
           </label>
-          <label class="min-w-[320px] flex-1 text-xs text-slate-500"
+          <label class="min-w-0 flex-1 basis-[320px] text-xs text-slate-500"
             ><span class="mb-1 block">关键词</span>
             <div class="flex min-h-[40px] items-center rounded-md border border-[#deded9] bg-[#fbfbfa] px-3">
               <Icon :svg="strokeIconPaths.search" :size="15" svg-class="text-slate-400" />
-              <input v-model="riskOrdersKeyword" class="w-full px-2 py-2 text-sm outline-none" placeholder="搜索异常运单 / 车牌 / 异常类型 / 承运商" />
+              <input v-model="riskOrdersKeyword" class="min-w-0 w-full px-2 py-2 text-sm outline-none" placeholder="搜索异常运单 / 车牌 / 异常类型 / 承运商" />
             </div>
           </label>
         </template>
       </div>
-      <div class="h-0 flex-1 overflow-y-auto rounded-md border border-[#deded9]">
-        <table class="w-full border-collapse text-left text-sm">
-          <thead class="bg-[#f7f7f5]">
+      <div class="order-list-table min-h-0 min-w-0 flex-1 overflow-auto">
+        <table class="w-full min-w-[1000px] border-collapse text-left text-sm">
+          <thead class="sticky top-0 z-10 bg-[#f7f7f5]">
             <tr class="text-xs font-semibold text-slate-500">
               <th class="px-4 py-3 align-middle">运单</th>
               <th class="px-4 py-3 align-middle">线路</th>
@@ -266,4 +253,8 @@ function generateRiskBrief() {
   </div>
 </template>
 
-<style lang="scss" scoped></style>
+<style lang="scss" scoped>
+.order-list-filters > label { max-width: 100%; }
+.order-list-filters input[type='date'] { min-width: 0; }
+.order-list-table { overscroll-behavior: contain; scrollbar-width: thin; scrollbar-color: #cbd5e1 transparent; }
+</style>
