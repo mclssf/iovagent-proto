@@ -1,11 +1,11 @@
 <script lang="ts" setup>
-import { computed, reactive, ref, watch } from 'vue';
+import { reactive, ref, watch } from 'vue';
 import AppDialog from '@/components/AppDialog.vue';
 import { Icon } from '@packages/icon';
 import { useAgentDailyTasks } from '@/pinia/agentDailyTasks';
 import type { TaskAttachment } from '../dailyTasks';
-import { downloadTaskResult, excelResult, formatFileSize, mergeTaskAttachments, readTaskAttachments } from '../ordinaryTasks';
-import { evidenceEnterpriseName, evidenceExamplePrompt, evidenceSampleRows, hasWaybillEvidenceIntent } from '../waybillEvidence';
+import { formatFileSize, mergeTaskAttachments, readTaskAttachments } from '../ordinaryTasks';
+import { evidenceExamplePrompt } from '../waybillEvidence';
 import { strokeIconPaths } from '../strokeIconPaths';
 import '../dailyTasks.css';
 
@@ -18,8 +18,6 @@ const fileInput = ref<HTMLInputElement | null>(null);
 const dragging = ref(false);
 const reading = ref(false);
 const submitting = ref(false);
-const isEvidence = computed(() => hasWaybillEvidenceIntent(form.prompt));
-const enterprise = computed(() => evidenceEnterpriseName());
 let generation = 0;
 let dragDepth = 0;
 watch(() => props.modelValue, () => {
@@ -46,7 +44,6 @@ function selectFiles(event: Event) { const input = event.target as HTMLInputElem
 function dropFiles(event: DragEvent) { dragging.value = false; dragDepth = 0; void addFiles(Array.from(event.dataTransfer?.files ?? [])); }
 function example() { form.prompt = '查询表格中所有运单的历史轨迹，分别生成轨迹文件和执行报告，并打包供我下载。'; }
 function evidenceExample() { form.prompt = evidenceExamplePrompt; }
-function downloadSample() { downloadTaskResult(excelResult('运单补全留证_待处理样表.xlsx', evidenceSampleRows(), '待补全运单')); }
 function save() {
   if (submitting.value || reading.value) return;
   submitting.value = true;
@@ -72,7 +69,6 @@ function save() {
           <div v-if="dragging" class="dt-drop-indicator"><Icon :svg="strokeIconPaths.upload" :size="22" />松开以上传 Excel</div>
         </div>
       </div>
-      <div v-if="isEvidence" class="dt-evidence-context"><div><span>留证企业</span><strong>{{ enterprise }}</strong><span>逐单生成监控运输轨迹截图</span></div><button type="button" class="dt-text-button" @click="downloadSample"><Icon :svg="strokeIconPaths.download" :size="14" />下载留证样表</button></div>
       <p v-if="error" class="dt-error" role="alert">{{ error }}</p>
     </form>
     <template #footer><div class="dialog-actions"><button type="button" class="dialog-button" @click="emit('update:modelValue', false)">取消</button><button type="submit" form="daily-task-form" class="dialog-button dialog-primary" :disabled="submitting || reading">提交并执行</button></div></template>
@@ -81,9 +77,5 @@ function save() {
 
 <style scoped>
 .dt-example-actions { display: flex; gap: 12px; flex-wrap: wrap; justify-content: flex-end; }
-.dt-evidence-context { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; padding-top: 12px; border-top: 1px solid #e3e7eb; font-size: 12px; }
-.dt-evidence-context > div { display: flex; flex-wrap: wrap; gap: 7px 12px; align-items: center; min-width: 0; }
-.dt-evidence-context span { color: #596573; }
-.dt-evidence-context strong { max-width: 260px; overflow-wrap: anywhere; font-weight: 500; }
-@media (max-width: 700px) { .dt-example-actions { gap: 8px; } .dt-evidence-context > div { flex-basis: 100%; } }
+@media (max-width: 700px) { .dt-example-actions { gap: 8px; } }
 </style>
