@@ -5,6 +5,15 @@ export const evidenceDemoLimit = 50;
 export const evidenceExamplePrompt = '请根据表格中已知的真实卸货地或装货地，推测并完善每条运单缺失的装卸货地点和时间，保留已知信息，逐单生成带企业水印的轨迹截图留证，并打包为 ZIP。';
 export const hasWaybillEvidenceIntent = (prompt: string) => /运单|装货|卸货|运输任务|装卸/.test(prompt) && /补全|完善|还原|推测|推断|反推|补齐|核实/.test(prompt) && /截图|留证|水印|审计/.test(prompt);
 
+export const evidenceFieldAliases = {
+  运单号: ['运单号', '订单号', '货单号', '单号'],
+  车牌号: ['车牌号', '车牌', '车辆号', '车辆牌照', 'plate'],
+  装货地点: ['真实装货地', '装货地', '装货地点', '装货地址', '装货地POI', '装货地POI描述', '装货地详细地址', '发货地', 'loadingAddress'],
+  装货时间: ['真实装货时间', '装货时间', '装货开始时间', 'loadingTime'],
+  卸货地点: ['真实卸货地', '卸货地', '卸货地点', '卸货地址', '卸货地POI', '卸货地POI描述', '卸货地详细地址', '收货地', 'unloadingAddress'],
+  卸货时间: ['真实卸货时间', '卸货时间', '卸货开始时间', 'unloadingTime'],
+};
+
 export function evidenceEnterpriseName() {
   if (typeof window === 'undefined') return '当前企业';
   try { return window.localStorage.getItem('iovagent_login_enterprise_name')?.trim().slice(0, 80) || '当前企业'; }
@@ -37,7 +46,7 @@ export interface EvidenceTrip {
 
 function endpoint(record: Record<string, string>, side: '装货' | '卸货'): EvidenceEndpoint {
   const english = side === '装货' ? 'loading' : 'unloading';
-  const poi = recordValue(record, [`真实${side}地`, `${side}地`, `${side}地点`, `${side}地址`, `${side}地POI`, `${side}地POI描述`, `${side}地详细地址`, side === '装货' ? '发货地' : '收货地', `${english}Address`]);
+  const poi = recordValue(record, evidenceFieldAliases[`${side}地点`]);
   const longitude = recordValue(record, [`真实${side}地经度`, `${side}地经度`, `${side}经度`, `${english}Longitude`]);
   const latitude = recordValue(record, [`真实${side}地纬度`, `${side}地纬度`, `${side}纬度`, `${english}Latitude`]);
   const pair = recordValue(record, [`${side}地经纬度`, `${side}经纬度`]);
@@ -47,14 +56,14 @@ function endpoint(record: Record<string, string>, side: '装货' | '卸货'): Ev
     if (values.length !== 2 || values.some(value => !value?.trim() || !Number.isFinite(Number(value))) || Math.abs(Number(values[0])) > 180 || Math.abs(Number(values[1])) > 90) throw new Error(`${side}地经纬度无效，请成对填写经度和纬度`);
     coordinate = [Number(values[0]), Number(values[1])];
   }
-  const text = recordValue(record, [`真实${side}时间`, `${side}时间`, `${side}开始时间`, `${english}Time`]);
+  const text = recordValue(record, evidenceFieldAliases[`${side}时间`]);
   const time = parseWaybillTimestamp(text);
   if (text && time === null) throw new Error(`${side}时间格式无效`);
   return { poi, coordinate, time };
 }
 
 export function parseEvidenceInput(record: Record<string, string>): EvidenceInput {
-  const plate = recordValue(record, ['车牌号', '车牌', '车辆号', '车辆牌照', 'plate']).toUpperCase();
+  const plate = recordValue(record, evidenceFieldAliases.车牌号).toUpperCase();
   if (extractTaskPlates(plate)[0] !== plate) throw new Error('缺少有效车牌号');
   const loading = endpoint(record, '装货');
   const unloading = endpoint(record, '卸货');
@@ -64,7 +73,7 @@ export function parseEvidenceInput(record: Record<string, string>): EvidenceInpu
   if (windowText && windowStart === null) throw new Error('运单开始时间格式无效');
   if (windowStart === null && loading.time === null && unloading.time === null) throw new Error('请提供运单开始时间、装货时间或卸货时间，用于限定查询范围');
   if (loading.time !== null && unloading.time !== null && loading.time >= unloading.time) throw new Error('卸货时间必须晚于装货时间');
-  return { plate, loading, unloading, windowStart, order: recordValue(record, ['运单号', '订单号', '货单号', '单号']) || '未提供运单号', gps: /wgs.?84|gps/i.test(recordValue(record, ['坐标系', '坐标类型'])) };
+  return { plate, loading, unloading, windowStart, order: recordValue(record, evidenceFieldAliases.运单号) || '未提供运单号', gps: /wgs.?84|gps/i.test(recordValue(record, ['坐标系', '坐标类型'])) };
 }
 
 export function evidenceInputError(record: Record<string, string>) {
@@ -103,7 +112,7 @@ export function waybillEvidenceSteps(rows: number, enterprise: string) {
     { title: '规划轨迹反推规则', text: '查询时间窗内的车辆轨迹，按停车时长、先后顺序、装卸场站 POI 及到离场规则筛选候选端点。', tool: '车辆轨迹查询 / 装卸货还原' },
     { title: '逐单补全地点与时间', text: '保留用户提供的锚点，补全缺失端点与装卸时间；校验装货早于卸货、运输时长与道路距离相容，并记录字段来源。', tool: '运单补全与轨迹留证 Skill' },
     { title: '生成水印轨迹截图', text: `逐单使用运单详情页的地图水印层，直接导出监控运输轨迹 JPG：装卸货 POI / 经纬度、时间区间、车牌、企业“${enterprise}”及“兴路车联”品牌标识均叠加在地图内。`, tool: '高德 JS API 2.0 / 地图截图' },
-    { title: '核验图片并打包归档', text: '核对逐单图片与明细的关联，打包补全明细、截图和执行报告；ZIP 同步到任务结果及下载，失败记录不伪造留证。' },
+    { title: '核验图片并打包归档', text: '核对逐单图片与结果表的关联，将运单信息、执行结果和图片路径合并为一张表，标色推测或修正字段；ZIP 同步到任务结果及下载，失败记录不伪造留证。' },
   ];
 }
 

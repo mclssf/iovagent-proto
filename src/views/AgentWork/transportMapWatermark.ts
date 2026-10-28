@@ -56,7 +56,8 @@ export function mountTransportMapWatermark(map: AMap.Map, data: TransportMapWate
   endpoints.style.cssText = 'display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px;';
   for (const [title, endpoint, color] of [['装货', data.loading, '#267457'], ['卸货', data.unloading, '#a44b2b']] as const) {
     const block = document.createElement('div');
-    block.style.cssText = 'min-width:0;overflow-wrap:anywhere;';
+    block.dataset.watermarkPart = title === '装货' ? 'loading' : 'unloading';
+    block.style.cssText = 'min-width:0;overflow-wrap:anywhere;padding:10px 12px;border-radius:6px;background:rgba(255,255,255,.82);text-shadow:none;';
     block.append(
       text('div', title, `font-size:13px;font-weight:600;color:${color};`),
       text('div', endpoint.poi, 'margin-top:4px;font-size:13px;color:#253440;'),
@@ -65,10 +66,14 @@ export function mountTransportMapWatermark(map: AMap.Map, data: TransportMapWate
     );
     endpoints.append(block);
   }
-  footer.append(endpoints,
-    text('div', `运输时间：${data.period}（北京时间）`, 'margin-top:10px;padding-top:4px;font-weight:600;overflow-wrap:anywhere;'),
+  const journey = document.createElement('div');
+  journey.dataset.watermarkPart = 'journey';
+  journey.style.cssText = 'margin-top:10px;padding:8px 12px;border-radius:6px;background:rgba(255,255,255,.82);text-shadow:none;';
+  journey.append(
+    text('div', `运输时间：${data.period}（北京时间）`, 'font-weight:600;overflow-wrap:anywhere;'),
     text('div', `道路里程 ${data.distance}  ·  生成时间 ${evidenceTime(Date.now())}`, 'margin-top:3px;color:#465663;overflow-wrap:anywhere;'),
   );
+  footer.append(endpoints, journey);
   root.append(pattern, header, footer);
   container.append(root);
   const resize = () => {

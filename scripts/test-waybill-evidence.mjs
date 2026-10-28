@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { fileURLToPath } from 'node:url';
 import { createServer } from 'vite';
 import { unzipSync } from 'fflate';
-import { read, utils } from 'xlsx';
+import { read, utils, write } from 'xlsx';
 import { createPinia, setActivePinia } from 'pinia';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
@@ -14,6 +14,14 @@ try {
   const ordinary = await server.ssrLoadModule('/src/views/AgentWork/ordinaryTasks.ts');
   const skills = await server.ssrLoadModule('/src/views/AgentWork/ordinaryTaskSkills.ts');
   const { createWaybillEvidenceResult } = await server.ssrLoadModule('/src/views/AgentWork/waybillEvidenceResult.ts');
+  const { buildEvidenceWorkbook, evidenceResultColumns } = await server.ssrLoadModule('/src/views/AgentWork/waybillEvidenceWorkbook.ts');
+  const exportRows = [];
+  const workbookFactory = rows => {
+    const { workbook, changedCells } = buildEvidenceWorkbook(rows);
+    exportRows.push({ rows, changedCells });
+    const bytes = new Uint8Array(write(workbook, { type: 'array', bookType: 'xlsx' }));
+    return { name: '运单结果表.xlsx', mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', content: Buffer.from(bytes).toString('base64'), encoding: 'base64', size: bytes.length };
+  };
   const { useAgentDailyTasks } = await server.ssrLoadModule('/src/pinia/agentDailyTasks.ts');
   const prompt = evidence.evidenceExamplePrompt;
   assert(evidence.hasWaybillEvidenceIntent(prompt));
@@ -54,18 +62,19 @@ try {
   assert.equal(task.enterpriseName, '测试客户企业');
   assert.equal(task.scenario, 'waybill-evidence');
   assert(task.runs[0].steps.some(step => step.title.includes('水印')));
+  const originalAttachments = JSON.stringify(task.attachments);
   const controller = new AbortController();
   let destroyed = 0;
   const factory = async () => ({ destroy: () => destroyed++, render: async (input, index, enterprise) => {
     assert.equal(enterprise, '测试客户企业');
     const times = evidence.evidenceTimes(input, 7200, index);
     return { bytes: Uint8Array.from([255, 216, 255, 224, index, 255, 217]), trip: {
-      order: input.order, plate: input.plate, distance: 130000, duration: 7200, path: [[121.176, 31.332], [120.48, 30.307]], basis: '模拟规则',
-      loading: { poi: input.loading.poi || '演示装货候选点', coordinate: input.loading.coordinate || [121.176, 31.332], time: times.loading, inferred: !input.loading.poi, timeInferred: input.loading.time === null },
-      unloading: { poi: input.unloading.poi || '演示卸货候选点', coordinate: input.unloading.coordinate || [120.48, 30.307], time: times.unloading, inferred: !input.unloading.poi, timeInferred: input.unloading.time === null },
+      order: input.order, plate: input.plate, distance: 130000, duration: 7200, path: [[121.176, 31.332], [120.48, 30.307]], basis: '停车聚类与场站先后规则',
+      loading: { poi: input.loading.poi || '上海嘉定汽车城物流园', coordinate: input.loading.coordinate || [121.176, 31.332], time: times.loading, inferred: !input.loading.poi, timeInferred: input.loading.time === null },
+      unloading: { poi: input.unloading.poi || '杭州钱塘物流园', coordinate: input.unloading.coordinate || [120.48, 30.307], time: times.unloading, inferred: !input.unloading.poi, timeInferred: input.unloading.time === null },
     } };
   } });
-  const result = await createWaybillEvidenceResult(task, task.runs[0], controller.signal, () => {}, factory);
+  const result = await createWaybillEvidenceResult(task, task.runs[0], controller.signal, () => {}, factory, workbookFactory);
   assert.deepEqual(result.progress, { total: 7, processed: 7, success: 6, failed: 1 });
   assert.equal(destroyed, 1);
   assert.equal(result.files.length, 1);
@@ -74,26 +83,68 @@ try {
   const names = Object.keys(archive);
   assert.equal(names.filter(name => name.endsWith('.jpg')).length, 6);
   assert.equal(new Set(names).size, names.length);
-  const report = read(archive['执行报告.xlsx'], { type: 'array' });
-  const details = read(archive['运单补全明细.xlsx'], { type: 'array' });
-  const detailRows = utils.sheet_to_json(details.Sheets[details.SheetNames[0]]);
-  assert.equal(detailRows.length, 6);
-  assert.equal(detailRows[0].卸货地, rows[0].卸货地, 'known fields stay untouched');
+  assert.deepEqual(names.filter(name => name.endsWith('.xlsx')), ['运单结果表.xlsx']);
+  const details = read(archive['运单结果表.xlsx'], { type: 'array' });
+  const sheet = details.Sheets[details.SheetNames[0]];
+  const detailRows = utils.sheet_to_json(sheet, { raw: false, defval: '' });
+  assert.deepEqual(utils.sheet_to_json(sheet, { header: 1 })[0].slice(0, 8), evidenceResultColumns);
+  assert.equal(detailRows.length, 7, 'one result row per input, including invalid rows');
+  assert.equal(detailRows[0].卸货地点, rows[0].卸货地, 'known fields stay untouched');
   assert.equal(detailRows[1].装货时间, rows[1].装货时间);
-  assert(detailRows.every(row => row.企业名称 === '测试客户企业' && row.核验状态 === '需业务核验'));
+  assert(detailRows.slice(0, 6).every(row => row.企业名称 === '测试客户企业' && row.核验状态 === '需业务核验'));
+  assert(detailRows.slice(0, 6).every(row => archive[row.生成图片路径]), 'each image path resolves inside this ZIP');
+  assert(detailRows.slice(0, 6).every(row => row.执行结果 === '成功'));
+  assert.match(detailRows[6].执行结果, /^失败：.*车牌/);
+  assert.equal(detailRows[6].生成图片路径, '');
+  assert.equal(detailRows[0].原始装货地点, '');
+  assert.equal(detailRows[1].原始装货地点, rows[1].装货地);
+  const changed = exportRows[0].changedCells;
+  for (const address of ['C1', 'D1', 'E1', 'F1', 'C2', 'D2', 'E3', 'F3']) assert(changed.has(address), address);
+  for (const address of ['A1', 'B1', 'G1', 'H1', 'E2', 'F2', 'C3', 'D3', 'C8', 'D8']) assert(!changed.has(address), address);
+  assert.equal(sheet.D2.t, 'n', 'timestamps are native Excel dates');
   assert(!/演示|原型|模拟|非实测/.test(result.text));
-  assert.equal(detailRows[0].装货地来源, '规则推断', 'field provenance remains in the workbook, not on the map screenshot');
-  assert.equal(utils.sheet_to_json(report.Sheets[report.SheetNames[0]]).filter(row => row.执行状态 === '失败').length, 1);
+  assert.equal(detailRows[0].装货地来源, '推测／修正', 'field provenance remains in the workbook, not on the map screenshot');
+  assert.equal(JSON.stringify(task.attachments), originalAttachments, 'export must not mutate original uploads');
   store.receiveOrdinaryResult(id, task.runs[0].toolJobId, result);
   assert.equal(store.resultDownloads.filter(file => file.taskId === id).length, 1);
   const cancelled = new AbortController(); cancelled.abort();
-  const stopped = await createWaybillEvidenceResult(task, task.runs[0], cancelled.signal, () => {}, async () => { throw new Error('must not initialize maps'); });
+  const stopped = await createWaybillEvidenceResult(task, task.runs[0], cancelled.signal, () => {}, async () => { throw new Error('must not initialize maps'); }, workbookFactory);
   assert.equal(stopped.progress.processed, 0);
   assert.match(stopped.text, /任务已停止/);
   assert.equal(Object.keys(unzipSync(ordinary.resultFileBytes(stopped.files[0]))).filter(name => name.endsWith('.jpg')).length, 0);
-  const unavailable = await createWaybillEvidenceResult(task, task.runs[0], new AbortController().signal, () => {}, async () => { throw new Error('高德服务不可用'); });
+  assert(exportRows.at(-1).rows.every(row => row.values.执行结果.startsWith('未执行：') && row.values.生成图片路径 === '' && !row.changedFields.length));
+  const unavailable = await createWaybillEvidenceResult(task, task.runs[0], new AbortController().signal, () => {}, async () => { throw new Error('高德服务不可用'); }, workbookFactory);
   assert.equal(unavailable.progress.success, 0);
   assert.equal(unavailable.progress.failed, 7);
   assert.match(unavailable.text, /未生成有效截图/);
-  console.log('PASS: intent isolation, input/coordinate/time validation, both known endpoints, company snapshot, 50-row guard, per-row images, ZIP/report reconciliation, partial failure, cancellation, map failure and shared downloads.');
+  assert.deepEqual(Object.keys(unzipSync(ordinary.resultFileBytes(unavailable.files[0]))), ['运单结果表.xlsx']);
+  assert(exportRows.at(-1).rows.every(row => row.values.执行结果.startsWith('失败：') && row.values.生成图片路径 === ''));
+  const completeRow = { ...rows[0], 装货地: rows[1].装货地, 装货时间: '2026-10-15 07:20:00' };
+  const completeTask = { ...task, attachments: [{ ...attachments[0], records: [completeRow], rowCount: 1 }] };
+  await createWaybillEvidenceResult(completeTask, task.runs[0], new AbortController().signal, () => {}, factory, workbookFactory);
+  assert.equal(exportRows.at(-1).changedCells.size, 0, 'formatting a known timestamp does not count as a correction');
+  await createWaybillEvidenceResult(completeTask, task.runs[0], new AbortController().signal, () => {}, async signal => {
+    const renderer = await factory(signal);
+    return { ...renderer, render: async (...args) => {
+      const result = await renderer.render(...args);
+      result.trip.loading.poi = '上海嘉定发运中心'; result.trip.loading.time += 60000;
+      return result;
+    } };
+  }, workbookFactory);
+  assert.deepEqual([...exportRows.at(-1).changedCells].sort(), ['C1', 'C2', 'D1', 'D2']);
+  assert.equal(exportRows.at(-1).rows[0].values.原始装货地点, completeRow.装货地);
+  const interrupted = new AbortController();
+  const partial = await createWaybillEvidenceResult(task, task.runs[0], interrupted.signal, () => {}, async signal => {
+    const renderer = await factory(signal);
+    return { ...renderer, render: async (...args) => {
+      const result = await renderer.render(...args);
+      if (args[1] === 1) interrupted.abort();
+      return result;
+    } };
+  }, workbookFactory);
+  assert.deepEqual(partial.progress, { total: 7, processed: 1, success: 1, failed: 0 });
+  assert.equal(exportRows.at(-1).rows[0].values.执行结果, '成功');
+  assert(exportRows.at(-1).rows.slice(1).every(row => row.values.执行结果.startsWith('未执行：') && row.values.生成图片路径 === ''));
+  assert.equal(Object.keys(unzipSync(ordinary.resultFileBytes(partial.files[0]))).filter(name => name.endsWith('.jpg')).length, 1);
+  console.log('PASS: intent/input guards, company snapshot, one merged workbook with all rows and image paths, native dates, changed-column/cell selection, raw-value provenance, failures/cancellation, map failure and shared downloads. Browser tests verify serialized fills.');
 } finally { delete globalThis.window; await server.close(); }
