@@ -5,6 +5,7 @@ import AppDialog from '@/components/AppDialog.vue';
 import { Icon } from '@packages/icon';
 import { useAgentOpsStore } from '@/pinia/agentOps';
 import type { AgentCallableSkill, ManagedTool, ToolKind } from '@/pinia/agentOps';
+import type { CodeTool, CodeToolVersion } from '@/pinia/agentOps';
 import type { CustomerAgentTarget } from '@/pinia/customerAgents';
 import { strokeIconPaths } from '../AgentWork/strokeIconPaths';
 import McpServiceForm from './McpServiceForm.vue';
@@ -19,6 +20,31 @@ const search = ref('');
 const selectedToolId = ref('');
 const selectedTool = computed(() => store.tools.find((tool) => tool.id === selectedToolId.value));
 const detailOpen = ref(false);
+const draft = ref<CodeTool>();
+const editingTool = ref(false);
+const historyOpen = ref(false);
+const historyId = ref('');
+const historical = ref<CodeToolVersion>();
+const history = computed(() => [...store.toolVersions(historyId.value)].reverse());
+const historyDetailOpen = ref(false);
+function openHistory(id: string) { historyId.value = id; historyOpen.value = true; }
+function setOutputEnabled(name: string, enabled: boolean) { const param = draft.value?.outputs.find(item => item.name === name); if (param) param.enabled = enabled; }
+function saveTool() {
+  if (!draft.value) return;
+  try {
+    store.saveCodeTool(draft.value.id, draft.value.description, draft.value.outputs);
+    detailOpen.value = false;
+    ElMessage.success('已保存并生成新版本');
+  } catch (error) { ElMessage.error(error instanceof Error ? error.message : '保存失败'); }
+}
+function restoreVersion() {
+  if (!historical.value) return;
+  try {
+    store.restoreCodeTool(historyId.value, historical.value.version);
+    historyDetailOpen.value = false;
+    ElMessage.success('已恢复历史配置，并生成新版本');
+  } catch (error) { ElMessage.error(error instanceof Error ? error.message : '恢复失败'); }
+}
 const toolsDialogOpen = ref(false);
 const toolsServiceId = ref('');
 const toolsService = computed(() => { const tool = store.tools.find(item => item.id === toolsServiceId.value); return tool?.kind === 'mcp' ? tool : undefined; });
@@ -42,7 +68,9 @@ function viewMcpTools(id: string) {
   detailOpen.value = false;
   toolsDialogOpen.value = true;
 }
-function showTool(tool: ManagedTool) {
+function showTool(tool: ManagedTool, edit = false) {
+  editingTool.value = edit && tool.kind === 'code';
+  draft.value = tool.kind === 'code' ? JSON.parse(JSON.stringify(tool)) : undefined;
   selectedToolId.value = tool.id;
   detailOpen.value = true;
 }
@@ -82,7 +110,7 @@ async function syncCodeTools() {
 <template>
   <section class="tool-management flex h-full min-h-0 flex-col overflow-hidden rounded-md border border-[#deded9] bg-white">
     <div class="flex shrink-0 flex-wrap items-center justify-between gap-3 border-b border-[#e2e2dc] px-5 py-4">
-      <div><h2 class="text-base font-semibold">Tool 管理</h2><p class="mt-1 text-xs leading-5 text-slate-500">{{ tab === 'mcp' ? '管理 MCP 服务连接，测试连接并同步工具定义。' : '同步工程中定义的内置API工具，工具定义只读。' }}</p></div>
+      <div><h2 class="text-base font-semibold">Tool 管理</h2><p class="mt-1 text-xs leading-5 text-slate-500">{{ tab === 'mcp' ? '管理 MCP 服务连接，测试连接并同步工具定义。' : '管理内置API工具的描述、输出参数及历史版本。' }}</p></div>
       <button v-if="tab === 'mcp'" type="button" class="ops-primary" @click="editService()"><Icon :svg="strokeIconPaths.plus" :size="15" />新增 MCP 服务</button>
       <button v-else type="button" class="ops-primary" :disabled="store.codeToolSync.busy" @click="syncCodeTools"><Icon :svg="strokeIconPaths.refresh" :size="15" />{{ store.codeToolSync.busy ? '同步中…' : '现在同步' }}</button>
     </div>
@@ -105,18 +133,18 @@ async function syncCodeTools() {
         </article>
       </div>
       <table v-else class="tool-table">
-        <thead><tr><th>工具名称 / Description</th><th class="w-20 whitespace-nowrap">操作</th></tr></thead>
+        <thead><tr><th>工具名称 / Description</th><th class="w-48 whitespace-nowrap">操作</th></tr></thead>
         <tbody>
           <tr v-for="tool in filteredCodeTools" :key="tool.id">
             <td><button type="button" class="font-medium text-slate-950 hover:underline" @click="showTool(tool)">{{ tool.name }}</button><div class="mt-1 break-all font-mono text-xs text-slate-500">{{ tool.id }}</div><p class="mt-2 text-xs leading-5 text-slate-600">{{ tool.description }}</p></td>
-            <td><div class="flex flex-col items-start gap-2 whitespace-nowrap text-xs"><button type="button" class="text-slate-700 hover:underline" :aria-label="`查看 ${tool.name}`" @click="showTool(tool)">详情</button></div></td>
+            <td><div class="flex items-center gap-4 whitespace-nowrap text-xs"><button type="button" class="text-slate-700 hover:underline" :aria-label="`查看 ${tool.name}`" @click="showTool(tool)">详情</button><button type="button" :aria-label="`编辑 ${tool.name}`" @click="showTool(tool, true)">编辑</button><button type="button" @click="openHistory(tool.id)">历史记录</button></div></td>
           </tr>
         </tbody>
       </table>
       <div v-if="!filteredTools.length" class="px-5 py-16 text-center"><p class="text-sm text-slate-600">未找到符合条件的 Tool</p><button class="mt-3 text-xs underline" type="button" @click="search = ''">清空筛选</button></div>
     </div>
 
-    <AppDialog v-model="detailOpen" :title="selectedTool?.name" width="960px" class="ops-tool-dialog">
+    <AppDialog v-model="detailOpen" :title="`${selectedTool?.name || ''}${editingTool ? ' · 编辑' : ' · 详情'}`" width="960px" class="ops-tool-dialog">
       <div v-if="selectedTool" class="space-y-6 text-slate-700">
         <div>
           <div class="flex flex-wrap items-center gap-3">
@@ -126,8 +154,9 @@ async function syncCodeTools() {
             <span v-if="store.getToolLoading(selectedTool.id).unloaded" class="loading-badge unloaded">未配置加载</span>
             <span class="text-xs text-slate-500">{{ selectedTool.kind === 'code' ? '工程更新于' : '更新于' }} {{ selectedTool.updatedAt }}</span>
           </div>
-          <p class="mt-3 text-xs leading-5 text-slate-500">{{ selectedTool.kind === 'code' ? '以下属性由研发在工程中维护，页面只读展示。' : '连接属性可编辑，工具定义从 MCP 服务同步。' }}</p>
-          <h3 class="mt-4 text-xs font-semibold">Description</h3><p class="mt-1 text-sm leading-6">{{ selectedTool.description }}</p>
+          <p class="mt-3 text-xs leading-5 text-slate-500">{{ selectedTool.kind === 'code' ? (editingTool ? '可编辑描述、输出参数说明及启用状态，保存后生成历史版本。' : '当前为只读详情，可在列表点击“编辑”修改配置。') : '连接属性可编辑，工具定义从 MCP 服务同步。' }}</p>
+          <div class="mt-4 flex items-center gap-3"><h3 class="text-xs font-semibold">Description</h3></div><label v-if="draft && editingTool" class="ops-field mt-2"><span class="sr-only">Description</span><textarea v-model="draft.description" class="ops-input" rows="3" maxlength="200" aria-label="Description" /><span class="text-right text-xs text-slate-500">{{ draft.description.length }}/200</span></label>
+          <p v-else class="mt-1 whitespace-pre-wrap text-sm leading-6">{{ selectedTool.description }}</p>
         </div>
         <template v-if="selectedTool.kind === 'mcp'">
           <McpServiceStatus :service="selectedTool" @view-tools="viewMcpTools(selectedTool.id)" />
@@ -136,15 +165,29 @@ async function syncCodeTools() {
         </template>
         <template v-else>
           <dl class="tool-properties"><dt>运行环境</dt><dd>{{ selectedTool.runtime }}</dd><dt>代码入口</dt><dd class="font-mono">{{ selectedTool.entrypoint }}</dd></dl>
-          <section v-for="direction in (['inputs', 'outputs'] as const)" :key="direction"><h3 class="mb-3 font-semibold">{{ direction === 'inputs' ? '输入参数' : '输出参数' }}（{{ selectedTool[direction].length }}）</h3><table class="tool-table"><thead><tr><th>参数名称</th><th>类型</th><th v-if="direction === 'inputs'">必填</th><th>说明</th></tr></thead><tbody><tr v-for="param in selectedTool[direction]" :key="param.name"><td class="font-mono text-xs">{{ param.name }}</td><td class="font-mono text-xs">{{ param.type }}</td><td v-if="direction === 'inputs'">{{ param.required ? '是' : '否' }}</td><td>{{ param.description }}</td></tr></tbody></table><p v-if="!selectedTool[direction].length" class="py-4 text-xs text-slate-500">无{{ direction === 'inputs' ? '输入' : '输出' }}参数</p></section>
+          <section v-for="direction in (['inputs', 'outputs'] as const)" :key="direction"><h3 class="mb-3 font-semibold">{{ direction === 'inputs' ? '输入参数' : '输出参数' }}（{{ selectedTool[direction].length }}）</h3><table class="tool-table"><thead><tr><th>参数名称</th><th>类型</th><th v-if="direction === 'inputs'">必填</th><th>说明</th><th v-if="direction === 'outputs'">状态</th></tr></thead><tbody><tr v-for="param in (direction === 'outputs' && draft ? draft.outputs : selectedTool[direction])" :key="param.name"><td class="font-mono text-xs">{{ param.name }}</td><td class="font-mono text-xs">{{ param.type }}</td><td v-if="direction === 'inputs'">{{ param.required ? '是' : '否' }}</td><td><textarea v-if="direction === 'outputs' && editingTool" v-model="param.description" class="ops-input" rows="2" :aria-label="`${param.name} 参数说明`" /><span v-else>{{ param.description }}</span></td><td v-if="direction === 'outputs'"><label class="flex items-center gap-2 whitespace-nowrap text-xs"><input v-if="editingTool" type="checkbox" :checked="param.enabled !== false" :aria-label="`${param.name} 启用`" @change="setOutputEnabled(param.name, ($event.target as HTMLInputElement).checked)" />{{ param.enabled !== false ? '已启用' : '已禁用' }}</label></td></tr></tbody></table><p v-if="!selectedTool[direction].length" class="py-4 text-xs text-slate-500">无{{ direction === 'inputs' ? '输入' : '输出' }}参数</p></section>
         </template>
         <section><h3 class="mb-3 font-semibold">Agent 默认配置</h3><div class="flex flex-wrap gap-2"><span v-for="agent in store.agentsUsingToolByDefault(selectedTool.id)" :key="agent.id" class="skill-link">{{ agent.name }}</span><p v-if="!store.agentsUsingToolByDefault(selectedTool.id).length" class="text-xs text-slate-500">未配置默认直接加载。</p></div></section>
         <section><h3 class="mb-3 font-semibold">直接加载的客户 Agent（{{ store.customerAgentsForTool(selectedTool.id).length }}）</h3><div class="flex flex-wrap gap-2"><button v-for="agent in store.customerAgentsForTool(selectedTool.id)" :key="agent.id" class="skill-link" type="button" @click="configureAgent(agent)">{{ agent.name }} · {{ agent.mode === 'default' ? '遵循默认' : '自定义' }}</button></div><p v-if="!store.customerAgentsForTool(selectedTool.id).length" class="text-xs text-slate-500">暂无 客户 Agent 直接加载，可在客户 Agent 配置页中添加。</p></section>
         <section><h3 class="mb-3 font-semibold">私有化加载的 Skill（{{ store.skillsForTool(selectedTool.id).length }}）</h3><div class="flex flex-wrap gap-2"><button v-for="skill in store.skillsForTool(selectedTool.id)" :key="skill.id" class="skill-link" type="button" @click="configureSkill(skill)">{{ skill.name }} · {{ skill.enabled ? '已启用' : '已禁用' }}</button></div><p v-if="!store.skillsForTool(selectedTool.id).length" class="text-xs text-slate-500">尚未关联 Skill，可在 Skill 管理中添加私有加载绑定。</p></section>
       </div>
-      <template #footer><div class="flex flex-wrap justify-end gap-2"><button class="ops-secondary" type="button" @click="detailOpen = false">关闭</button><button v-if="selectedTool?.kind === 'mcp'" class="ops-secondary" type="button" @click="editService(selectedTool.id)">编辑服务</button></div></template>
+      <template #footer><div class="flex flex-wrap justify-end gap-2"><button class="ops-secondary" type="button" @click="detailOpen = false">{{ editingTool ? '取消' : '关闭' }}</button><button v-if="draft && editingTool" class="ops-primary" type="button" @click="saveTool">保存</button><button v-if="selectedTool?.kind === 'mcp'" class="ops-secondary" type="button" @click="editService(selectedTool.id)">编辑服务</button></div></template>
     </AppDialog>
 
+    <AppDialog v-model="historyOpen" title="工具历史记录" width="760px">
+      <table class="tool-table"><thead><tr><th>版本</th><th>保存时间</th><th>操作</th><th>操作人</th><th>详情</th></tr></thead><tbody><tr v-for="version in history" :key="version.version"><td>V{{ version.version }}{{ version.version === history[0]?.version ? '（当前）' : '' }}</td><td>{{ version.savedAt }}</td><td>{{ version.action }}</td><td>{{ version.savedBy || (version.version === 1 ? '系统初始化' : '当前运营用户') }}</td><td><button type="button" class="underline" @click="historical = version; historyDetailOpen = true">查看详情</button></td></tr></tbody></table>
+      <template #footer><button type="button" class="ops-secondary" @click="historyOpen = false">关闭</button></template>
+    </AppDialog>
+    <AppDialog v-model="historyDetailOpen" :title="`${historical?.tool.name || ''} · V${historical?.version || ''}`" width="900px">
+      <div v-if="historical" class="space-y-5 text-sm text-slate-700">
+        <p class="text-xs text-slate-500">{{ historical.savedAt }} · {{ historical.action }}</p>
+        <section><h3 class="font-semibold">Description</h3><p class="mt-2 whitespace-pre-wrap break-words">{{ historical.tool.description }}</p></section>
+        <dl class="tool-properties"><dt>运行环境</dt><dd>{{ historical.tool.runtime }}</dd><dt>代码入口</dt><dd>{{ historical.tool.entrypoint }}</dd></dl>
+        <section v-for="direction in (['inputs', 'outputs'] as const)" :key="direction"><h3 class="mb-2 font-semibold">{{ direction === 'inputs' ? '输入参数' : '输出参数' }}</h3><table class="tool-table"><thead><tr><th>参数名称</th><th>类型</th><th>说明</th><th>{{ direction === 'inputs' ? '必填' : '状态' }}</th></tr></thead><tbody><tr v-for="param in historical.tool[direction]" :key="param.name"><td>{{ param.name }}</td><td>{{ param.type }}</td><td class="whitespace-pre-wrap">{{ param.description }}</td><td>{{ direction === 'inputs' ? (param.required ? '是' : '否') : (param.enabled !== false ? '已启用' : '已禁用') }}</td></tr></tbody></table><p v-if="!historical.tool[direction].length" class="py-3 text-xs text-slate-500">无参数</p></section>
+        <p class="text-xs text-slate-500">恢复将应用该版本的 Description、输出参数说明和启用状态，并保留现有历史记录。</p>
+      </div>
+      <template #footer><div class="flex justify-end gap-2"><button type="button" class="ops-secondary" @click="historyDetailOpen = false">关闭</button><button type="button" class="ops-primary" :disabled="historical?.version === history[0]?.version" @click="restoreVersion">恢复此版本</button></div></template>
+    </AppDialog>
     <McpToolsDialog v-model="toolsDialogOpen" :service="toolsService" />
     <McpServiceForm v-model="serviceFormOpen" :service-id="editingServiceId" @remove="requestDelete" />
     <AppDialog v-model="deleteOpen" title="删除 MCP 服务" width="620px" class="ops-tool-dialog">

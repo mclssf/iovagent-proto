@@ -1,7 +1,7 @@
 import { migrateCapacitySkillIds } from './capacitySkills';
 import { mailboxSkill } from './projectMailboxes';
 import { defineStore } from 'pinia';
-import { computed, readonly, ref } from 'vue';
+import { computed, readonly, ref, watch } from 'vue';
 import type { DeepReadonly } from 'vue';
 import { analyzeAgentConflicts } from '@/views/AgentOps/agentConflicts';
 import type { AgentConflictReport } from '@/views/AgentOps/agentConflicts';
@@ -67,6 +67,7 @@ export interface AgentCallableSkill extends Omit<ManagedSkill, 'category' | 'gro
   sourceConfig?: { loginUrl: string; loginType: string; version: string };
 }
 export interface ToolParameter {
+  enabled?: boolean;
   name: string;
   type: 'string' | 'number' | 'boolean' | 'object' | 'array';
   required: boolean;
@@ -102,6 +103,8 @@ export interface McpTool extends ToolBase, McpConfig {
   lastSyncAttemptAt: string;
 }
 export type ManagedTool = DeepReadonly<CodeTool | McpTool>;
+export interface CodeToolVersion { version: number; savedAt: string; savedBy?: string; action: string; tool: CodeTool }
+export interface SkillVersion { version: number; savedAt: string; savedBy: string; skill: ManagedSkill }
 
 const privateToolSeeds: Record<string, string[]> = {
   'route-risk-expert': ['vehicle-mcp', 'risk-evaluate'],
@@ -232,6 +235,45 @@ function createMcpTools(): McpTool[] {
 
 export const useAgentOpsStore = defineStore('agentOps', () => {
   const skills = ref(createSkills());
+  const skillVersions = ref<Record<string, SkillVersion[]>>({});
+  const skillHistoryKey = 'iovagent-skill-versions-v1';
+  try {
+    const saved = JSON.parse(localStorage.getItem(skillHistoryKey) || '{}') as Record<string, SkillVersion[]>;
+    for (const [id, versions] of Object.entries(saved)) {
+      if (!Array.isArray(versions) || !versions.length || versions.some(item => !item.skill || item.skill.id !== id || !Array.isArray(item.skill.privateToolIds))) continue;
+      skillVersions.value[id] = versions;
+      const index = skills.value.findIndex(item => item.id === id);
+      if (index >= 0) skills.value[index] = JSON.parse(JSON.stringify(versions[versions.length - 1].skill));
+      else skills.value.push(JSON.parse(JSON.stringify(versions[versions.length - 1].skill)));
+    }
+  } catch { /* Keep the initial catalog if browser storage is unavailable. */ }
+  const cloneSkill = (skill: ManagedSkill): ManagedSkill => JSON.parse(JSON.stringify(skill));
+  function getSkillVersions(id: string): SkillVersion[] {
+    const skill = skills.value.find(item => item.id === id);
+    return skillVersions.value[id] || (skill ? [{ version: 1, savedAt: skill.updatedAt, savedBy: skill.updatedBy, skill: cloneSkill(skill) }] : []);
+  }
+  let previousSkills = skills.value.map(cloneSkill);
+  function persistSkillVersions() {
+    try { localStorage.setItem(skillHistoryKey, JSON.stringify(skillVersions.value)); }
+    catch { /* In-memory versions remain available for this session. */ }
+  }
+  watch(skills, current => {
+    for (const skill of current) {
+      const previous = previousSkills.find(item => item.id === skill.id);
+      if (previous && JSON.stringify(previous) === JSON.stringify(skill)) continue;
+      const versions = skillVersions.value[skill.id] || (previous ? [{ version: 1, savedAt: previous.updatedAt, savedBy: previous.updatedBy, skill: previous }] : []);
+      skillVersions.value[skill.id] = [...versions, { version: (versions[versions.length - 1]?.version || 0) + 1, savedAt: new Date().toLocaleString('zh-CN', { hour12: false }), savedBy: skill.updatedBy, skill: cloneSkill(skill) }];
+    }
+    for (const previous of previousSkills) if (!current.some(item => item.id === previous.id)) delete skillVersions.value[previous.id];
+    previousSkills = current.map(cloneSkill);
+    persistSkillVersions();
+  }, { deep: true });
+  function restoreSkillVersion(id: string, version: number) {
+    const snapshot = getSkillVersions(id).find(item => item.version === version);
+    const index = skills.value.findIndex(item => item.id === id);
+    if (!snapshot || index < 0) throw new Error('Skill 或历史版本不存在。');
+    skills.value[index] = { ...cloneSkill(snapshot.skill), updatedAt: new Date().toLocaleString('zh-CN', { hour12: false }), updatedBy: '当前运营用户' };
+  }
   const dataEmployeeSkills = ref(createDataEmployeeSkills());
   // Data acquisition definitions have one source, shared by both configuration views.
   const agentCallableSkills = computed<AgentCallableSkill[]>(() => [
@@ -245,6 +287,44 @@ export const useAgentOpsStore = defineStore('agentOps', () => {
     })),
   ]);
   const codeTools = ref(parseCodeToolRegistry(codeRegistry));
+  const codeToolVersions = ref<Record<string, CodeToolVersion[]>>({});
+  const versionStorageKey = 'iovagent-code-tool-versions-v1';
+  try {
+    const saved = JSON.parse(localStorage.getItem(versionStorageKey) || '{}') as Record<string, CodeToolVersion[]>;
+    for (const tool of codeTools.value) {
+      const versions = saved[tool.id];
+      if (Array.isArray(versions) && versions.length) {
+        parseCodeToolRegistry(versions.map(item => item.tool));
+        codeToolVersions.value[tool.id] = versions;
+        Object.assign(tool, versions[versions.length - 1].tool);
+      }
+    }
+  } catch { /* Invalid browser data must not prevent loading the catalog. */ }
+  function toolVersions(id: string): CodeToolVersion[] {
+    const tool = codeTools.value.find(item => item.id === id);
+    return codeToolVersions.value[id] || (tool ? [{ version: 1, savedAt: tool.updatedAt, action: '初始版本', tool: JSON.parse(JSON.stringify(tool)) }] : []);
+  }
+  function saveCodeTool(id: string, description: string, outputs: ToolParameter[], action = '编辑保存') {
+    const tool = codeTools.value.find(item => item.id === id);
+    if (!tool) throw new Error('工具不存在，请刷新后重试。');
+    if (Array.from(description).length > 200) throw new Error('Description 最多 200 字。');
+    const versions = JSON.parse(JSON.stringify(toolVersions(id))) as CodeToolVersion[];
+    const updatedAt = new Date().toLocaleString('zh-CN', { hour12: false });
+    const next = { ...tool, description, updatedAt, outputs: tool.outputs.map(param => {
+      const draft = outputs.find(item => item.name === param.name);
+      return { ...param, description: draft?.description ?? param.description, enabled: draft?.enabled !== false };
+    }) };
+    versions.push({ version: versions[versions.length - 1].version + 1, savedAt: updatedAt, savedBy: '当前运营用户', action, tool: next });
+    const history = { ...codeToolVersions.value, [id]: versions };
+    localStorage.setItem(versionStorageKey, JSON.stringify(history));
+    codeToolVersions.value = history;
+    Object.assign(tool, next);
+  }
+  function restoreCodeTool(id: string, version: number) {
+    const snapshot = toolVersions(id).find(item => item.version === version);
+    if (!snapshot) throw new Error('历史版本不存在。');
+    saveCodeTool(id, snapshot.tool.description, snapshot.tool.outputs, `恢复自 V${version}`);
+  }
   const mcpServices = ref(createMcpTools());
   const mcpOperations = new Map<string, AbortController>();
   const tools = readonly(computed<ManagedTool[]>(() => [...mcpServices.value, ...codeTools.value]));
@@ -298,7 +378,10 @@ export const useAgentOpsStore = defineStore('agentOps', () => {
       if (incoming.some((tool) => mcpServices.value.some((mcp) => mcp.id === tool.id))) throw new Error('工具标识与 MCP 服务冲突，本次同步未应用。');
       const added = incoming.filter((tool) => !codeTools.value.some((item) => item.id === tool.id)).length;
       const removed = codeTools.value.filter((tool) => !incoming.some((item) => item.id === tool.id)).length;
-      codeTools.value = incoming;
+      codeTools.value = incoming.map(tool => {
+        const current = codeTools.value.find(item => item.id === tool.id);
+        return current && codeToolVersions.value[tool.id]?.length ? { ...tool, description: current.description, outputs: tool.outputs.map(param => { const saved = current.outputs.find(item => item.name === param.name); return { ...param, description: saved?.description ?? param.description, enabled: saved?.enabled !== false }; }) } : tool;
+      });
       codeToolSync.value.lastSyncedAt = new Date().toLocaleString('zh-CN', { hour12: false });
       codeToolSync.value.summary = `已读取 ${incoming.length} 个内置API工具，新增 ${added} 个、移除 ${removed} 个。加载配置保留${removed ? '；失效引用可在 Agent 冲突检测中查看' : ''}。`;
       return incoming.length;
@@ -505,8 +588,8 @@ export const useAgentOpsStore = defineStore('agentOps', () => {
     const privateLoading = skillsForTool(toolId).length > 0;
     return { direct, private: privateLoading, unloaded: !direct && !privateLoading };
   }
-  return { skills, dataEmployeeSkills, agentCallableSkills, availableSkillsForAgent, saveDataEmployeeSkill, tools, agents,
+  return { getSkillVersions, restoreSkillVersion, skills, dataEmployeeSkills, agentCallableSkills, availableSkillsForAgent, saveDataEmployeeSkill, tools, agents,
     agentDefaultConfig, customerAgentBindings, resolveAgentCapabilities, resolveAgentSystemPrompt, defaultFollowers, agentsUsingToolByDefault,
     customers, customerReports, saveCustomerAgents, resolveCustomerAgent, detectCustomerAgentConflicts,
-    saveAgent, skillsForTool, customerAgentsForTool, getToolLoading, agentSync, codeToolSync, syncAgents, syncCodeTools, saveMcp, deleteMcp, mcpUsage, testMcpConnection, syncMcpTools };
+    toolVersions, saveCodeTool, restoreCodeTool, saveAgent, skillsForTool, customerAgentsForTool, getToolLoading, agentSync, codeToolSync, syncAgents, syncCodeTools, saveMcp, deleteMcp, mcpUsage, testMcpConnection, syncMcpTools };
 });

@@ -65,6 +65,29 @@ const isSkillPreviewModalOpen = ref(false);
 const editingEmployeeId = ref('');
 const editingSkillId = ref('');
 const previewingSkill = ref<ManagedSkill | null>(null);
+const skillHistoryOpen = ref(false);
+const skillHistoryId = ref('');
+const skillHistoricalVersion = ref<number | null>(null);
+const skillHistory = computed(() => [...opsStore.getSkillVersions(skillHistoryId.value)].reverse());
+function openSkillHistory(skill: ManagedSkill) {
+  skillHistoryId.value = skill.id;
+  skillHistoryOpen.value = true;
+}
+function previewSkillVersion(version: number) {
+  const snapshot = skillHistory.value.find(item => item.version === version);
+  if (!snapshot) return;
+  previewingSkill.value = JSON.parse(JSON.stringify(snapshot.skill));
+  skillHistoricalVersion.value = version;
+  isSkillPreviewModalOpen.value = true;
+}
+function restoreHistoricalSkill() {
+  if (skillHistoricalVersion.value === null) return;
+  try {
+    opsStore.restoreSkillVersion(skillHistoryId.value, skillHistoricalVersion.value);
+    closeSkillPreviewModal();
+    ElMessage.success('已恢复历史版本，并生成新版本记录');
+  } catch (error) { ElMessage.error(error instanceof Error ? error.message : '恢复失败'); }
+}
 const validatingEmployee = ref<DataEmployee | null>(null);
 const visibleCustomerPasswordIds = ref<string[]>([]);
 const loginTypes: LoginType[] = ['无验证', '图形验证码', '短信验证码', '手机扫码'];
@@ -493,6 +516,7 @@ async function removeManagedSkill(skill: ManagedSkill) {
 }
 
 function showManagedSkill(skill: ManagedSkill) {
+  skillHistoricalVersion.value = null;
   previewingSkill.value = skill;
   isSkillPreviewModalOpen.value = true;
 }
@@ -700,7 +724,7 @@ function markTmsCustomerProcessed(customerId: string) {
                   <th class="w-[11%] px-3 py-3">密码</th>
                   <th class="w-[9%] px-3 py-3">状态</th>
                   <th class="w-[13%] px-3 py-3">提交时间</th>
-                  <th class="w-[15%] px-3 py-3">操作</th>
+                  <th class="w-[390px] px-3 py-3">操作</th>
                 </tr>
               </thead>
               <tbody class="divide-y divide-[#ededea]">
@@ -812,7 +836,7 @@ function markTmsCustomerProcessed(customerId: string) {
                   <th class="w-[15%] px-3 py-3">私有工具</th>
                   <th class="w-[15%] px-3 py-3">Skill 文件</th>
                   <th class="w-[12%] px-3 py-3">最后更新</th>
-                  <th class="w-[15%] px-3 py-3">操作</th>
+                  <th class="w-[390px] px-3 py-3">操作</th>
                 </tr>
               </thead>
               <tbody class="divide-y divide-[#ededea]">
@@ -848,28 +872,12 @@ function markTmsCustomerProcessed(customerId: string) {
                     <div class="mt-1 text-xs text-slate-400">{{ skill.updatedBy }}</div>
                   </td>
                   <td class="px-3 py-3 align-middle">
-                    <div class="flex items-center gap-1">
-                      <button type="button" class="flex h-7 w-7 items-center justify-center rounded-md border border-[#deded9] text-slate-500 hover:bg-white hover:text-slate-950" aria-label="显示 Skill" title="显示 Skill" @click="showManagedSkill(skill)">
-                        <Icon :svg="strokeIconPaths.eye" :size="14" />
-                      </button>
-                      <button type="button" class="flex h-7 w-7 items-center justify-center rounded-md border border-[#deded9] text-slate-500 hover:bg-white hover:text-slate-950" aria-label="配置 Skill" title="配置 Skill" @click="openEditSkillModal(skill)">
-                        <Icon :svg="strokeIconPaths.settings" :size="14" />
-                      </button>
-                      <label class="flex h-7 w-7 cursor-pointer items-center justify-center rounded-md border border-[#deded9] text-slate-500 hover:bg-white hover:text-slate-950" aria-label="更新上传 Skill" title="更新上传">
-                        <Icon :svg="strokeIconPaths.upload" :size="14" />
-                        <input class="hidden" type="file" accept=".md,.txt,.yaml,.yml" @change="uploadManagedSkill(skill, $event)" />
-                      </label>
-                      <button
-                        type="button"
-                        class="h-7 whitespace-nowrap rounded-md px-2 text-xs font-medium"
-                        :class="skill.enabled ? 'bg-amber-50 text-amber-700 hover:bg-amber-100' : 'bg-emerald-50 text-emerald-700 hover:bg-emerald-100'"
-                        @click="toggleManagedSkill(skill)"
-                      >
-                        {{ skill.enabled ? '禁用' : '启用' }}
-                      </button>
-                      <button type="button" class="flex h-7 w-7 items-center justify-center rounded-md text-slate-400 hover:bg-red-50 hover:text-red-600" aria-label="删除 Skill" title="删除 Skill" @click="removeManagedSkill(skill)">
-                        <Icon :svg="strokeIconPaths.trash" :size="14" />
-                      </button>
+                    <div class="skill-actions">
+                      <button type="button" @click="showManagedSkill(skill)">查看</button>
+                      <button type="button" @click="openEditSkillModal(skill)">配置</button>
+                      <label>更新上传<input class="hidden" type="file" accept=".md,.txt,.yaml,.yml" @change="uploadManagedSkill(skill, $event)" /></label>
+                      <button type="button" :class="skill.enabled ? 'skill-disable' : 'skill-enable'" @click="toggleManagedSkill(skill)">{{ skill.enabled ? '禁用' : '启用' }}</button>
+                      <button type="button" class="skill-delete" @click="removeManagedSkill(skill)">删除</button><button type="button" class="skill-history-action" @click="openSkillHistory(skill)">历史记录</button>
                     </div>
                   </td>
                 </tr>
@@ -916,7 +924,11 @@ function markTmsCustomerProcessed(customerId: string) {
       <template #footer><div class="dialog-footer"><span class="dialog-note">保存后同步更新 Tool 管理中的关联 Skill 列表。</span><div class="dialog-actions"><button type="button" class="ops-secondary" @click="closeSkillFormModal">取消</button><button type="submit" form="skill-config-form" class="ops-primary">{{ isEditingSkill ? '保存' : '添加' }}</button></div></div></template>
     </AppDialog>
 
-    <AppDialog v-if="previewingSkill" :model-value="isSkillPreviewModalOpen" :title="previewingSkill.name" width="820px" @update:model-value="closeSkillPreviewModal">
+    <AppDialog v-model="skillHistoryOpen" title="Skill 历史记录" width="820px">
+      <table class="skill-history-table"><thead><tr><th>版本</th><th>保存时间</th><th>操作人</th><th>查看详情</th></tr></thead><tbody><tr v-for="item in skillHistory" :key="item.version"><td>V{{ item.version }}{{ item.version === skillHistory[0]?.version ? '（当前）' : '' }}</td><td>{{ item.savedAt }}</td><td>{{ item.savedBy }}</td><td><button type="button" @click="previewSkillVersion(item.version)">查看详情</button></td></tr></tbody></table>
+      <template #footer><button type="button" class="dialog-button" @click="skillHistoryOpen = false">关闭</button></template>
+    </AppDialog>
+    <AppDialog v-if="previewingSkill" :model-value="isSkillPreviewModalOpen" :title="`${previewingSkill.name}${skillHistoricalVersion !== null ? ' · V' + skillHistoricalVersion : ''}`" width="820px" @update:model-value="closeSkillPreviewModal">
         <p class="dialog-description">{{ previewingSkill.fileName }}</p>
         <div class="mb-4 flex flex-wrap gap-x-5 gap-y-1 border-b border-[#e2e2dc] pb-4 text-xs text-slate-500">
           <span>分类：<strong class="font-medium text-slate-700">{{ previewingSkill.category }}</strong></span>
@@ -926,7 +938,7 @@ function markTmsCustomerProcessed(customerId: string) {
           <p class="w-full pt-1 text-sm leading-5 text-slate-600">{{ previewingSkill.description }}</p>
         </div>
         <pre class="overflow-auto whitespace-pre-wrap rounded-md bg-[#f8f9fa] p-4 text-xs leading-6 text-slate-700">{{ previewingSkill.content }}</pre>
-        <template #footer><div class="dialog-actions"><button type="button" class="dialog-button" @click="closeSkillPreviewModal">关闭</button><button type="button" class="dialog-button dialog-primary" @click="downloadTextFile(previewingSkill.fileName, previewingSkill.content)"><Icon :svg="strokeIconPaths.download" :size="15" />下载</button></div></template>
+        <template #footer><div class="dialog-actions"><button v-if="skillHistoricalVersion !== null" type="button" class="dialog-button dialog-primary" :disabled="skillHistoricalVersion === skillHistory[0]?.version" @click="restoreHistoricalSkill">恢复此版本</button><button type="button" class="dialog-button" @click="closeSkillPreviewModal">关闭</button><button type="button" class="dialog-button dialog-primary" @click="downloadTextFile(previewingSkill.fileName, previewingSkill.content)"><Icon :svg="strokeIconPaths.download" :size="15" />下载</button></div></template>
     </AppDialog>
 
     <AppDialog v-if="validatingEmployee" :model-value="isValidationModalOpen" title="验证数据员工" width="760px" @update:model-value="closeValidationModal">
@@ -1139,4 +1151,22 @@ function markTmsCustomerProcessed(customerId: string) {
   .ops-catalog-screen .ops-main > aside > nav button { width: auto; flex-shrink: 0; padding: 8px; margin: 0; white-space: nowrap; }
 }
 .ops-catalog-screen .ops-main.is-agent-editor { display: block; padding: 0; }
+</style>
+
+<style scoped>
+.skill-actions { display: flex; align-items: center; gap: 16px; white-space: nowrap; font-size: 14px; color: #409eff; }
+.skill-actions button, .skill-actions label { cursor: pointer; padding: 4px 0; background: transparent; border: 0; }
+.skill-actions button:hover, .skill-actions label:hover { text-decoration: underline; }
+.skill-actions .skill-disable { color: #e6a23c; }
+.skill-actions .skill-enable { color: #67c23a; }
+.skill-actions .skill-delete { color: #f56c6c; }
+</style>
+<style scoped>
+.skill-history-table { width: 100%; text-align: left; border-collapse: collapse; font-size: 13px; }
+.skill-history-table th { background: #f7f8fa; color: #909399; }
+.skill-history-table th, .skill-history-table td { padding: 14px; border-bottom: 1px solid #e7ecf3; }
+.skill-history-table button { color: #409eff; }
+</style>
+<style scoped>
+.skill-actions .skill-history-action { color: #67c23a; }
 </style>
