@@ -1,0 +1,20 @@
+import assert from 'node:assert/strict';
+import { activeConversationContext, conversationBusy, persistProjectChats, restoreProjectChats } from '../src/views/AgentWork/conversationSegments.ts';
+const finished = 100000;
+const messages = [{ role: 'user', text: '旧问题' }, { role: 'agent', text: '旧结果', completedAt: finished, pendingPredictionPrompt: '旧参数' }];
+// Old completion timestamps must not discard context, even after several days.
+assert.deepEqual(activeConversationContext(messages), messages);
+const divider = { role: 'agent', text: '已分割', sessionDivider: { reason: 'manual', createdAt: finished + 1 } };
+assert.deepEqual(activeConversationContext([...messages, divider]), []);
+const current = { role: 'user', text: '新问题' };
+assert.deepEqual(activeConversationContext([...messages, divider, current]), [current]);
+assert.equal(conversationBusy([{ role: 'agent', text: '', streaming: true }]), true);
+const memory = new Map();
+globalThis.localStorage = { getItem: (key) => memory.get(key), setItem: (key, value) => memory.set(key, value) };
+persistProjectChats({ P001: [...messages, divider], PSC3: [{ role: 'agent', text: '结果', completedAt: finished, file: { url: 'blob:old', name: '结果.xlsx' } }] });
+assert.deepEqual(restoreProjectChats().P001, [...messages, divider]);
+assert.equal(restoreProjectChats().PSC3[0].file, undefined);
+assert.equal(restoreProjectChats().PSC3[0].completedAt, finished);
+memory.set('iovagent_project_chats_v1', 'bad JSON');
+assert.deepEqual(restoreProjectChats(), {});
+console.log('Manual conversations: old history retained, explicit context isolation, busy protection and project persistence passed.');

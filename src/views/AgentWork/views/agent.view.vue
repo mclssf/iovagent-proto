@@ -20,6 +20,7 @@ import { useAgentWorkNav } from '../useAgentWorkNav';
 import WaybillImportDialog from '../component/waybillImport.dialog.vue';
 import AnalysisReportView from './analysisReport.view.vue';
 import ProjectMonitors from '../component/projectMonitors.comp.vue';
+import ConversationBoundary from '../component/conversationBoundary.comp.vue';
 import '../agentWorkspace.css';
 
 const store = agentWorkData();
@@ -375,6 +376,7 @@ function confirmWaybillImport(payload: { mode: 'create' | 'merge'; projectId: st
 }
 
 function sendComposerMessage() {
+  if (store.isChatOutputBusy) return;
   const text = agentInput.value.trim();
   if (!text && uploadedFiles.value.length === 0) return;
   isFollowingLatest.value = true;
@@ -822,6 +824,7 @@ onBeforeUnmount(() => {
           </div>
         </div>
         <div class="flex shrink-0 items-center gap-2">
+        <button v-if="store.workspaceMode === 'project'" type="button" class="rounded border border-slate-200 px-2.5 py-1 text-xs text-slate-600 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-40" :disabled="store.isChatOutputBusy || !store.activeChatContext.length" title="保留历史消息，后续提问不带入此前聊天记录" @click="store.splitProjectConversation()">开始新对话</button>
         <button v-if="store.workspaceMode === 'project'" ref="taskToggleRef" type="button" class="agent-task-toggle" aria-label="持续任务" title="持续任务" :aria-expanded="isTaskCardOpen" aria-controls="project-task-card" @click="isTaskCardOpen = !isTaskCardOpen">
           <Icon :svg="strokeIconPaths.alarmClock" :size="15" /><span>持续任务</span>
         </button>
@@ -867,7 +870,9 @@ onBeforeUnmount(() => {
             </div>
           </div>
           <div v-for="(m, i) in displayedMessages" :key="i" class="agent-message-row flex" :class="m.role === 'user' ? 'justify-end' : 'justify-start'">
+            <ConversationBoundary v-if="m.sessionDivider" :created-at="m.sessionDivider.createdAt" />
             <div
+              v-else
               class="agent-message rounded-md text-sm leading-6"
               :class="[
                 m.role === 'user' ? 'is-user bg-slate-900 px-4 py-3 text-white' : m.title ? 'is-agent border border-[#deded9] bg-white px-4 py-3 text-slate-700' : 'is-agent text-slate-700',
@@ -926,14 +931,22 @@ onBeforeUnmount(() => {
                 </template>
               </div>
               <div v-if="m.predictionReport" class="space-y-4 px-3 text-xs leading-5 text-slate-600">
-                <section v-if="m.predictionReport.kind === 'waybill' && m.predictionReport.taskProgress?.length" class="max-w-[440px] rounded-md border border-slate-200 bg-white p-3">
-                  <div class="mb-2 flex items-center justify-between"><h3 class="font-semibold text-slate-900">任务进度</h3><span class="rounded-full border border-slate-200 px-2 text-[10px]">7 项</span></div>
+                <section v-if="m.predictionReport.taskProgress?.length" class="max-w-[440px] rounded-md border border-slate-200 bg-white p-3">
+                  <div class="mb-2 flex items-center justify-between"><h3 class="font-semibold text-slate-900">任务进度</h3><span class="rounded-full border border-slate-200 px-2 text-[10px]">{{ m.predictionReport.taskProgress.length }} 项</span></div>
                   <div v-for="item in m.predictionReport.taskProgress" :key="item.title" class="mt-2 flex items-start justify-between gap-3 rounded border border-slate-200 p-2">
                     <div><h4 class="font-medium text-slate-900">{{ item.title }}</h4><p class="mt-1 text-[11px] text-slate-500">{{ item.text }}</p></div><span class="shrink-0 rounded-full bg-emerald-50 px-2 py-0.5 text-[10px] text-emerald-700">已完成</span>
                   </div>
                 </section>
-                <section v-if="m.predictionReport.kind === 'waybill' && m.predictionReport.introduction">
-                  <h3 class="mb-1 font-semibold text-slate-900">运单真实性核验完成</h3><p>{{ m.predictionReport.introduction }}</p>
+                <section v-if="m.predictionReport.introduction">
+                  <h3 class="mb-1 font-semibold text-slate-900">{{ m.predictionReport.kind === 'stop-risk' ? '异常停靠风险研判完成' : '运单真实性核验完成' }}</h3><p>{{ m.predictionReport.introduction }}</p>
+                </section>
+                <section v-if="m.predictionReport.overview?.length" class="overflow-x-auto">
+                  <h3 class="mb-2 font-semibold text-slate-900">数据概况</h3>
+                  <table class="w-full border-collapse text-left"><thead class="bg-slate-100"><tr><th class="border border-slate-200 p-2">项目</th><th class="border border-slate-200 p-2">数量</th><th class="border border-slate-200 p-2">占比</th></tr></thead><tbody><tr v-for="item in m.predictionReport.overview" :key="item.label"><td class="border border-slate-200 p-2">{{ item.label }}</td><td class="border border-slate-200 p-2">{{ item.count }} {{ item.label === '涉及车辆' ? '辆' : '条' }}</td><td class="border border-slate-200 p-2">{{ item.percent }}</td></tr></tbody></table>
+                </section>
+                <section v-if="m.predictionReport.riskDistribution?.length" class="overflow-x-auto">
+                  <h3 class="mb-2 font-semibold text-slate-900">风险分布</h3>
+                  <table class="w-full border-collapse text-left"><thead class="bg-slate-100"><tr><th class="w-[26%] border border-slate-200 p-2">风险等级</th><th class="w-[13%] border border-slate-200 p-2">数量</th><th class="border border-slate-200 p-2">说明</th></tr></thead><tbody><tr v-for="item in m.predictionReport.riskDistribution" :key="item.label"><td class="border border-slate-200 p-2 font-medium" :class="item.label.endsWith('高风险') ? 'text-red-700' : item.label.endsWith('低风险') ? 'text-amber-700' : 'text-emerald-700'">{{ item.label }}</td><td class="border border-slate-200 p-2">{{ item.count }} 条</td><td class="border border-slate-200 p-2">{{ item.note }}</td></tr></tbody></table>
                 </section>
                 <section v-if="m.predictionReport.summary.length">
                   <h3 class="mb-2 font-semibold text-slate-900">解析摘要</h3>
@@ -982,7 +995,7 @@ onBeforeUnmount(() => {
                 </table>
               </div>
               <section v-if="m.predictionReport?.analyses.length" class="mt-4 px-3 text-xs leading-5 text-slate-600">
-                <h3 class="mb-2 font-semibold text-slate-900">{{ m.predictionReport.kind === 'waybill' ? '关键发现' : '逐行分析' }}</h3>
+                <h3 class="mb-2 font-semibold text-slate-900">{{ m.predictionReport.kind === 'stop-risk' ? '风险分析摘要' : m.predictionReport.kind === 'waybill' ? '关键发现' : '逐行分析' }}</h3>
                 <div v-for="item in m.predictionReport.analyses" :key="item.title" class="border-b border-slate-200 py-3 last:border-0">
                   <h4 class="mb-1 font-medium text-slate-900">{{ item.title }}</h4>
                   <ul v-if="item.points.length" class="list-disc space-y-1 pl-4"><li v-for="point in item.points" :key="point">{{ point }}</li></ul>
@@ -997,12 +1010,12 @@ onBeforeUnmount(() => {
               </section>
               <section v-if="m.predictionReport?.exportSummary || m.predictionReport?.boundaries.length" class="mt-4 px-3 text-xs leading-5 text-slate-600">
                 <div v-if="m.predictionReport.exportSummary" class="border-t border-slate-200 pt-3">
-                  <h3 class="mb-1 flex items-center gap-1.5 font-semibold text-slate-900"><Icon :svg="strokeIconPaths.fileSpreadsheet" :size="14" />{{ m.predictionReport.kind === 'waybill' ? '核验结果文件' : '结果文件' }}</h3>
+                  <h3 class="mb-1 flex items-center gap-1.5 font-semibold text-slate-900"><Icon :svg="strokeIconPaths.fileSpreadsheet" :size="14" />{{ m.predictionReport.kind === 'stop-risk' ? '研判结果文件' : m.predictionReport.kind === 'waybill' ? '核验结果文件' : '结果文件' }}</h3>
                   <p>{{ m.predictionReport.exportSummary }}</p>
-                  <a v-if="m.file" :href="m.file.url" :download="m.file.name" :aria-label="`下载 ${m.file.name}`" class="mt-2 inline-flex items-center gap-1.5 rounded-md border border-emerald-300 bg-emerald-50 px-3 py-2 font-medium text-emerald-700 hover:bg-emerald-100"><Icon :svg="strokeIconPaths.download" :size="14" />{{ m.verificationRows?.length ? '下载轨迹核验结果文件' : '下载核验结果文件' }}</a>
+                  <a v-if="m.file" :href="m.file.url" :download="m.file.name" :aria-label="`下载 ${m.file.name}`" class="mt-2 inline-flex items-center gap-1.5 rounded-md border border-emerald-300 bg-emerald-50 px-3 py-2 font-medium text-emerald-700 hover:bg-emerald-100"><Icon :svg="strokeIconPaths.download" :size="14" />{{ m.predictionReport.kind === 'stop-risk' ? '下载异常停靠风险研判报告' : m.verificationRows?.length ? '下载轨迹核验结果文件' : '下载核验结果文件' }}</a>
                 </div>
                 <div v-if="m.predictionReport.boundaries.length" class="mt-4 border-t border-slate-200 pt-3">
-                  <h3 class="mb-2 font-semibold text-slate-900">{{ m.predictionReport.kind === 'waybill' ? '数据边界说明' : '数据边界与核验建议' }}</h3>
+                  <h3 class="mb-2 font-semibold text-slate-900">{{ m.predictionReport.kind === 'stop-risk' ? '建议措施' : m.predictionReport.kind === 'waybill' ? '数据边界说明' : '数据边界与核验建议' }}</h3>
                   <p v-for="item in m.predictionReport.boundaries" :key="item.label" class="mb-2"><strong class="font-medium text-slate-900">{{ item.label }}：</strong>{{ item.text }}</p>
                 </div>
               </section>

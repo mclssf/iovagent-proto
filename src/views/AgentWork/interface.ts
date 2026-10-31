@@ -211,7 +211,9 @@ export interface ChatMessage {
   verificationRows?: { row: string; sourceIndex?: number; order: string; plate: string; color: string; start: string; end: string; startPosition: string; endPosition: string; conclusion: string; hint: string }[];
   pendingPredictionPrompt?: string;
   predictionReport?: {
-    kind?: 'waybill';
+    kind?: 'waybill' | 'stop-risk';
+    overview?: { label: string; count: number; percent: string }[];
+    riskDistribution?: { label: string; count: number; note: string }[];
     introduction?: string;
     taskProgress?: { title: string; text: string }[];
     exportSummary: string;
@@ -225,6 +227,8 @@ export interface ChatMessage {
   streaming?: boolean;
   predictionRows?: { row: string; plate: string; status: string; start: string; end: string; startText: string; endText: string; startLocation: string; endLocation: string; hint: string; order?: string; sourceStartTime?: string; coordinate?: string; stopTime?: string; stopEndTime?: string; parkingDistance?: string; endCoordinate?: string; endStopTime?: string }[];
   role: 'agent' | 'user';
+  completedAt?: number;
+  sessionDivider?: { reason: 'manual' | 'automatic'; createdAt: number };
   text: string;
   title?: string;
   status?: string;

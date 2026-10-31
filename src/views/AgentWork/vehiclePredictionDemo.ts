@@ -1,5 +1,6 @@
 import type { ChatMessage } from './interface';
 import { cleanOutputText } from './outputWording.ts';
+import { createStopRiskFixture, stopRiskRules } from './stopRiskAnalysis.ts';
 // Local simulation only. Historical samples are tied to each source order's
 // times and locations; these are never described as real tool responses.
 const formatTime = (ms: number) => new Date(ms + 8 * 3600000).toISOString().slice(0, 19).replace('T', ' ');
@@ -544,6 +545,130 @@ export async function runWaybillTraceVerifierDemo(file: File): Promise<ChatMessa
       boundaries: [{ label: '事件核验', text: '围栏进出时间与运输节点时间分别核对；无事件记录表示证据不足。' }, { label: '位置核验', text: '历史节点回放与最近定位分开；核验时间容差5分钟、距离范围1000米，超时记录支持重试。' }, { label: '总核验结论', text: `${totalSummary}；异常原因包括时间不符、位置偏离、查询超时及定位记录过早。` }],
     },
     file: { name: `${cleanOutputText(file.name.replace(/\.xlsx$/i, ''))}_轨迹核验_${timestamp}.xlsx`, url: downloadUrl(data), description: `${details.length} 行 · 逐单核验 · 原表保留` },
+  };
+}
+
+export async function runStopRiskAnalysisDemo(file: File): Promise<ChatMessage> {
+  if (!/\.xlsx$/i.test(file.name)) throw new Error('请上传 .xlsx 文件');
+  if (file.size > 10 * 1024 * 1024) throw new Error('文件不能超过 10 MB');
+  const source = await workbook();
+  await source.xlsx.load(await file.arrayBuffer());
+  const response = await fetch('/demo/stop-risk-output-template.xlsx');
+  if (!response.ok) throw new Error('风险分析输出模板加载失败，请重试');
+  const template = await workbook();
+  await template.xlsx.load(await response.arrayBuffer());
+  const format = template.worksheets[0]!;
+  const headers = Array.from({ length: format.columnCount }, (_, i) => format.getRow(1).getCell(i + 1).text);
+  const result = await workbook();
+  const output = result.addWorksheet(format.name);
+  output.addRow(headers);
+  output.views = [{ state: 'frozen', ySplit: 1, tabSelected: true }];
+  result.views = [{ activeTab: 0, firstSheet: 0, visibility: 'visible' }];
+  output.columns.forEach((column, i) => { column.width = format.columns[i]?.width || 24; });
+  const aliases: Record<string, string[]> = {
+    '订单号': ['订单号', '运单编号', '运单号'], '车牌号': ['车牌号', '车船号码', 'plateNo'], '车牌颜色': ['车牌颜色', 'plateColor'],
+    '订单状态': ['订单状态', '状态'], '发货工厂': ['发货工厂', '装货地', '装货地址', '起始地'], '卸货点': ['卸货点', '收货地址', '卸货地址', '目的地'],
+    '进厂时间': ['进厂时间'], '出厂时间': ['出厂时间', '开始时间', 'startTime'], '订单结束时间': ['订单结束时间', '结束时间', '完成时间', 'endTime'],
+    '发货重量': ['发货重量', '发货重量[吨]'], '总里程': ['总里程', '运输里程', '运输里程(公里)'], '途经城市': ['途经城市', '销往地区'],
+  };
+  const riskCounts = { 无风险: 0, 低风险: 0, 高风险: 0 };
+  const plates = new Set<string>();
+  const dates: number[] = [];
+  let total = 0, blocked = 0, highMinutes = 0, longestHigh = 0;
+  for (const sheet of source.worksheets) {
+    const sourceHeaders = Array.from({ length: sheet.columnCount }, (_, i) => sheet.getRow(1).getCell(i + 1).text.trim());
+    if (!sourceHeaders.some((header) => aliases['车牌号']!.includes(header))) continue;
+    if (sheet.rowCount > 501) throw new Error('每张工作表最多处理 500 行，请拆分文件');
+    const mapped: Record<string, number> = {};
+    for (const [key, options] of Object.entries(aliases)) {
+      const header = options.find((option) => sourceHeaders.includes(option));
+      if (!header) continue;
+      if (sourceHeaders.filter((item) => item === header).length > 1) throw new Error(`${sheet.name} 的“${header}”表头重复，请先确认字段映射`);
+      mapped[key] = sourceHeaders.indexOf(header) + 1;
+    }
+    for (let rowNo = 2; rowNo <= sheet.rowCount; rowNo++) {
+      const row = sheet.getRow(rowNo);
+      if (!sourceHeaders.some((_, i) => row.getCell(i + 1).text.trim())) continue;
+      const read = (key: string) => mapped[key] ? row.getCell(mapped[key]!).text.trim() : '';
+      const date = (key: string) => mapped[key] ? waybillTime(row.getCell(mapped[key]!)) : '';
+      const startMs = parseTime(date('出厂时间')), endMs = parseTime(date('订单结束时间'));
+      const plate = read('车牌号').replace(/\s+/g, '').toUpperCase();
+      const values: Record<string, unknown> = {};
+      for (const header of headers.slice(0, 10)) values[header] = mapped[header] ? row.getCell(mapped[header]!).value : '未提供';
+      values['车牌号'] = plate || '未提供';
+      values['车牌颜色'] = read('车牌颜色') || (plate.length === 8 ? '黄绿色' : '黄色');
+      const reasons: string[] = [];
+      if (!plate) reasons.push('缺少车牌号');
+      if (!read('发货工厂') || !read('卸货点')) reasons.push('缺少装卸地点');
+      if (startMs === undefined || endMs === undefined || endMs - startMs < 60000) reasons.push('运输开始、结束时间缺失或顺序无效');
+      if (plate) plates.add(plate);
+      if (reasons.length) {
+        blocked++;
+        for (const header of headers.slice(10)) values[header] = '未处理';
+        values['轨迹数据状态'] = '待补充'; values['总体风险等级'] = '待核验'; values['风险说明'] = reasons.join('；');
+      } else {
+        dates.push(startMs!, endMs!);
+        const rawKm = Number(read('总里程').replace(/[^\d.]/g, ''));
+        const distance = Number((rawKm > 0 ? rawKm : (endMs! - startMs!) / 3600000 * 25).toFixed(1));
+        const region = read('途经城市').split(/[、，,]/)[0] || read('发货工厂').match(/^(.{2,6}?[市县区])/)?.[1] || '运输线路中段';
+        const fixture = createStopRiskFixture({ index: total - blocked, startMs: startMs!, endMs: endMs!, distanceKm: distance, region });
+        riskCounts[fixture.risk as keyof typeof riskCounts]++;
+        if (fixture.risk === '高风险') { highMinutes += fixture.longest; longestHigh = Math.max(longestHigh, fixture.longest); }
+        const minutes = (value: number) => `${Number(value.toFixed(2))} 分钟`;
+        Object.assign(values, {
+          '轨迹数据状态': '有效', '总里程': `${distance} km`, '最高速度': `${fixture.speed} km/h`, '停车次数': `${fixture.stops.length} 次`, '途经城市': read('途经城市') || region,
+          '异常停靠次数': `${fixture.abnormalCount} 次`, '最长停靠时长': minutes(fixture.longest),
+          '路线分析': '正常', '路线说明': '运输线路连续；停靠风险独立依据地点类型、时长与计划外作业可能性判断',
+          '速度分析': fixture.speed > 100 ? '待复核' : '正常', '速度说明': `最高速度 ${fixture.speed} km/h${fixture.speed > 100 ? '，需核实限速及定位记录' : '，未发现异常速度段'}`,
+          '时效分析': fixture.risk === '高风险' ? '需关注' : '正常', '时效说明': `运输时长 ${minutes((endMs! - startMs!) / 60000)}，累计停靠 ${minutes(fixture.stops.reduce((sum, stop) => sum + stop.minutes, 0))}`,
+          '总体风险等级': fixture.risk, '风险说明': `${fixture.category}：${fixture.explanation}`,
+        });
+        for (let i = 0; i < 3; i++) {
+          const stop = fixture.stops[i];
+          values[`停靠点${i + 1}位置`] = stop?.place || '无';
+          values[`停靠点${i + 1}时长`] = stop ? minutes(stop.minutes) : '0 分钟';
+          values[`停靠点${i + 1}风险`] = stop?.risk || '无风险';
+          values[`停靠点${i + 1}说明`] = stop ? `${formatTime(stop.startMs)} 至 ${formatTime(stop.endMs)}；${stop.note}` : '没有其他停靠点';
+        }
+      }
+      total++;
+      output.addRow(headers.map((header) => values[header] ?? '未提供'));
+    }
+  }
+  if (!total) throw new Error('未识别到运单数据，请检查首行表头及车牌字段');
+  for (let rowNo = 1; rowNo <= output.rowCount; rowNo++) {
+    const target = output.getRow(rowNo);
+    target.height = rowNo === 1 ? 32 : 78;
+    headers.forEach((_, i) => { target.getCell(i + 1).style = { ...(structuredClone(format.getRow(rowNo === 1 ? 1 : 2).getCell(i + 1).style) as object), alignment: { vertical: 'top', wrapText: true } }; });
+  }
+  const valid = total - blocked;
+  const percent = (count: number) => `${Number((count / total * 100).toFixed(1))}%`;
+  const period = dates.length ? `${formatTime(Math.min(...dates)).slice(0, 10)} 至 ${formatTime(Math.max(...dates)).slice(0, 10)}` : '时间待补充';
+  return {
+    role: 'agent', text: '', title: '车辆异常停靠分析', status: '已完成', progressMode: true,
+    predictionReport: {
+      kind: 'stop-risk', introduction: `已完成 ${total} 条运单（涉及 ${plates.size} 辆车）的异常停靠风险分析，运输日期为 ${period}。`,
+      taskProgress: [
+        { title: '读取 Excel 数据', text: `读取 ${total} 条运单并提取车辆、地点及运输时间` },
+        { title: '整理车辆轨迹与停靠', text: `按运单运输时间整理 ${valid} 条轨迹及停靠记录` },
+        { title: '异常停靠风险分析', text: '结合停靠地点类型、时长与运输计划识别三类风险' },
+        { title: '生成研判报告', text: '按附件表头生成风险研判 Excel 报告' },
+      ],
+      overview: [{ label: '运单总数', count: total, percent: '100%' }, { label: '涉及车辆', count: plates.size, percent: '—' }, { label: '轨迹数据有效', count: valid, percent: percent(valid) }, { label: '待补充字段', count: blocked, percent: percent(blocked) }],
+      riskDistribution: [
+        { label: '正常停靠-无风险', count: riskCounts.无风险, note: stopRiskRules.normal },
+        { label: '异常停靠-低风险', count: riskCounts.低风险, note: stopRiskRules.low },
+        { label: '异常停靠-高风险', count: riskCounts.高风险, note: stopRiskRules.high },
+      ],
+      summary: [], fields: [], statistics: [], judgments: [],
+      analyses: [
+        { title: '高风险停靠汇总', points: [riskCounts.高风险 ? `${riskCounts.高风险} 条运单在非计划生产制造类地点停靠，重点停靠累计 ${Number(highMinutes.toFixed(2))} 分钟，单次最长 ${Number(longestHigh.toFixed(2))} 分钟；相关场所具备装卸条件，需排查疑似偷卸、串货或异常交付。` : '本批次未发现生产制造类地点的高风险中途停靠。'] },
+        { title: '重点关注', points: [`公共停车区低风险 ${riskCounts.低风险} 条，单独命中不能认定装卸货；应结合长停、多车聚集及轨迹连续性复核，生产制造类高风险 ${riskCounts.高风险} 条优先确认是否为授权作业点。`] },
+      ],
+      exportSummary: `报告共 ${total} 条运单、${headers.length} 列，包含原始运单字段、轨迹数据状态、总里程、速度、停靠位置与时长、路线及时效分析、风险等级和风险说明。`,
+      boundaries: [{ label: '处置建议', text: '无风险记录常规留档；公共停车区重点观察停靠时长与多车聚集；生产制造类地点优先核对运输授权、司机说明及货物交接证据，确认后再处置。' }, ...(blocked ? [{ label: '待补充', text: `${blocked} 条运单因字段缺失或时间无效未参与风险分布，具体原因已写入报告。` }] : [])],
+    },
+    file: { name: `异常停靠风险研判报告_${formatTime(Date.now()).replace(/[- :]/g, '')}.xlsx`, url: downloadUrl(await buffer(result)), description: `${total} 条运单 · ${headers.length} 列` },
   };
 }
 

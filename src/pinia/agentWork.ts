@@ -1,7 +1,8 @@
 import { migrateCapacitySkillIds } from './capacitySkills';
 import { hasVehiclePredictionIntent } from '@/views/AgentWork/vehiclePredictionSkill';
-import { runPredictionDemo, runWaybillAuthenticityDemo, runWaybillTraceVerifierDemo } from '@/views/AgentWork/vehiclePredictionDemo';
+import { runPredictionDemo, runWaybillAuthenticityDemo, runWaybillTraceVerifierDemo, runStopRiskAnalysisDemo } from '@/views/AgentWork/vehiclePredictionDemo';
 import { cleanOutputValue } from '@/views/AgentWork/outputWording';
+import { activeConversationContext, conversationBusy, restoreProjectChats, persistProjectChats } from '@/views/AgentWork/conversationSegments';
 import shipperMonitorSource from '@/views/AgentWork/shipperMonitorOrders.json';
 import type {
   AgentConversation,
@@ -78,13 +79,13 @@ const projectsSeed: Project[] = [
       mailboxSkill.id,
     ],
   },
-  ...['运单真实性甄别', '货主运单监控（司机付费）', '在途停靠风险研判', '货物在途追踪与填报', '经验路线规划与偏航预警', '多源订单归集与录入', '回单自动关联审核'].map((name, index): Project => ({
+  ...['运单真实性甄别', '货主运单监控（司机付费）', '异常停靠点风险分析', '货物在途追踪与填报', '经验路线规划与偏航预警', '多源订单归集与录入', '回单自动关联审核'].map((name, index): Project => ({
     id: `PSC${index + 1}`, name, status: '已连接', sync: '暂无数据', total: 0, risk: 0,
     tmsUrl: 'https://tms.huadong.example.com', tmsUser: 'demo_user', keyword: name, statusFilter: '全部', skillIds: ['capacity-cargo-publish', 'capacity-quote-collection'],
     quickPrompts: [
       ['运单真实性', '核验上传历史运单的运单真实性，检查出厂与完成时车辆是否在对应地点', '根据上传订单明细核验运单真实性，汇总区域事件和位置证据并导出 Excel'],
       ['监控司机进场与离场时间', '核验车辆是否进入货主场站', '汇总司机进场监控结果'],
-      ['研判在途异常停靠风险', '分析长时间停车及疑似非计划卸货', '结合轨迹识别高风险停靠点'],
+      ['分析车辆异常停靠风险', '分析公共停车区与生产制造类地点的停靠风险', '汇总异常停靠点风险分析并导出报告'],
       ['根据上传表格补充在途运单', '查询运单状态并填写客服表格', '补充车辆位置与预计到达时间'],
       ['按历史经验规划运输路线', '检查车辆是否偏离计划路线', '分析偏航原因并提出处理建议'],
       ['汇总多源运单并检查重复记录', '将上传订单整理为标准运单', '校验录单字段与缺失信息'],
@@ -1374,6 +1375,7 @@ export const agentWorkData = defineStore('agentWork', {
       .filter((project) => projectsSeed.some((seed) => seed.id === project.id))
       .map((project) => ({ ...project, total: project.id === 'PSC2' ? 2 : 0, risk: project.id === 'PSC2' ? 1 : 0, sync: project.id === 'PSC2' ? '附件已导入' : '暂无数据', status: '已连接', name: projectsSeed.find((seed) => seed.id === project.id)!.name, quickPrompts: projectsSeed.find((seed) => seed.id === project.id)!.quickPrompts, skillIds: project.id === 'P001' ? ensureRequiredMonitorSkills(migrateCapacitySkillIds(project.skillIds ?? [])) : project.skillIds }));
     persistMailboxProjects(projects);
+    const projectChats = restoreProjectChats();
     return {
       ordersStartDate: defaultOrdersDateRange.start,
       ordersEndDate: defaultOrdersDateRange.end,
@@ -1390,7 +1392,8 @@ export const agentWorkData = defineStore('agentWork', {
       downloadTask: null as DownloadTask | null,
       selectedOrder: { ...ordersSeedData[0]! } as Order,
       agentInput: '',
-      agentMessages: projectWelcomeMessages.map((message) => ({ ...message })) as ChatMessage[],
+      agentMessages: cloneChatMessages(projectChats[projectsSeed[0]!.id] || projectWelcomeMessages),
+      projectChats,
       rightPanel: 'overview',
       externalH5Title: '',
       externalH5Url: '',
@@ -1430,6 +1433,10 @@ export const agentWorkData = defineStore('agentWork', {
     };
   },
   getters: {
+    activeChatContext(state): ChatMessage[] {
+      return state.workspaceMode === 'project' ? activeConversationContext(state.agentMessages) : state.agentMessages;
+    },
+    isChatOutputBusy(state): boolean { return conversationBusy(state.agentMessages); },
     unprocessedTmsSyncCustomerCount(state): number {
       return state.tmsSyncCustomers.filter((customer) => customer.status === '未处理').length;
     },
@@ -1555,6 +1562,14 @@ export const agentWorkData = defineStore('agentWork', {
     },
   },
   actions: {
+    splitProjectConversation(now = Date.now()) {
+      if (this.workspaceMode !== 'project' || this.isChatOutputBusy || !this.activeChatContext.length) return false;
+      this.agentMessages.push({ role: 'agent', text: '已为您开启新对话，后续提问不会带入此前聊天记录。', sessionDivider: { reason: 'manual', createdAt: now } });
+      this.rightPanel = 'overview';
+      this.persistActiveConversationMessages();
+      ElMessage.success('已为您开启新对话，后续提问不会带入此前聊天记录。');
+      return true;
+    },
     syncPredictionOrders(message: ChatMessage) {
       if (this.currentProjectId !== 'P001' || !message.predictionRows?.length) return;
       const uploadedOrders: Order[] = cleanOutputValue(message.predictionRows).map((row) => ({
@@ -1784,6 +1799,15 @@ export const agentWorkData = defineStore('agentWork', {
       ElMessage.success(`演示：已从 ${fileName} 导入 1 条熟车运力`);
     },
     persistActiveConversationMessages() {
+      if (this.workspaceMode === 'project') {
+        const now = Date.now();
+        for (const message of this.agentMessages) {
+          if (message.role === 'agent' && !message.sessionDivider && !message.streaming && !['处理中', '已中断'].includes(message.status || '') && !message.completedAt) message.completedAt = now;
+        }
+        this.projectChats[this.currentProjectId] = cloneChatMessages(this.agentMessages);
+        persistProjectChats(this.projectChats);
+        return;
+      }
       if (this.workspaceMode !== 'conversation' || !this.currentConversationId) return;
       this.recentConversations = this.recentConversations.map((conversation) =>
         conversation.id === this.currentConversationId
@@ -1922,7 +1946,7 @@ export const agentWorkData = defineStore('agentWork', {
         this.ordersStartDate = '2026-08-01';
         this.ordersEndDate = '2026-08-01';
       }
-      this.agentMessages = p.id === 'P001' ? cloneChatMessages(projectWelcomeMessages) : [];
+      this.agentMessages = cloneChatMessages(this.projectChats[p.id] || (p.id === 'P001' ? projectWelcomeMessages : []));
       this.agentInput = '';
       this.rightPanel = 'overview';
       ElMessage.success(`已切换到：${p.name}`);
@@ -2080,11 +2104,27 @@ export const agentWorkData = defineStore('agentWork', {
     },
     /** 智能体对话：由调用方传入 `navigate`，避免 store 依赖 router */
     async appendAgentExchange(text: string | undefined, navigate: (page: PageId) => void, attachments: TaskAttachment[] = []) {
+      if (this.isChatOutputBusy) return;
       clearAgentProcessTimers();
       const raw = text ?? this.agentInput;
       if (!raw.trim()) return;
       this.ensureConversationStarted();
       const next: ChatMessage[] = [...this.agentMessages, { role: 'user', text: raw }];
+      if (this.currentProjectId === 'PSC3' && (/停靠|停车|风险/.test(raw) || attachments.length > 0)) {
+        this.agentMessages = [...next, { role: 'agent', text: '正在读取运单、整理停靠记录并分析地点风险…', status: '处理中' }];
+        const placeholder = this.agentMessages.at(-1);
+        this.agentInput = '';
+        try {
+          if (attachments.length !== 1 || !(attachments[0] instanceof File)) throw new Error('请手动上传一个 Excel 运单文件');
+          const response = await runStopRiskAnalysisDemo(attachments[0]);
+          if (this.agentMessages.at(-1) !== placeholder) return;
+          this.startPredictionStream(next, response);
+        } catch (error) {
+          if (this.agentMessages.at(-1) !== placeholder) return;
+          this.agentMessages = [...next, { role: 'agent', text: `停靠风险分析未执行：${(error as Error).message}。` }];
+        }
+        return;
+      }
       if (/核验出厂.*完成.*车辆.*对应地点/.test(raw) || this.currentProjectId === 'PSC1' && /运单真实性|核验|甄别/.test(raw)) {
         const placeholder: ChatMessage = { role: 'agent', text: '正在读取源运单并匹配出厂与完成地点…', status: '处理中' };
         this.agentMessages = [...next, placeholder];
@@ -2102,7 +2142,7 @@ export const agentWorkData = defineStore('agentWork', {
         }
         return;
       }
-      const previousPrediction = this.agentMessages.at(-1)?.pendingPredictionPrompt;
+      const previousPrediction = this.activeChatContext.at(-1)?.pendingPredictionPrompt;
       if (hasVehiclePredictionIntent(raw) || previousPrediction && /[:：=]|附件：/.test(raw)) {
         const prompt = previousPrediction && !hasVehiclePredictionIntent(raw) ? `${previousPrediction}\n${raw}` : raw;
         const placeholder: ChatMessage = { role: 'agent', text: '正在解析输入与装卸货地点预测条件…', status: '处理中' };
@@ -2123,7 +2163,7 @@ export const agentWorkData = defineStore('agentWork', {
         }
         return;
       }
-      const pendingMessage = this.agentMessages[this.agentMessages.length - 1];
+      const pendingMessage = this.activeChatContext.at(-1);
       const pendingPrompt = pendingMessage?.pendingAsyncPrompt;
       const pendingRoutePrompt = pendingMessage?.pendingExperienceRoutePrompt;
       const pendingCompliancePrompt = pendingMessage?.pendingCompliancePrompt;
@@ -2156,7 +2196,7 @@ export const agentWorkData = defineStore('agentWork', {
       const regionVisitRequest = extractRegionVisitRequest(raw);
       const spreadsheetRequest = regionVisitRequest || hasWaybillComplianceIntent(compliancePrompt) ? null : extractSpreadsheetRequest(raw);
       const mcpPrompt = extractMcpPrompt(raw);
-      const emailDeliveryRequest = extractEmailDeliveryRequest(raw, this.agentMessages);
+      const emailDeliveryRequest = extractEmailDeliveryRequest(raw, this.activeChatContext);
       const analysisReportRequest = extractAnalysisReportRequest(raw);
       const transportStatusRequest = extractTransportStatusRequest(raw);
       const vehiclePositionRequest = transportStatusRequest ? null : extractVehiclePositionRequest(raw);
@@ -2366,6 +2406,7 @@ export const agentWorkData = defineStore('agentWork', {
               ...message,
               activeStepIndex: completedStepCount,
               status: isComplete ? '已完成' : '处理中',
+              completedAt: isComplete ? Date.now() : undefined,
               result: isComplete ? createRegionVisitResultText(request.region) : '',
               file: isComplete ? resultFile : undefined,
             };
@@ -2407,6 +2448,7 @@ export const agentWorkData = defineStore('agentWork', {
               ...message,
               activeStepIndex: completedStepCount,
               status: isComplete ? '已完成' : '处理中',
+              completedAt: isComplete ? Date.now() : undefined,
               result: isComplete ? '任务执行完成，已补全 128 行运单并通过最终检验。' : '',
               file: isComplete ? resultFile : undefined,
             };
@@ -2422,12 +2464,14 @@ export const agentWorkData = defineStore('agentWork', {
       const report = finalMessage.predictionReport;
       if (!report) { this.startDelayedAgentProcess(next, finalMessage, () => {}); return; }
       clearAgentProcessTimers();
-      this.agentMessages = [...next, { ...finalMessage, status: '处理中', streaming: true, steps: [], result: '', file: undefined, predictionRows: [], verificationRows: [], predictionReport: { kind: report.kind, taskProgress: [], introduction: '', summary: [], fields: [], judgments: [], statistics: [], analyses: [], boundaries: [], exportSummary: '' } }];
+      this.agentMessages = [...next, { ...finalMessage, status: '处理中', streaming: true, steps: [], result: '', file: undefined, predictionRows: [], verificationRows: [], predictionReport: { kind: report.kind, taskProgress: [], introduction: '', overview: [], riskDistribution: [], summary: [], fields: [], judgments: [], statistics: [], analyses: [], boundaries: [], exportSummary: '' } }];
       const current = this.agentMessages.at(-1)!;
       const live = current.predictionReport!;
       const chunks: (() => void)[] = [];
       report.taskProgress?.forEach((item) => chunks.push(() => live.taskProgress!.push(item)));
       if (report.introduction) chunks.push(() => { live.introduction = report.introduction; });
+      report.overview?.forEach((item) => chunks.push(() => live.overview!.push(item)));
+      report.riskDistribution?.forEach((item) => chunks.push(() => live.riskDistribution!.push(item)));
       // Table rows arrive together; narrative text is emitted in short chunks.
       report.summary.forEach((item) => chunks.push(() => live.summary.push(item)));
       report.fields.forEach((item) => chunks.push(() => live.fields.push(item)));
@@ -2461,6 +2505,7 @@ export const agentWorkData = defineStore('agentWork', {
         } else {
           current.streaming = false;
           current.status = '已完成';
+          current.completedAt = Date.now();
           current.file = finalMessage.file;
           current.result = finalMessage.result;
           clearAgentProcessTimers();
@@ -2471,6 +2516,12 @@ export const agentWorkData = defineStore('agentWork', {
     startDelayedAgentProcess(next: ChatMessage[], finalMessage: ChatMessage, onComplete: () => void) {
       finalMessage = cleanOutputValue(finalMessage);
       const steps = finalMessage.steps ?? [];
+      if (!steps.length) {
+        this.agentMessages = [...next, { ...finalMessage, status: '已完成', completedAt: Date.now() }];
+        onComplete();
+        this.persistActiveConversationMessages();
+        return;
+      }
       const messageIndex = next.length;
 
       this.agentMessages = [
@@ -2495,6 +2546,7 @@ export const agentWorkData = defineStore('agentWork', {
             return {
               ...message,
               status: isComplete ? '已完成' : '处理中',
+              completedAt: isComplete ? Date.now() : undefined,
               steps: finalMessage.progressMode ? steps : steps.slice(0, stepIndex + 1),
               activeStepIndex: isComplete ? steps.length : stepIndex,
               result: isComplete ? finalMessage.result : '',
@@ -2506,6 +2558,7 @@ export const agentWorkData = defineStore('agentWork', {
 
           if (isComplete) {
             onComplete();
+            this.persistActiveConversationMessages();
             clearAgentProcessTimers();
           }
         }, processStepInitialDelay + stepIndex * processStepInterval);
