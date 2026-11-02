@@ -390,6 +390,10 @@ onBeforeUnmount(() => {
             <dt>{{ field.label }}</dt><dd>{{ field.value || '—' }}</dd>
           </div>
         </dl>
+        <details v-if="order.sourceFields?.length" class="mt-3 text-xs text-slate-600">
+          <summary class="cursor-pointer text-blue-700">原始运单字段</summary>
+          <dl class="detail-facts mt-2"><div v-for="field in order.sourceFields" :key="field.label" class="is-wide"><dt>{{ field.label }}</dt><dd>{{ field.value || '—' }}</dd></div></dl>
+        </details>
         <div class="detail-order-eta"><Icon :svg="strokeIconPaths.alarmClock" :size="15" /><span>预计到达</span><strong>{{ order.eta || '—' }}</strong></div>
       </section>
       <section class="detail-events" aria-label="运输事件流">

@@ -1,5 +1,6 @@
 import { migrateCapacitySkillIds } from './capacitySkills';
 import { mailboxSkill } from './projectMailboxes';
+import { vehiclePredictionSkill } from '@/views/AgentWork/vehiclePredictionSkill';
 import { defineStore } from 'pinia';
 import { computed, readonly, ref, watch } from 'vue';
 import type { DeepReadonly } from 'vue';
@@ -155,9 +156,11 @@ const skillSeed: Array<{
   { id: 'capacity-cargo-normalization', name: '货源解析', category: '运力与货源' },
   { id: 'capacity-private-fleet', name: '私有运力池', category: '运力与货源' },
   { id: mailboxSkill.id, name: mailboxSkill.name, category: '运营助手' },
+  { id: vehiclePredictionSkill.id, name: vehiclePredictionSkill.name, category: '在途专家' },
 ];
 
 const skillDescriptions: Record<string, string> = {
+  [vehiclePredictionSkill.id]: vehiclePredictionSkill.description,
   [mailboxSkill.id]: mailboxSkill.description,
   'route-risk-expert': '结合线路、时效和历史履约表现，识别高优先级在途风险。',
   'gps-trace-expert': '分析轨迹断点、速度跳变和定位漂移，辅助判断GPS造假风险。',
@@ -184,7 +187,7 @@ const skillDescriptions: Record<string, string> = {
 function createSkills(): ManagedSkill[] {
   return skillSeed.map((skill, index) => ({
     ...skill,
-    content: `# ${skill.name}\n\n## 适用范围\n${skill.category}\n\n## 执行指引\n根据用户任务识别所需数据和业务约束，调用 ${skill.name} 完成处理，并返回结构化结果与必要的执行说明。`,
+    content: skill.id === vehiclePredictionSkill.id ? vehiclePredictionSkill.instructions : `# ${skill.name}\n\n## 适用范围\n${skill.category}\n\n## 执行指引\n根据用户任务识别所需数据和业务约束，调用 ${skill.name} 完成处理，并返回结构化结果与必要的执行说明。`,
     description: skillDescriptions[skill.id] ?? '',
     enabled: true,
     fileName: `${skill.id}.skill.md`,

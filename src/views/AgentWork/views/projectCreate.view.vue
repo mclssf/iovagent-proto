@@ -15,6 +15,7 @@ import type { ProjectMailbox } from '../interface';
 import WechatEmployeeDetails from '../component/wechatEmployeeDetails.comp.vue';
 
 import { strokeIconPaths } from '../strokeIconPaths';
+import { vehiclePredictionSkill } from '../vehiclePredictionSkill';
 import { useAgentWorkNav } from '../useAgentWorkNav';
 import { badgeToneClass, projectStatusTone } from '../utils';
 import { ensureRequiredMonitorSkills, monitorDefinitions, requiredMonitorSkillIds } from '../dailyTasks';
@@ -91,6 +92,7 @@ const skillTypeLabels: Record<SkillType, string> = {
 };
 
 const defaultSkills: ProjectSkill[] = [
+  { id: vehiclePredictionSkill.id, name: vehiclePredictionSkill.name, type: 'logistics', description: vehiclePredictionSkill.description, usage: '付费', icon: strokeIconPaths.locate },
   ...monitorDefinitions.filter((monitor) => monitor.id !== 'parking').map((monitor): ProjectSkill => ({
     id: monitor.skillId,
     name: monitor.name,

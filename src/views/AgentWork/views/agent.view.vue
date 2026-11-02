@@ -19,6 +19,9 @@ import { useAgentWorkNav } from '../useAgentWorkNav';
 import WaybillImportDialog from '../component/waybillImport.dialog.vue';
 import AnalysisReportView from './analysisReport.view.vue';
 import ProjectMonitors from '../component/projectMonitors.comp.vue';
+import ConversationBoundary from '../component/conversationBoundary.comp.vue';
+import PredictionReport from '../component/predictionReport.comp.vue';
+import { hasVehiclePredictionIntent } from '../vehiclePredictionSkill';
 import '../agentWorkspace.css';
 
 const store = agentWorkData();
@@ -367,7 +370,7 @@ async function sendComposerMessage() {
   isFollowingLatest.value = true;
 
   if (uploadedFiles.value.length > 0) {
-    if (text && isDeferredWaybillImportRequest(text, uploadedFiles.value)) {
+    if (text && !hasVehiclePredictionIntent(text) && isDeferredWaybillImportRequest(text, uploadedFiles.value)) {
       startDeferredWaybillImport(text, uploadedFiles.value);
       uploadedFiles.value = [];
       agentInput.value = '';
@@ -382,7 +385,7 @@ async function sendComposerMessage() {
       const excel = await readTaskAttachments(files.filter(isTaskExcel));
       if (readGeneration !== attachmentReadGeneration || context !== `${store.workspaceMode}:${store.currentProjectId}:${store.currentConversationId}`) return;
       const attachments = files.map(file => excel.find(item => item.name === file.name && item.size === file.size && item.lastModified === file.lastModified) ?? { name: file.name, size: file.size, type: file.type, lastModified: file.lastModified });
-      await sendAgent(text ? `${text}\n${attachmentText}` : attachmentText, attachments);
+      await sendAgent(text ? `${text}\n${attachmentText}` : attachmentText, attachments, files);
     } catch (error) { ElMessage.warning((error as Error).message); return; }
     finally { readingAttachments.value = false; }
     uploadedFiles.value = [];
@@ -394,6 +397,11 @@ async function sendComposerMessage() {
 }
 
 function sendQuickPrompt(text: string) {
+  if (store.workspaceMode === 'project' && store.currentProject.quickPrompts?.includes(text)) {
+    agentInput.value = text;
+    nextTick(() => composerTextareaRef.value?.focus());
+    return;
+  }
   isFollowingLatest.value = true;
   sendAgent(text);
 }
@@ -459,7 +467,7 @@ const isDynamicRightPanel = computed(() => isExternalH5Panel.value || isAnalysis
 const isRightPanelRendered = computed(
   () => isRightPanelVisible.value && isDynamicRightPanel.value,
 );
-const visibleQuickPrompts = computed(() => quickPrompts.slice(0, 3));
+const visibleQuickPrompts = computed(() => (store.workspaceMode === 'project' ? store.currentProject.quickPrompts : undefined)?.slice(0, 3) ?? quickPrompts.slice(0, 3));
 
 const trendData = [
   { date: '05-09', count: 8 },
@@ -822,6 +830,7 @@ onBeforeUnmount(() => {
           </div>
         </div>
         <div class="flex shrink-0 items-center gap-2">
+        <button v-if="store.workspaceMode === 'project'" type="button" class="inline-flex items-center gap-1.5 rounded-md border border-[#deded9] bg-[#f7f7f5] px-2.5 py-1.5 text-xs text-slate-700 hover:bg-white disabled:cursor-not-allowed disabled:opacity-40" :disabled="store.isChatOutputBusy || !store.activeChatContext.length" aria-label="开始新对话" title="保留历史消息，后续提问不带入此前聊天记录" @click="store.splitProjectConversation()"><Icon :svg="strokeIconPaths.edit" :size="15" /><span class="hidden md:inline">开始新对话</span></button>
         <button v-if="hasTaskRail" ref="taskToggleRef" type="button" class="agent-task-toggle" aria-label="任务执行" title="任务执行" :aria-expanded="isTaskCardOpen" aria-controls="project-task-card" @click="isTaskCardOpen = !isTaskCardOpen">
           <Icon :svg="strokeIconPaths.file" :size="15" /><span>任务执行</span>
         </button>
@@ -867,7 +876,9 @@ onBeforeUnmount(() => {
             </div>
           </div>
           <div v-for="(m, i) in agentMessages" :key="i" class="agent-message-row flex" :class="m.role === 'user' ? 'justify-end' : 'justify-start'">
+            <ConversationBoundary v-if="m.sessionDivider" :created-at="m.sessionDivider.createdAt" />
             <div
+              v-else
               class="agent-message rounded-md text-sm leading-6"
               :class="[
                 m.role === 'user' ? 'is-user bg-slate-900 px-4 py-3 text-white' : m.title ? 'is-agent border border-[#deded9] bg-white px-4 py-3 text-slate-700' : 'is-agent text-slate-700',
@@ -892,7 +903,8 @@ onBeforeUnmount(() => {
               <div v-if="m.text" class="mb-3 rounded-md bg-[#f7f7f5] px-3 py-2 text-xs leading-5 text-slate-500">
                 {{ m.text }}
               </div>
-              <div v-if="m.steps?.length" class="divide-y divide-[#ededea] rounded-md border border-[#deded9] bg-white">
+              <PredictionReport v-if="m.predictionReport || m.predictionRows?.length || m.verificationRows?.length" :m="m" />
+              <div v-if="m.steps?.length && !m.predictionReport" class="divide-y divide-[#ededea] rounded-md border border-[#deded9] bg-white">
                 <template v-for="(step, stepIndex) in m.steps" :key="step.title">
                   <div
                     v-if="!m.progressMode || progressStepState(m, stepIndex) !== 'pending'"
@@ -925,7 +937,7 @@ onBeforeUnmount(() => {
                   </div>
                 </template>
               </div>
-              <div v-if="m.result" class="mt-3 whitespace-pre-line rounded-md bg-blue-50 px-3 py-2 text-xs font-medium leading-5 text-blue-700">
+              <div v-if="m.result && !m.predictionReport" class="mt-3 whitespace-pre-line rounded-md bg-blue-50 px-3 py-2 text-xs font-medium leading-5 text-blue-700">
                 {{ m.result }}
               </div>
               <a
@@ -944,7 +956,7 @@ onBeforeUnmount(() => {
                 <Icon :svg="strokeIconPaths.chevron" :size="16" svg-class="shrink-0 text-blue-700" />
               </a>
               <a
-                v-if="m.file"
+                v-if="m.file && !m.predictionReport"
                 class="mt-3 flex w-full items-center gap-3 rounded-md border border-emerald-200 bg-emerald-50 p-3 text-left transition hover:border-emerald-300 hover:bg-emerald-100/70"
                 :download="m.file.name"
                 :href="m.file.url"

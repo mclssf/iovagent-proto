@@ -15,7 +15,7 @@ const props = defineProps<{
 
 const store = agentWorkData();
 const {
-  ordersSeed,
+  currentProjectOrders: ordersSeed,
   ordersRiskFilter,
   ordersStatusFilter,
   ordersKeyword,
