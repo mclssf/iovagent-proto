@@ -1,4 +1,5 @@
 import { defineStore } from 'pinia';
+import { usePhase1 } from './phase1';
 import type { EmailOrderScenario, Order, Project } from '@/views/AgentWork/interface';
 import type { DailyTask, DailyTaskDraft, EventType, MonitorId, ProjectFence, ProjectTaskRuntime, TaskAgentDecision, TaskRun, WaybillEvent, WaybillPhase } from '@/views/AgentWork/dailyTasks';
 import { createMonitoredOrders, ensureRequiredMonitorSkills, eventDefinitions, eventLabel, monitorDefinitions } from '@/views/AgentWork/dailyTasks';
@@ -184,6 +185,7 @@ export const useAgentDailyTasks = defineStore('agentDailyTasks', {
     },
     simulateFenceCallback(projectId: string, fenceId: string, type: 'fence-enter' | 'fence-exit') { const runtime = this.projects[projectId]; if (runtime) { const event = sampleEvent(runtime, type, 'callback', fenceId); if (event) this.receiveEvent(event); } },
     runMonitor(runtime: ProjectTaskRuntime, monitorId: MonitorId) {
+      if (usePhase1().configs[runtime.projectId]?.selectedSkills.length) return;
       const monitor = runtime.monitors.find(item => item.id === monitorId)!; monitor.runs++; monitor.lastRun = this.now;
       if (monitorId === 'loading' || monitorId === 'unloading') {
         const transitions: Partial<Record<WaybillPhase, { phase: WaybillPhase; type?: EventType }>> = monitorId === 'loading'

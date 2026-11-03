@@ -1,4 +1,8 @@
 import { migrateCapacitySkillIds } from './capacitySkills';
+import { usePhase1 } from './phase1';
+import { monitoringProject, monitoringOrder } from '@/views/Phase1/presentation';
+import { dateText, sessionNames, stateNames, eventNames } from '@/views/Phase1/catalog';
+import { restoreMonitoringProjects } from '@/views/Phase1/persistence';
 import type {
   AgentConversation,
   AgentResultFile,
@@ -1457,7 +1461,7 @@ export const agentWorkData = defineStore('agentWork', {
     return {
       ordersStartDate: defaultOrdersDateRange.start,
       ordersEndDate: defaultOrdersDateRange.end,
-      projects: restoreOrdinaryTaskProjects(restoreMailboxProjects([...projectsSeed, ...shipperScenarioProjects])).map((project) => ({ ...project, skillIds: ensureRequiredMonitorSkills(migrateCapacitySkillIds(project.skillIds ?? [])) })) as Project[],
+      projects: restoreMonitoringProjects(restoreOrdinaryTaskProjects(restoreMailboxProjects([...projectsSeed, ...shipperScenarioProjects, monitoringProject]))).map((project) => ({ ...project, skillIds: ensureRequiredMonitorSkills(migrateCapacitySkillIds(project.skillIds ?? [])) })) as Project[],
       projectChats,
       scenarioOrders: { PSC2: shipperMonitorOrders } as Record<string, Order[]>,
       ordersDateRangeBeforeScenario: null as { start: string; end: string } | null,
@@ -1535,9 +1539,13 @@ export const agentWorkData = defineStore('agentWork', {
       return conversationBusy(state.agentMessages);
     },
     currentProjectOrders(state): Order[] {
+      const monitoring = usePhase1();
+      const tracked = monitoring.orders.filter(order => order.projectId === state.currentProjectId);
+      const records = tracked.map(order => monitoringOrder(order, monitoring.anomalies.filter(item => item.orderId === order.id && item.status === 'active').map(item => item.kind)));
+      if (state.currentProjectId === monitoringProject.id) return records;
       return shipperScenarioProjects.some(project => project.id === state.currentProjectId)
-        ? state.scenarioOrders[state.currentProjectId] ?? []
-        : state.ordersSeed;
+        ? [...(state.scenarioOrders[state.currentProjectId] ?? []), ...records]
+        : [...state.ordersSeed, ...records];
     },
     unprocessedTmsSyncCustomerCount(state): number {
       return state.tmsSyncCustomers.filter((customer) => customer.status === '未处理').length;
@@ -1578,10 +1586,21 @@ export const agentWorkData = defineStore('agentWork', {
       return ['overview', 'risk', 'orderEvent', 'externalH5', 'analysisReport'].includes(state.rightPanel) ? state.rightPanel : 'overview';
     },
     timelineEvents(state): TimelineEvent[] {
+      const monitoring = usePhase1();
+      if (monitoring.orders.some(order => order.id === state.selectedOrder.id)) {
+        const events: TimelineEvent[] = monitoring.events.filter(event => event.orderId === state.selectedOrder.id).map((event, index) => {
+          const alert = monitoring.anomalies.find(item => item.eventId === event.id && item.status === 'active');
+          return { id: index + 1, type: alert ? 'stop' : 'normal', title: eventNames[event.type], time: dateText(event.occurredAt), place: event.address, desc: event.result, agent: event.assessment?.reason, agentVerdict: alert ? '待核实' : event.phase === 'recovered' ? '已恢复' : event.assessment?.verdict === 'reasonable' ? '合理' : undefined, agentTone: alert ? 'orange' : 'green' };
+        });
+        return state.detailOnlyAbnormal ? events.filter(event => event.type !== 'normal') : events;
+      }
       if (state.detailOnlyAbnormal) return timelineSeed.filter((e) => e.type !== 'normal');
       return state.detailView === 'rule' ? timelineSeed.filter((e) => e.type !== 'risk') : timelineSeed;
     },
     currentDetailOrder(state): Order {
+      const monitoring = usePhase1();
+      const order = monitoring.orders.find(item => item.id === state.selectedOrder.id);
+      if (order) return monitoringOrder(order, monitoring.anomalies.filter(item => item.orderId === order.id && item.status === 'active').map(item => item.kind));
       return state.selectedOrder ?? state.ordersSeed[0]!;
     },
     cargoSourcesFiltered(state): StandardCargo[] {
@@ -2011,8 +2030,8 @@ export const agentWorkData = defineStore('agentWork', {
     switchProject(p: Project) {
       clearAgentProcessTimers();
       this.persistActiveConversationMessages();
-      const wasScenario = shipperScenarioProjects.some(project => project.id === this.currentProjectId);
-      const isScenario = shipperScenarioProjects.some(project => project.id === p.id);
+      const wasScenario = [...shipperScenarioProjects, monitoringProject].some(project => project.id === this.currentProjectId);
+      const isScenario = [...shipperScenarioProjects, monitoringProject].some(project => project.id === p.id);
       if (isScenario && !wasScenario) this.ordersDateRangeBeforeScenario = { start: this.ordersStartDate, end: this.ordersEndDate };
       if (!isScenario && wasScenario && this.ordersDateRangeBeforeScenario) {
         this.ordersStartDate = this.ordersDateRangeBeforeScenario.start;
@@ -2022,7 +2041,13 @@ export const agentWorkData = defineStore('agentWork', {
       this.workspaceMode = 'project';
       this.currentConversationId = '';
       this.currentProjectId = p.id;
-      this.agentMessages = cloneChatMessages(this.projectChats[p.id] ?? (shipperScenarioProjects.some(project => project.id === p.id) ? [] : projectWelcomeMessages));
+      if (p.id === monitoringProject.id) {
+        const dates = usePhase1().orders.filter(order => order.projectId === p.id).map(order => dateText(order.createdAt).slice(0, 10)).sort();
+        if (dates.length) { this.ordersStartDate = dates[0]!; this.ordersEndDate = dates.at(-1)!; }
+      }
+      const tracked = usePhase1().orders.filter(order => order.projectId === p.id);
+      const welcome: ChatMessage[] = p.id === monitoringProject.id ? [{ role: 'agent', text: `本项目已接入 ${tracked.length} 条运单，${tracked.filter(order => order.session === 'active').length} 条正在监听；${new Set(usePhase1().anomalies.filter(item => item.status === 'active' && tracked.some(order => order.id === item.orderId)).map(item => item.orderId)).size} 条运单存在待核实异常。` }] : shipperScenarioProjects.some(project => project.id === p.id) ? [] : projectWelcomeMessages;
+      this.agentMessages = cloneChatMessages(this.projectChats[p.id] ?? welcome);
       if (p.id === 'PSC2') {
         this.ordersStartDate = '2026-08-01';
         this.ordersEndDate = '2026-08-01';
@@ -2100,7 +2125,7 @@ export const agentWorkData = defineStore('agentWork', {
       });
       ElMessage.success(`已将 ${importedCount} 条运单合并到“${targetProject.name}”`);
     },
-    addSkillProject(name: string, skillNames: string[], skillIds: string[], mailbox?: ProjectMailbox) {
+    addSkillProject(name: string, skillNames: string[], skillIds: string[], mailbox?: ProjectMailbox, authorizedDataSkillIds?: string[]) {
       const projectId = `P${crypto.randomUUID()}`;
       const skillSummary = skillNames.length > 0 ? skillNames.join(' / ') : '内置技能';
       this.workspaceMode = 'project';
@@ -2109,6 +2134,7 @@ export const agentWorkData = defineStore('agentWork', {
         {
           id: projectId,
           mailbox: mailbox ? { ...mailbox } : undefined,
+          authorizedDataSkillIds: authorizedDataSkillIds ? [...authorizedDataSkillIds] : undefined,
           name,
           status: '已连接',
           sync: '刚刚',
@@ -2128,7 +2154,7 @@ export const agentWorkData = defineStore('agentWork', {
       ElMessage.success('项目创建成功');
       return projectId;
     },
-    updateSkillProject(projectId: string, name: string, skillNames: string[], skillIds: string[], mailbox?: ProjectMailbox) {
+    updateSkillProject(projectId: string, name: string, skillNames: string[], skillIds: string[], mailbox?: ProjectMailbox, authorizedDataSkillIds?: string[]) {
       const skillSummary = skillNames.length > 0 ? skillNames.join(' / ') : '内置技能';
       this.workspaceMode = 'project';
       this.currentConversationId = '';
@@ -2136,6 +2162,7 @@ export const agentWorkData = defineStore('agentWork', {
         project.id === projectId
           ? {
               ...project,
+              authorizedDataSkillIds: authorizedDataSkillIds ? [...authorizedDataSkillIds] : project.authorizedDataSkillIds,
               mailbox: mailbox ? { ...mailbox } : project.mailbox,
               name,
               tmsUrl: skillSummary,
@@ -2179,6 +2206,20 @@ export const agentWorkData = defineStore('agentWork', {
       if (!raw.trim()) return;
       this.ensureConversationStarted();
       const next: ChatMessage[] = [...this.agentMessages, { role: 'user', text: raw }];
+      if (/监听|运输节点|未恢复异常|监控状态/.test(raw)) {
+        const monitoring = usePhase1();
+        const order = monitoring.orders.find(item => raw.toUpperCase().includes(item.id.toUpperCase()));
+        if (order) {
+          if (this.workspaceMode !== 'project' || order.projectId !== this.currentProjectId) {
+            this.agentMessages = [...next, { role: 'agent', text: '请先选择该运单所属项目，再查询监听结果。' }];
+          } else {
+            const alerts = monitoring.anomalies.filter(item => item.orderId === order.id && item.status === 'active');
+            this.startDelayedAgentProcess(next, { role: 'agent', title: '运单监听结果', text: '', steps: [{ title: '读取项目运单', text: `核对 ${order.id} 与 ${order.plate} 的监听状态。` }, { title: '汇总运输事实', text: '汇总围栏节点、异常和人工纠正记录。' }], result: `${order.id} · ${order.plate}\n${order.origin.name} → ${order.destination.name}\n运输状态：${stateNames[order.state]}；监听：${sessionNames[order.session]}。\n监听截止：${dateText(order.expiresAt)}。\n未恢复异常 ${alerts.length} 项：${alerts.map(item => item.kind).join('、') || '无'}。\n${alerts.length ? '建议核对相关运输事实，必要时进行人工复核。' : '当前未发现需要处理的异常。'}` }, () => {});
+          }
+          this.agentInput = '';
+          return;
+        }
+      }
       const previousPrediction = this.activeChatContext.at(-1)?.pendingPredictionPrompt;
       const projectId = this.workspaceMode === 'project' ? this.currentProjectId : '';
       const stopRisk = (projectId === 'PSC3' && /停靠|停车|风险|附件：/.test(raw)) || (sourceFiles.length > 0 && /异常停靠.*(?:风险|分析)|停靠点风险/.test(raw));

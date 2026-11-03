@@ -9,6 +9,8 @@ import { ElMessage, ElMessageBox } from 'element-plus';
 import { storeToRefs } from 'pinia';
 
 import { agentWorkData } from '@/pinia/agentWork';
+import { usePhase1 } from '@/pinia/phase1';
+import { dateText } from '@/views/Phase1/catalog';
 import { removeToken } from '@/utils/auth';
 
 import { strokeIconPaths } from '../strokeIconPaths';
@@ -16,6 +18,12 @@ import { agentWorkRouteName } from '../useAgentWorkNav';
 import { badgeToneClass, projectStatusTone } from '../utils';
 
 const store = agentWorkData();
+const monitoring = usePhase1();
+function todayCounts(project: Project) {
+  if (project.id !== 'MONITOR-EAST') return { total: project.total, risk: project.risk };
+  const orders = monitoring.orders.filter(order => order.projectId === project.id && dateText(order.createdAt).slice(0, 10) === dateText(monitoring.now).slice(0, 10));
+  return { total: orders.length, risk: orders.filter(order => monitoring.anomalies.some(item => item.orderId === order.id && item.status === 'active')).length };
+}
 const { projects, recentConversations } = storeToRefs(store);
 const route = useRoute();
 const router = useRouter();
@@ -602,7 +610,7 @@ function logout() {
                 />
               </div>
               <div class="mt-1 flex items-center justify-between gap-2">
-                <span class="truncate text-[11px] leading-4 text-slate-400">今日 {{ project.total }} 单 · {{ project.risk }} 异常</span>
+                <span class="truncate text-[11px] leading-4 text-slate-400">今日 {{ todayCounts(project).total }} 单 · {{ todayCounts(project).risk }} 异常</span>
                 <span
                   class="shrink-0 rounded border px-1.5 py-0.5 text-[10px] font-medium leading-3.5"
                   :class="badgeToneClass(projectStatusTone(project.status))"

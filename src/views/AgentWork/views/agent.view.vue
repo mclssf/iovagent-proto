@@ -1071,7 +1071,7 @@ onBeforeUnmount(() => {
                     role="combobox"
                     aria-haspopup="listbox"
                     :aria-expanded="isModelSelectOpen"
-                    class="flex h-8 max-w-[190px] items-center justify-between gap-2 rounded-full px-2.5 text-sm text-slate-800 transition hover:bg-[#f3f3f1]"
+                    class="flex h-8 max-w-[190px] items-center justify-between gap-2 rounded-full px-3 text-sm text-slate-800 transition hover:bg-[#f3f3f1]"
                     @click.stop="isModelSelectOpen = !isModelSelectOpen"
                   >
                     <span class="flex min-w-0 items-center gap-2">

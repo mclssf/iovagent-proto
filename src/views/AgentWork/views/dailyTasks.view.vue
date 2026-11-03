@@ -16,6 +16,7 @@ import { strokeIconPaths } from '../strokeIconPaths';
 import { useAgentWorkNav } from '../useAgentWorkNav';
 import DailyTaskDialog from '../component/dailyTask.dialog.vue';
 import EmailOrderResult from '../component/emailOrderResult.comp.vue';
+import MonitoringTasks from '@/views/Phase1/MonitoringTasks.vue';
 import '../dailyTasks.css';
 
 const work = agentWorkData();
@@ -23,6 +24,8 @@ const store = useAgentDailyTasks();
 const { goPage } = useAgentWorkNav();
 const route = useRoute();
 const selectedId = ref('');
+const taskView = ref('ordinary');
+watch(() => route.query.monitor, value => { taskView.value = value === '1' ? 'monitor' : 'ordinary'; }, { immediate: true });
 const runId = ref('');
 const showForm = ref(false);
 const search = ref('');
@@ -82,7 +85,9 @@ function receiveMail(task: DailyTask) {
       <div class="dt-title"><Icon :svg="strokeIconPaths.file" :size="16" /><h1>做任务</h1><span class="dt-project-name">{{ isPersonal ? '个人任务' : work.currentProject.name }}</span></div>
       <button class="dt-icon" type="button" title="返回智能体工作台" aria-label="返回智能体工作台" @click="goPage('agent')"><Icon :svg="strokeIconPaths.msg" :size="16" /></button>
     </header>
-    <div class="dt-page-body" :class="{ 'has-panel': selected }">
+    <div v-if="!isPersonal" class="flex h-10 shrink-0 items-center gap-6 border-b border-[#e5e7eb] px-4 text-xs"><button type="button" class="h-full border-b-2" :class="taskView === 'ordinary' ? 'border-blue-600 text-blue-700' : 'border-transparent text-slate-600'" @click="taskView = 'ordinary'">任务</button><button type="button" class="h-full border-b-2" :class="taskView === 'monitor' ? 'border-blue-600 text-blue-700' : 'border-transparent text-slate-600'" @click="taskView = 'monitor'">在途监听</button></div>
+    <MonitoringTasks v-if="!isPersonal && taskView === 'monitor'" :project-id="projectId" />
+    <div v-else class="dt-page-body" :class="{ 'has-panel': selected }">
       <div class="dt-task-column">
         <div class="dt-list-toolbar">
           <div class="dt-list-heading"><span>{{ projectTasks.length }} 项任务 <span class="dt-secondary">· {{ projectTasks.filter(latestActive).length }} 项处理中</span></span><button class="dt-button primary" type="button" @click="showForm = true"><Icon :svg="strokeIconPaths.plus" :size="15" />新建任务</button></div>

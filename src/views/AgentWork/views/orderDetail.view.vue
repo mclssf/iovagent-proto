@@ -4,6 +4,10 @@ import type { TimelineEvent } from '../interface';
 import { Icon } from '@packages/icon';
 import { ElSwitch } from 'element-plus';
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
+import { useRoute } from 'vue-router';
+import { usePhase1 } from '@/pinia/phase1';
+import MonitoringOrderPanel from '@/views/Phase1/MonitoringOrderPanel.vue';
+import { dateText } from '@/views/Phase1/catalog';
 
 import { agentWorkData } from '@/pinia/agentWork';
 import { convertGpsCoordinates, loadAMap, searchDrivingRoute, type AMapCoordinate } from '@/utils/amap';
@@ -15,6 +19,17 @@ import { evidenceEnterpriseName } from '../waybillEvidence';
 import { mountTransportMapWatermark } from '../transportMapWatermark';
 
 const store = agentWorkData();
+const route = useRoute();
+const monitoring = usePhase1();
+watch(() => [route.query.projectId, route.query.orderId], ([projectId, orderId]) => {
+  const project = store.projects.find(item => item.id === projectId);
+  if (project && store.currentProjectId !== project.id) store.switchProject(project);
+  const record = store.currentProjectOrders.find(item => item.id === orderId);
+  if (record) store.setSelectedOrder(record);
+}, { immediate: true });
+const monitoredOrder = monitoring.orders.find(item => item.id === store.selectedOrder.id);
+const monitoredEvents = monitoring.events.filter(item => item.orderId === monitoredOrder?.id);
+const positionedEvents = monitoredEvents.filter(event => event.target || event.position);
 const mapRef = ref<HTMLDivElement | null>(null);
 const routeDistance = ref('--');
 const routeDuration = ref('--');
@@ -40,10 +55,10 @@ let disposed = false;
 let mapResizeObserver: ResizeObserver | undefined;
 let resizeFrame = 0;
 const mapMarkers: { content: HTMLElement; open: () => void }[] = [];
-const eventMarkerIndexes: Record<number, number> = { 1: 0, 2: 0, 3: 1, 4: 2, 5: 3, 6: 5 };
+const eventMarkerIndexes: Record<number, number> = monitoredOrder ? Object.fromEntries(monitoredEvents.flatMap((event, index) => positionedEvents.includes(event) ? [[index + 1, positionedEvents.indexOf(event) + 1]] : [])) : { 1: 0, 2: 0, 3: 1, 4: 2, 5: 3, 6: 5 };
 
 function fitMap() {
-  if (!disposed && mapInstance && routeOverlay) mapInstance.setFitView([routeOverlay], true, watermark?.padding() ?? [60, 60, 60, 60]);
+  if (!disposed && mapInstance && routeOverlay) mapInstance.setFitView([routeOverlay], true, watermark?.padding() ?? (monitoredOrder ? [90, 130, 90, 130] : [60, 60, 60, 60]));
 }
 
 function syncWatermark() {
@@ -54,9 +69,9 @@ function syncWatermark() {
     const order = store.currentDetailOrder;
     watermark = mountTransportMapWatermark(mapInstance, {
       enterprise: evidenceEnterpriseName(), plate: order.plate, order: order.id,
-      loading: { poi: mapPoints[0]!.name.replace('装货地 · ', ''), coordinate: markerCoordinates[0], time: order.startTime },
-      unloading: { poi: mapPoints[mapPoints.length - 1]!.name.replace('卸货地 · ', ''), coordinate: markerCoordinates[mapPoints.length - 1], time: '待卸货' },
-      distance: routeDistance.value, period: `${order.startTime} 至今`,
+      loading: { poi: mapPoints[0]!.name.replace('装货地 · ', ''), coordinate: markerCoordinates[0], time: monitoredOrder ? dateText(monitoredOrder.enteredAt) : order.startTime },
+      unloading: { poi: mapPoints[mapPoints.length - 1]!.name.replace('卸货地 · ', ''), coordinate: markerCoordinates[mapPoints.length - 1], time: monitoredOrder ? dateText(monitoredOrder.completedAt ?? monitoredOrder.arrivedAt) : '待卸货' },
+      distance: routeDistance.value, period: monitoredOrder ? `${dateText(monitoredOrder.enteredAt)} 至 ${monitoredOrder.completedAt ? dateText(monitoredOrder.completedAt) : '今'}` : `${order.startTime} 至今`,
     });
   }
   fitMap();
@@ -75,7 +90,7 @@ interface MapPoint {
   tone: MapTone;
 }
 
-const routeWaypoints: GpsCoordinate[] = [
+const baseWaypoints: GpsCoordinate[] = [
   [31.2304, 121.4737],
   [30.743, 120.758],
   [29.1157, 119.6483],
@@ -87,7 +102,7 @@ const routeWaypoints: GpsCoordinate[] = [
   [23.158, 113.48],
 ];
 
-const fallbackRoute: GpsCoordinate[] = [
+const baseFallback: GpsCoordinate[] = [
   [31.2304, 121.4737],
   [30.86, 121.05],
   [30.743, 120.758],
@@ -106,7 +121,7 @@ const fallbackRoute: GpsCoordinate[] = [
   [23.158, 113.48],
 ];
 
-const mapPoints: MapPoint[] = [
+const baseMapPoints: MapPoint[] = [
   {
     name: '装货地 · 上海一厂',
     coord: [31.2304, 121.4737],
@@ -144,6 +159,14 @@ const mapPoints: MapPoint[] = [
     tone: 'end',
   },
 ];
+
+const routeWaypoints: GpsCoordinate[] = monitoredOrder ? [[monitoredOrder.origin.lat, monitoredOrder.origin.lon], [monitoredOrder.destination.lat, monitoredOrder.destination.lon]] : baseWaypoints;
+const fallbackRoute = monitoredOrder ? routeWaypoints : baseFallback;
+const mapPoints: MapPoint[] = monitoredOrder ? [
+  { name: `装货地 · ${monitoredOrder.origin.name}`, coord: routeWaypoints[0]!, desc: '运单装货地点', tone: 'start' },
+  ...positionedEvents.map((event): MapPoint => { const place = event.target === 'destination' ? monitoredOrder.destination : event.target === 'origin' ? monitoredOrder.origin : event.position!; return { name: event.address, coord: [place.lat, 'lon' in place ? place.lon : 0], desc: event.result, tone: event.type === 'fence' ? 'start' : 'warn' }; }),
+  { name: `卸货地 · ${monitoredOrder.destination.name}`, coord: routeWaypoints.at(-1)!, desc: '运单卸货地点', tone: 'end' },
+] : baseMapPoints;
 
 function eventTone(event: TimelineEvent) {
   return `tone-${detailRiskTone(event.agentVerdict, event.agentTone)}`;
@@ -226,6 +249,7 @@ function drawRoute(amap: typeof AMap, route: AMapCoordinate[], riskPoints: AMapC
   routeOverlay = routeShadow;
   const routeLine = new amap.Polyline({ path: route, strokeColor: '#0f172a', strokeOpacity: 0.9, strokeWeight: 5 });
   mapInstance.add([routeShadow, routeLine]);
+  if (monitoredOrder) return;
 
   const riskStart = nearestRouteIndex(route, riskPoints[0]!);
   const riskEnd = nearestRouteIndex(route, riskPoints[1]!);
@@ -294,15 +318,16 @@ async function initMap() {
 
   try {
     const amap = await loadAMap(['AMap.Driving', 'AMap.ToolBar']);
-    const convertedWaypoints = await convertGpsCoordinates(amap, routeWaypoints.map(([lat, lng]) => [lng, lat]));
-    const convertedFallback = await convertGpsCoordinates(amap, fallbackRoute.map(([lat, lng]) => [lng, lat]));
-    const convertedMarkers = await convertGpsCoordinates(amap, mapPoints.map(({ coord: [lat, lng] }) => [lng, lat]));
+    const convert = (coordinates: AMapCoordinate[]) => monitoredOrder?.origin.coordinateSystem === 'gcj02' ? Promise.resolve(coordinates) : convertGpsCoordinates(amap, coordinates);
+    const convertedWaypoints = await convert(routeWaypoints.map(([lat, lng]) => [lng, lat]));
+    const convertedFallback = await convert(fallbackRoute.map(([lat, lng]) => [lng, lat]));
+    const convertedMarkers = await convert(mapPoints.map(({ coord: [lat, lng] }) => [lng, lat]));
     const riskPoints = await convertGpsCoordinates(amap, [[112.9388, 28.2282], [113.8546, 27.6229]]);
     if (disposed || !mapRef.value) return;
     markerCoordinates = convertedMarkers;
 
     mapInstance = new amap.Map(mapRef.value, {
-      center: [117.15, 27.35],
+      center: monitoredOrder ? convertedWaypoints[0] : [117.15, 27.35],
       mapStyle: 'amap://styles/macaron',
       viewMode: '2D',
       zoom: 6,
@@ -319,10 +344,10 @@ async function initMap() {
       mapReady.value = true;
     } catch {
       if (disposed) return;
-      routeDistance.value = '约 1,650 km';
-      routeDuration.value = '约 22h';
+      routeDistance.value = monitoredOrder ? '--' : '约 1,650 km';
+      routeDuration.value = monitoredOrder ? '--' : '约 22h';
       mapError.value = '道路路线暂不可用，请刷新页面重试';
-      drawRoute(amap, convertedFallback, riskPoints);
+      if (!monitoredOrder) drawRoute(amap, convertedFallback, riskPoints);
     }
     drawMarkers(amap, convertedMarkers);
     syncWatermark();
@@ -362,7 +387,8 @@ onBeforeUnmount(() => {
     <section class="detail-map-section" :class="{ 'has-watermark': watermarkEnabled }" aria-label="运单地图轨迹">
       <header class="detail-panel-header">
         <h1><Icon :svg="strokeIconPaths.map" :size="16" />地图轨迹</h1>
-        <div class="detail-map-badges"><span :class="badgeToneClass('red')">异常停车 2</span><span :class="badgeToneClass('purple')">轨迹风险 1</span></div>
+        <div v-if="monitoredOrder" class="detail-map-badges"><span :class="badgeToneClass('orange')">待核实 {{ monitoring.anomalies.filter(item => item.orderId === monitoredOrder.id && item.status === 'active').length }}</span></div>
+        <div v-else class="detail-map-badges"><span :class="badgeToneClass('red')">异常停车 2</span><span :class="badgeToneClass('purple')">轨迹风险 1</span></div>
       </header>
       <div class="detail-map-stage">
         <div ref="mapRef" class="detail-map-canvas" style="color:#253440;background-color:#eef3f6;font-family:sans-serif"></div>
@@ -370,7 +396,7 @@ onBeforeUnmount(() => {
           <div class="detail-watermark-toggle"><span>水印</span><ElSwitch v-model="watermarkEnabled" size="small" aria-label="显示地图水印" /></div>
         </div>
         <div v-if="!watermarkEnabled || !mapReady" class="detail-route-summary">
-          <strong>上海一厂 → 广州仓</strong><div><span>{{ routeDistance }}</span><span>{{ routeDuration }}</span></div>
+          <strong>{{ monitoredOrder ? `${monitoredOrder.origin.name} → ${monitoredOrder.destination.name}` : '上海一厂 → 广州仓' }}</strong><div><span>{{ routeDistance }}</span><span>{{ routeDuration }}</span></div>
         </div>
         <div v-if="mapLoading || mapError" class="detail-map-status" :role="mapError ? 'alert' : 'status'">{{ mapError || '正在加载地图与运输轨迹…' }}</div>
       </div>
@@ -402,6 +428,7 @@ onBeforeUnmount(() => {
           <button type="button" class="detail-filter" :class="{ 'is-active': store.detailOnlyAbnormal }" :aria-pressed="store.detailOnlyAbnormal" title="只看异常事件" @click="store.detailOnlyAbnormal = !store.detailOnlyAbnormal"><Icon :svg="strokeIconPaths.filter" :size="13" />只看异常</button>
         </header>
         <div class="detail-event-list">
+          <MonitoringOrderPanel v-if="monitoredOrder" :order-id="monitoredOrder.id" />
           <article v-for="event in store.timelineEvents" :key="event.id" class="detail-event" :class="[eventTone(event), { 'is-abnormal': event.type !== 'normal', 'is-selected': selectedEventId === event.id }]" :data-event-id="event.id">
             <div class="detail-event-track" aria-hidden="true"><span><Icon :svg="eventIcon(event)" :size="13" /></span></div>
             <div class="detail-event-content">
