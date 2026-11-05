@@ -28,7 +28,6 @@ try {
   assert.equal(task.mailbox.status, 'bound');
   assert.equal(task.runs.length, 3);
   assert(task.runs.every(run => hasTaskResult(run) && run.emailOrder.reply.sentAt && !run.action));
-  assert.equal(store.unreadResultsByTask[task.id], 0, 'sample history starts read');
   assert.match(triggerLabel(task), /持续监听邮箱/);
   assert.equal(store.unavailableReason(task), '', 'mail processing does not require TMS orders');
 
@@ -78,17 +77,13 @@ try {
     assert.equal(run.status, 'complete', 'in-flight mail finishes after pausing');
     assert.equal(run.emailOrder.reply.sentAt, now);
     assert(hasTaskResult(run));
-    assert.equal(store.unreadResultsByTask[task.id], 1);
     assert.equal(task.runs.length, before + 1, 'one incoming mail and reply produces exactly one result');
     assert.equal(getTaskStatus(task), 'paused');
     assert.equal(task.mailbox.status, 'bound', 'pausing keeps the mailbox bound');
     assert.throws(() => store.receiveDemoEmail(task.id, scenario), /先启动/);
-    store.markResultRead(task.id, run.id);
-    assert.equal(store.unreadResultsByTask[task.id], 0);
     store.toggleTask(task.id);
     assert.equal(getTaskStatus(task), 'running');
   }
-  assert.equal(store.unreadResultsByProject.P002, undefined, 'mail results stay in their project');
   assert(!store.tasks.some(item => !item.projectId && item.taskTemplate === 'email-order'), 'personal tasks do not inherit project mail');
   assert(!store.tasks.some(item => item.projectId === 'P002' && item.taskTemplate === 'email-order'), 'unbound projects do not get a mail task');
   projects[1].mailbox = createProjectMailbox();
@@ -114,7 +109,6 @@ try {
   const restoredTask = restoredStore.tasks.find(item => item.id === task.id);
   assert.equal(restoredTask.runs.length, task.runs.length, 'results are restored without reseeding');
   assert.equal(restoredTask.runs[0].emailOrder.reply.body, task.runs[0].emailOrder.reply.body);
-  assert.equal(restoredStore.unreadResultsByTask[task.id], 0, 'read state survives reload');
   assert.equal(restoredStore.tasks.find(item => item.id === secondTask.id).enabled, false, 'pause survives reload');
   store.deleteTask(task.id);
   assert(store.tasks.some(item => item.id === task.id), 'the fixed demo cannot be deleted');

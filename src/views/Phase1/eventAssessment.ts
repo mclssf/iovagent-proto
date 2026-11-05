@@ -7,7 +7,7 @@ export function effectiveFilter(c:P1AssessmentConfig,type:'parking'|'offline'){r
 export function simulateAssessment(event:P1Event,c:P1AssessmentConfig){
  const evidence=event.poiEvidence;const pois=(evidence?.pois||[]).filter(p=>Number.isFinite(p.distanceMeters)&&p.distanceMeters>=0&&p.distanceMeters<=c.radiusMeters);
  let verdict:'reasonable'|'review'='review';let reason='缺少可核验的位置或轨迹证据，不能仅凭附近POI过滤。';
- if(c.filterRule.trim())reason='已保存自定义过滤规则；本地演示不解释任意规则文本，需接入真实LLM或人工复核，本次不自动过滤。';
+ if(c.filterRule.trim())reason='已保存自定义过滤规则；本次证据仍需人工复核，暂不自动过滤。';
  else if(evidence?.source==='mock'&&event.type==='parking'&&pois.some(p=>['加油站','服务区','合法停车场','维修场所'].includes(p.category)&&p.inside)&&evidence.normalActivityConfirmed&&evidence.durationMatches&&!evidence.dangerousLocation){verdict='reasonable';reason='设施内位置、正常停靠用途和停留时长相符，符合默认合理停车规则。';}
  else if(evidence?.source==='mock'&&event.type==='offline'&&pois.some(p=>['隧道','地下通道'].includes(p.category)&&p.inside)&&evidence.signalRecovered&&evidence.trackContinuous&&evidence.durationMatches&&!evidence.dangerousLocation){verdict='reasonable';reason='遮挡区域位置、通行时长和恢复后的轨迹衔接相符，符合默认合理离线规则。';}
  else if(evidence?.dangerousLocation)reason='位于主线、应急车道或其他危险区域，不按设施附近的普通停靠过滤。';

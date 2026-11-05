@@ -146,16 +146,14 @@ export function completeEmailRun(run: TaskRun, finishedAt: number) {
 
 export function createEmailDemoTask(projectId: string, now = Date.now(), includeHistory = true): DailyTask {
   const task: DailyTask = {
-    id: `email-order-${projectId}`, projectId, name: '邮件处理订单', trigger: 'schedule', taskTemplate: 'email-order',
-    eventType: 'parking', threshold: 0, fenceId: '', time: '', confirmBeforeSend: false,
+    id: `email-order-${projectId}`, projectId, name: '邮件处理订单', trigger: 'email', taskTemplate: 'email-order',
     prompt: '接收客户订单邮件，提取装卸货地、货物和时间要求，给出车型、车辆数、车源和运价判断，补充预计装货或到达时间，并通过邮件回复客户。',
-    enabled: true, createdAt: includeHistory ? now - day : now, lastScheduledDay: '', runs: [], mailbox: { address: emailDemoMailbox, status: 'bound' },
+    enabled: true, createdAt: includeHistory ? now - day : now, runs: [], mailbox: { address: emailDemoMailbox, status: 'bound', boundAt: now },
   };
   if (!includeHistory) return task;
   for (const [index, scenario] of (['both', 'arrival', 'loading'] as const).entries()) {
     const run = createEmailRun(task, scenario, now - (3 - index) * hour);
     completeEmailRun(run, run.startedAt + emailDemoStepDelay * run.steps.length);
-    run.readAt = run.finishedAt;
     task.runs.unshift(run);
   }
   return task;

@@ -1,21 +1,24 @@
 {
   "name": "iovagent",
   "private": true,
-  "version": "0.1.1",
+  "version": "0.2.4",
   "type": "module",
   "scripts": {
-    "dev": "vite --host 127.0.0.1 --port 5806 --strictPort",
+    "dev": "vite --host 127.0.0.1 --port 5810 --strictPort",
     "build": "vite build",
-    "preview": "vite preview --host 0.0.0.0",
-    "typecheck": "vue-tsc --noEmit -p tsconfig.verify.json",
-    "test:phase1": "node scripts/test-phase1.mjs"
+    "preview": "vite preview --host 0.0.0.0"
   },
   "dependencies": {
+    "@amap/screenshot": "0.0.3",
     "animate.css": "^4.1.1",
+    "dompurify": "^3.4.17",
     "element-plus": "^2.10.7",
+    "fflate": "^0.8.3",
+    "marked": "^18.1.1",
     "pinia": "^3.0.3",
     "vue": "^3.5.24",
-    "vue-router": "^4.6.3"
+    "vue-router": "^4.6.3",
+    "xlsx": "^0.18.5"
   },
   "devDependencies": {
     "@amap/amap-jsapi-types": "^0.0.15",

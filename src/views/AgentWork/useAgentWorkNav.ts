@@ -12,8 +12,6 @@ export const agentWorkRouteName: Record<PageId, string> = {
   agent: 'agent-work-agent',
   longTasks: 'agent-work-long-tasks',
   dailyTasks: 'agent-work-daily-tasks',
-  events:'agent-work-events',
-  phaseConfig:'agent-work-phase-config',
   orders: 'agent-work-orders',
   risk: 'agent-work-risk',
   detail: 'agent-work-detail',
@@ -43,7 +41,7 @@ export function useAgentWorkNav() {
 
   function openOrderDetail(order: Order) {
     store.setSelectedOrder(order);
-    return goPage('detail');
+    return goPage('detail', {orderId:order.id,projectId:store.currentProjectId});
   }
 
   function createDownload(scope: string) {
@@ -52,8 +50,8 @@ export function useAgentWorkNav() {
     return goPage('downloads');
   }
 
-  function sendAgent(text?: string, attachments?: TaskAttachment[]) {
-    store.appendAgentExchange(text, goPage, attachments);
+  function sendAgent(text?: string, attachments?: TaskAttachment[], sourceFiles?: File[]) {
+    return store.appendAgentExchange(text, goPage, attachments, sourceFiles);
   }
 
   return { goPage, openOrderDetail, createDownload, sendAgent };

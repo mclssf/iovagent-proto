@@ -1,3 +1,56 @@
+export type P1SkillId = 'p1-status' | 'p1-parking' | 'p1-offline' | 'p1-deviation' | 'p1-late' | 'p1-weather';
+export type P1State = 'pending' | 'loading' | 'in_transit' | 'arrived' | 'completed';
+export type P1EventType = 'fence' | 'parking' | 'offline' | 'deviation' | 'weather';
+export type RouteStrategy = '更多人选择' | '时间优先' | '距离最短';
+export interface OrderNetwork { status: 'registered' | 'unregistered' | 'unknown'; checkedAt: number; source: string; reason: string; monitoringBlocked?: boolean }
+export interface OrderRoutePlan { id: string; strategy: RouteStrategy; plannedAt: number; status: 'ready' | 'failed'; reason: string; source: 'mock'; version: number }
+export interface P1AssessmentConfig {enabled:boolean;radiusMeters:number;filterRule:string}
+export interface P1PoiEvidence {source:'mock';pois:{name:string;category:string;distanceMeters:number;inside:boolean}[];normalActivityConfirmed?:boolean;durationMatches?:boolean;dangerousLocation?:boolean;signalRecovered?:boolean;trackContinuous?:boolean}
+export interface P1Config {
+ pausedSkillIds?: P1SkillId[];
+ assessments:{parking:P1AssessmentConfig;offline:P1AssessmentConfig};
+ resumeSettings?:{statusUpdates?:Exclude<P1State,'pending'>[];lateDeparture?:boolean;lateArrival?:boolean};
+ version:number; selectedSkills:P1SkillId[];weather:{enabled:boolean};
+ deviation:{enabled:boolean;radiusMeters:number;repeatMinutes:number;routeStrategy?:RouteStrategy};
+ offline:{enabled:boolean;thresholdMinutes:number;repeatMinutes:number};
+ parking:{enabled:boolean;thresholdMinutes:number;repeatMinutes:number};
+ fenceTargets:('origin'|'destination')[];
+ missingPass?:{origin:boolean;destination:boolean};
+ lateDeparture:{enabled:boolean;graceMinutes:number};lateArrival:{enabled:boolean;graceMinutes:number};
+ statusUpdates:Exclude<P1State,'pending'>[];
+}
+export interface P1Place {name:string;lat:number;lon:number;radiusMeters:number;regionCode:string;coordinateSystem?:'gps'|'gcj02'}
+export interface P1Correction {at:number;reason:string;before:string;after:string;operator:string}
+export interface P1Order {
+ actualTrack?:{lat:number;lon:number;at:number}[];
+ network?:OrderNetwork; billingExempt?:boolean; billingExemptReason?:string; sourceKey?:string; sourceUpdatedAt?:number; routePlan?:OrderRoutePlan;
+ id:string;projectId:string;plate:string;plateColor:1|2;driver:string;source:string;
+ origin:P1Place;destination:P1Place;plannedDeparture:number|null;plannedArrival:number|null;
+ initialization?:{at:number;state:P1State;basis:string};
+ milestoneMethods?:Partial<Record<P1State,string>>;corrections?:P1Correction[];
+ createdAt:number;state:P1State;enteredAt?:number;departedAt?:number;arrivedAt?:number;completedAt?:number;
+ weatherRequestedAt?:number;weatherEffectiveAt?:number;weatherActiveLogged?:boolean;
+ expiresAt:number;activateAt:number;config:P1Config;
+ providerMode:'mock'|'whitepaper';
+ session:'subscribing'|'active'|'paused'|'stopped'|'cleanup_pending';endReason:string;
+ cleanupWillFail:boolean;cleanupAttempts:number;subscriptionRevision:number;deviationBlocked:boolean;
+}
+export interface P1Event {
+ routePlanId?:string; routeStrategy?:RouteStrategy;
+ position?: { lat:number;lon:number };
+ poiEvidence?:P1PoiEvidence;assessment?:{verdict:'reasonable'|'review';reason:string;radiusMeters:number;rule:string;pois:P1PoiEvidence['pois'];source:'mock'};
+ id:string;orderId:string;projectId:string;type:P1EventType;phase:'started'|'recovered'|'enter'|'exit';
+ occurredAt:number;receivedAt:number;address:string;durationMinutes:number;distanceMeters:number;
+ weatherType?:string;message?:string;sourceMessageId?:string;
+ originalResult?:string;corrections?:P1Correction[];target?:'origin'|'destination';result:string;taskIds:P1SkillId[];configVersion:number;
+}
+export interface P1Anomaly {
+ id:string;orderId:string;kind:'超时停车'|'在途离线'|'线路偏离'|'晚发'|'晚到'|'恶劣天气'|'未经过起始地'|'未经过目的地';
+ status:'active'|'recovered'|'corrected';firstAt:number;lastAt:number;nextReminderAt:number;
+ originalReason?:string;corrections?:P1Correction[];repeatCount:number;reason:string;deadlineAt?:number;eventId?:string;configVersion:number;taskId:P1SkillId;
+}
+export interface P1Log {id:string;projectId:string;orderId:string;taskId:P1SkillId;at:number;kind:'开始'|'基础事件'|'结果'|'提醒'|'恢复'|'结束'|'配置'|'失败';text:string}
+
 export interface Project {
   id: string;
   name: string;
@@ -10,6 +63,8 @@ export interface Project {
   keyword: string;
   statusFilter: string;
   skillIds?: string[];
+  authorizedDataSkillIds?: string[];
+  quickPrompts?: string[];
   mailbox?: ProjectMailbox;
 }
 
@@ -55,8 +110,6 @@ export type PageId =
   | 'knowledgeBase'
   | 'knowledgeBaseEmpty'
   | 'longTasks'
-  | 'events'
-  | 'phaseConfig'
   | 'orders'
   | 'projectCreate'
   | 'projects'
@@ -178,6 +231,10 @@ export interface PrivateCapacity {
 }
 
 export interface Order {
+  riskTags?: string[];
+  billingExempt?: boolean;
+  monitoringId?: string;
+  sourceFields?: { label: string; value: string }[];
   id: string;
   plate: string;
   driver: string;
@@ -208,6 +265,28 @@ export interface TimelineEvent {
 }
 
 export interface ChatMessage {
+  orderQueryId?: string;
+  orderAction?: { id: string; projectId: string; orderId: string; plate: string; before: P1State; target: P1State; at: number; fingerprint: string; expiresAt: number; status: 'pending' | 'done' | 'canceled' | 'failed' };
+  verificationRows?: { row: string; sourceIndex?: number; order: string; plate: string; color: string; start: string; end: string; startPosition: string; endPosition: string; conclusion: string; hint: string }[];
+  pendingPredictionPrompt?: string;
+  predictionReport?: {
+    kind?: 'waybill' | 'stop-risk';
+    overview?: { label: string; count: number; percent: string }[];
+    riskDistribution?: { label: string; count: number; note: string }[];
+    introduction?: string;
+    taskProgress?: { title: string; text: string }[];
+    exportSummary: string;
+    boundaries: { label: string; text: string }[];
+    summary: { label: string; value: string }[];
+    fields: { label: string; header: string; note: string }[];
+    statistics: { label: string; value: string }[];
+    judgments: string[];
+    analyses: { title: string; points: string[]; groups?: { label: string; status?: string; items: string[] }[] }[];
+  };
+  streaming?: boolean;
+  predictionRows?: { row: string; plate: string; status: string; start: string; end: string; startText: string; endText: string; startLocation: string; endLocation: string; hint: string; order?: string; sourceStartTime?: string; coordinate?: string; stopTime?: string; stopEndTime?: string; parkingDistance?: string; endCoordinate?: string; endStopTime?: string }[];
+  completedAt?: number;
+  sessionDivider?: { reason: 'manual' | 'automatic'; createdAt: number };
   role: 'agent' | 'user';
   text: string;
   title?: string;
@@ -298,48 +377,3 @@ export interface EmailOrderResult {
   };
   reply: { subject: string; body: string; sentAt?: number };
 }
-
-export type P1SkillId = 'p1-status' | 'p1-parking' | 'p1-offline' | 'p1-deviation' | 'p1-late' | 'p1-weather';
-export type P1State = 'pending' | 'loading' | 'in_transit' | 'arrived' | 'completed';
-export type P1EventType = 'fence' | 'parking' | 'offline' | 'deviation' | 'weather';
-export interface P1AssessmentConfig {enabled:boolean;radiusMeters:number;filterRule:string}
-export interface P1PoiEvidence {source:'mock';pois:{name:string;category:string;distanceMeters:number;inside:boolean}[];normalActivityConfirmed?:boolean;durationMatches?:boolean;dangerousLocation?:boolean;signalRecovered?:boolean;trackContinuous?:boolean}
-export interface P1Config {
- assessments:{parking:P1AssessmentConfig;offline:P1AssessmentConfig};
- resumeSettings?:{statusUpdates?:Exclude<P1State,'pending'>[];lateDeparture?:boolean;lateArrival?:boolean};
- version:number; selectedSkills:P1SkillId[];weather:{enabled:boolean};
- deviation:{enabled:boolean;radiusMeters:number;repeatMinutes:number};
- offline:{enabled:boolean;thresholdMinutes:number;repeatMinutes:number};
- parking:{enabled:boolean;thresholdMinutes:number;repeatMinutes:number};
- fenceTargets:('origin'|'destination')[];
- missingPass?:{origin:boolean;destination:boolean};
- lateDeparture:{enabled:boolean;graceMinutes:number};lateArrival:{enabled:boolean;graceMinutes:number};
- statusUpdates:Exclude<P1State,'pending'>[];
-}
-export interface P1Place {name:string;lat:number;lon:number;radiusMeters:number;regionCode:string}
-export interface P1Correction {at:number;reason:string;before:string;after:string;operator:string}
-export interface P1Order {
- id:string;projectId:string;plate:string;plateColor:1|2;driver:string;source:string;
- origin:P1Place;destination:P1Place;plannedDeparture:number|null;plannedArrival:number|null;
- initialization?:{at:number;state:P1State;basis:string};
- milestoneMethods?:Partial<Record<P1State,string>>;corrections?:P1Correction[];
- createdAt:number;state:P1State;enteredAt?:number;departedAt?:number;arrivedAt?:number;completedAt?:number;
- weatherRequestedAt?:number;weatherEffectiveAt?:number;weatherActiveLogged?:boolean;
- expiresAt:number;activateAt:number;config:P1Config;
- providerMode:'mock'|'whitepaper';
- session:'subscribing'|'active'|'paused'|'stopped'|'cleanup_pending';endReason:string;
- cleanupWillFail:boolean;cleanupAttempts:number;subscriptionRevision:number;deviationBlocked:boolean;
-}
-export interface P1Event {
- poiEvidence?:P1PoiEvidence;assessment?:{verdict:'reasonable'|'review';reason:string;radiusMeters:number;rule:string;pois:P1PoiEvidence['pois'];source:'mock'};
- id:string;orderId:string;projectId:string;type:P1EventType;phase:'started'|'recovered'|'enter'|'exit';
- occurredAt:number;receivedAt:number;address:string;durationMinutes:number;distanceMeters:number;
- weatherType?:string;message?:string;sourceMessageId?:string;
- originalResult?:string;corrections?:P1Correction[];target?:'origin'|'destination';result:string;taskIds:P1SkillId[];configVersion:number;
-}
-export interface P1Anomaly {
- id:string;orderId:string;kind:'超时停车'|'在途离线'|'线路偏离'|'晚发'|'晚到'|'恶劣天气'|'未经过起始地'|'未经过目的地';
- status:'active'|'recovered'|'corrected';firstAt:number;lastAt:number;nextReminderAt:number;
- originalReason?:string;corrections?:P1Correction[];repeatCount:number;reason:string;deadlineAt?:number;eventId?:string;configVersion:number;taskId:P1SkillId;
-}
-export interface P1Log {id:string;projectId:string;orderId:string;taskId:P1SkillId;at:number;kind:'开始'|'基础事件'|'结果'|'提醒'|'恢复'|'结束'|'配置'|'失败';text:string}

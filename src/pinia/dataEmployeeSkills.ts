@@ -1,6 +1,18 @@
 export const dataEmployeeSkillGroup = '数据员工 Skill' as const;
 
 export type LoginType = '短信验证码' | '手机扫码' | '图形验证码' | '无验证';
+export interface WechatEmployeeSource {
+  enterpriseId: string;
+  enterpriseName: string;
+  accountId: string;
+  accountName: string;
+  wechatId: string;
+  groupId: string;
+  groupName: string;
+  onlineStatus: 'online' | 'offline';
+  acquisitionMethod: string;
+  recognitionDescription: string;
+}
 export interface DataEmployeeSkill {
   description: string;
   privateToolIds: string[];
@@ -13,6 +25,49 @@ export interface DataEmployeeSkill {
   skillUpdated: string;
   skillVersion: string;
   group: typeof dataEmployeeSkillGroup;
+  sourceType?: 'wechat';
+  wechatSource?: WechatEmployeeSource;
+}
+
+// The front-end demo has no authenticated enterprise ID; keep this scope explicit.
+export const currentWechatEnterpriseId = 'ent-east';
+
+export function filterDataEmployeeSkillsForEnterprise(skills: readonly DataEmployeeSkill[], enterpriseId = currentWechatEnterpriseId): DataEmployeeSkill[] {
+  return skills.filter((skill) => skill.sourceType !== 'wechat' || skill.wechatSource?.enterpriseId === enterpriseId);
+}
+
+/** Local fixtures only: account status and bindings do not call a WeChat service. */
+export function createWechatDataEmployeeSkills(): DataEmployeeSkill[] {
+  const accounts: Record<string, Pick<WechatEmployeeSource, 'enterpriseId' | 'enterpriseName' | 'accountId' | 'accountName' | 'wechatId' | 'onlineStatus'>> = {
+    'wx-east-dispatch': { enterpriseId: 'ent-east', enterpriseName: '华东物流事业部', accountId: 'wx-east-dispatch', accountName: '华东调度', wechatId: 'dk_hd_dispatch', onlineStatus: 'online' },
+    'wx-east-retail': { enterpriseId: 'ent-east', enterpriseName: '华东物流事业部', accountId: 'wx-east-retail', accountName: '商超配送', wechatId: 'dk_retail_service', onlineStatus: 'offline' },
+    'wx-southwest-dispatch': { enterpriseId: 'ent-southwest', enterpriseName: '西南供应链中心', accountId: 'wx-southwest-dispatch', accountName: '西南调度', wechatId: 'dk_xn_dispatch', onlineStatus: 'online' },
+  };
+  const bindings = [
+    { id: 'wechat-east-city-dispatch', accountId: 'wx-east-dispatch', groupId: 'wxg-east-city', groupName: '华东城配调度群' },
+    { id: 'wechat-east-linehaul', accountId: 'wx-east-dispatch', groupId: 'wxg-east-linehaul', groupName: '苏沪干线发运群' },
+    { id: 'wechat-east-retail', accountId: 'wx-east-retail', groupId: 'wxg-east-retail', groupName: '华南商超配送群' },
+    { id: 'wechat-southwest-dispatch', accountId: 'wx-southwest-dispatch', groupId: 'wxg-southwest-dispatch', groupName: '西南区域调度群' },
+  ];
+  const recognitionDescription = '识别绑定微信群中的运输委托和运单消息，结合消息上下文提取已提供的运单号、装货地、卸货地、货物名称与数量、装卸货时间、车牌、司机和联系人等信息，整理为项目运单；保留消息来源，未提供的字段留空，不推测补写。';
+  return bindings.map(({ id, accountId, groupId, groupName }) => {
+    const wechatSource: WechatEmployeeSource = { ...accounts[accountId]!, groupId, groupName, acquisitionMethod: '微信消息', recognitionDescription };
+    return {
+      id,
+      name: '群消息录单员',
+      description: `从「${groupName}」获取微信消息，识别运输委托并提取运单信息。`,
+      group: dataEmployeeSkillGroup,
+      privateToolIds: [],
+      sourceType: 'wechat' as const,
+      wechatSource,
+      loginType: '无验证' as const,
+      loginUrl: '微信群消息',
+      skillVersion: 'v1.0',
+      skillUpdated: '2026-10-21 10:00',
+      skillFileName: `${id}.skill.md`,
+      skillContent: `# 群消息录单员\n\n数据获取方式：${wechatSource.acquisitionMethod}\n绑定微信群：${groupName}\n\n识别方式：${recognitionDescription}\n\n处理规则：\n1. 仅处理当前企业、绑定微信号及微信群范围内的消息。\n2. 每个录单员对应一个微信号和一个微信群，同一微信号的不同群分别配置。\n3. 将消息中已有的信息映射为标准运单字段，保留来源群和原始消息引用。\n4. 微信号离线时暂停获取新消息，保留已有绑定和项目配置。`,
+    };
+  });
 }
 
 export function createDataEmployeeSkills(): DataEmployeeSkill[] {
@@ -197,5 +252,6 @@ export function createDataEmployeeSkills(): DataEmployeeSkill[] {
 3. 已发布货源发生变化时，触发统一发布能力执行修改或下架。
 4. 保留源系统货源号与原始数据引用，支持幂等同步和问题追溯。`,
     },
+    ...createWechatDataEmployeeSkills(),
   ];
 }

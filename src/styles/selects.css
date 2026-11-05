@@ -1,0 +1,33 @@
+:root {
+  --combobox-arrow-inset: 12px;
+  --combobox-arrow-size: 14px;
+  --combobox-content-gap: 8px;
+}
+
+/* Keep native popup and keyboard behavior while controlling the trigger arrow. */
+:root select:not([multiple]):is(:not([size]), [size='0'], [size='1']) {
+  -webkit-appearance: none;
+  appearance: none;
+  padding-right: calc(var(--combobox-arrow-inset) + var(--combobox-arrow-size) + var(--combobox-content-gap));
+  background-image: url('../assets/icons/select-chevron.svg');
+  background-position: right var(--combobox-arrow-inset) center;
+  background-repeat: no-repeat;
+  background-size: var(--combobox-arrow-size) var(--combobox-arrow-size);
+}
+
+:root .el-select .el-select__wrapper {
+  padding-right: var(--combobox-arrow-inset);
+  column-gap: var(--combobox-content-gap);
+}
+
+:root .el-select.el-select--large .el-select__wrapper {
+  padding-right: 16px;
+}
+
+@media (forced-colors: active) {
+  :root select:not([multiple]):is(:not([size]), [size='0'], [size='1']) {
+    -webkit-appearance: auto;
+    appearance: auto;
+    background-image: none;
+  }
+}

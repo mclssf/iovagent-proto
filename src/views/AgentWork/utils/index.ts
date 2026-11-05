@@ -19,7 +19,7 @@ export function projectStatusTone(status: string): Tone {
 }
 
 export function getRiskOrders(list: Order[]) {
-  return list.filter((item) => item.risk === '高风险' || item.risk === '低风险');
+  return list.filter((item) => item.riskTags?.includes('车辆未入网') || item.risk === '高风险' || item.risk === '低风险' || (item.monitoringId && item.risk === '待核实')).filter((item, index, rows) => rows.findIndex(order => order.id === item.id) === index);
 }
 
 export function rankByField(list: Order[], field: 'carrier' | 'factory' | 'route') {

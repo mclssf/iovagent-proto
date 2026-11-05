@@ -100,7 +100,7 @@ onBeforeUnmount(() => emit('editingChange', false));
     <div class="customer-table-scroll"><table class="customer-table"><thead><tr><th>客户</th><th>开通周期（合同开始 — 合同结束）</th><th>开通类型</th><th>Agent 配置方式</th><th>操作</th></tr></thead><tbody>
       <tr v-for="item in filteredCustomers" :key="item.id"><td><strong>{{ item.name }}</strong><p class="customer-cid">CID：{{ item.cid }}</p></td><td class="customer-dates">{{ item.contractStart }} <span>—</span> {{ item.contractEnd }}</td><td><span class="agent-status" :class="item.activationType === '试用' ? 'is-warning' : 'is-success'">{{ item.activationType }}</span></td><td><div class="agent-tags"><span v-for="binding in store.customerAgentBindings(item.id)" :key="binding.agentId" class="agent-tag">{{ agentName(binding.agentId) }} · {{ binding.mode === 'default' ? '遵循默认' : '自定义' }}</span></div></td><td><button type="button" class="ops-secondary" :aria-label="`配置 ${item.name}`" @click="openCustomer(item)">配置</button></td></tr>
     </tbody></table><div v-if="!filteredCustomers.length" class="agent-empty"><h3>没有匹配的客户</h3><p>尝试其他名称或开通类型。</p><button class="ops-secondary" @click="search = ''; typeFilter = '全部'">清除筛选</button></div></div>
-    <p class="customer-footnote">客户与合同为演示数据。配置保存在当前演示会话中。</p>
+    <p class="customer-footnote">选择客户，配置其可用的 Agent 与能力。</p>
   </section>
 
   <section v-if="customer" class="agent-editor-page" aria-label="客户 Agent 配置页面">
@@ -133,7 +133,7 @@ onBeforeUnmount(() => emit('editingChange', false));
             <section class="customer-detection customer-config-block" aria-label="当前 Agent 冲突检测"><h3>调用冲突检测</h3><button v-if="report" class="agent-text-link" @click="reportOpen = true">{{ reportStale ? '配置已变化 · 查看上次检测结果' : `查看检测结果 · ${report.findings.length} 项` }}</button><p v-else>尚未检测，可在页首保存并检测。</p></section>
         </div>
         <div v-else class="agent-empty"><h3>请选择有效的 Agent</h3><p>已失效的 Agent 可从左侧移除；最新目录在 Agent 管理中同步。</p></div>
-        <p class="agent-editor-footnote">配置保存在当前演示会话中。</p>
+        <p class="agent-editor-footnote">配置仅适用于当前所选客户。</p>
       </div>
     </div>
     <CustomerConflictReport :open="reportOpen" :report="report" :customer-name="customer.name" :agent-name="activeAgent?.name ?? ''" :stale="reportStale" @close="reportOpen = false" @rerun="save(true)" />

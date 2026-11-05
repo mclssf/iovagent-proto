@@ -1,14 +1,18 @@
+import { ensureMapSamples } from './views/Phase1/mapSamples';
+import { useLingdongSync } from './pinia/lingdongSync';
 import { createApp } from 'vue';
 import { createPinia } from 'pinia';
+import { usePhase1 } from './pinia/phase1';
+import { agentWorkData } from './pinia/agentWork';
+import { phaseSkills } from './views/Phase1/catalog';
+import { persistMonitoringProjects } from './views/Phase1/persistence';
 
-import {usePhase1} from './pinia/phase1';
-import {agentWorkData} from './pinia/agentWork';
-import {phaseSkills} from './views/Phase1/catalog';
 import App from './App.vue';
 import { handleRouter } from './router';
 
 import './styles/tailwind.css';
 import './styles/dialogs.css';
+import './styles/selects.css';
 import 'animate.css';
 
 async function bootstrap(_namespace = 'iovagent') {
@@ -16,17 +20,42 @@ async function bootstrap(_namespace = 'iovagent') {
   const router = handleRouter([]);
 
   app.use(createPinia());
-  const phase=usePhase1();const work=agentWorkData();
-  try{const raw=localStorage.getItem('iovagent-v11-phase1');if(raw){const saved=JSON.parse(raw);if(saved.schema===1&&Array.isArray(saved.state?.orders)&&saved.state?.configs)phase.$patch(saved.state);}}
-  catch{/* keep usable mock defaults */}
-  try{const saved=JSON.parse(localStorage.getItem('iovagent-v11-projects')||'null');if(Array.isArray(saved?.projects)&&saved.projects.every((p:{id?:string;name?:string})=>p.id&&p.name)){work.projects=saved.projects;if(work.projects.some(p=>p.id===saved.currentProjectId))work.currentProjectId=saved.currentProjectId;}}
-  catch{/* retain V1 projects */}
-  for(const config of Object.values(phase.configs))config.weather??={enabled:false};
-  for(const order of phase.orders){order.providerMode ||= 'mock';order.config.weather??={enabled:false};}
-  phase.seed();
-  for(const project of work.projects){if(!phase.configs[project.id])phase.configs[project.id]={...phase.config(project.id),selectedSkills:[]};if(project.id==='P001')project.skillIds=[...(project.skillIds||[]).filter(id=>!phaseSkills.some(s=>s.id===id)),...phase.config(project.id).selectedSkills];}
-  phase.$subscribe((_mutation,state)=>{for(const project of work.projects){if(state.configs[project.id])project.skillIds=[...(project.skillIds||[]).filter(id=>!phaseSkills.some(s=>s.id===id)),...state.configs[project.id]!.selectedSkills];}try{localStorage.setItem('iovagent-v11-phase1',JSON.stringify({schema:1,state}));}catch{/* session stays usable */}},{detached:true});
-  work.$subscribe((_mutation,state)=>{try{localStorage.setItem('iovagent-v11-projects',JSON.stringify({projects:state.projects,currentProjectId:state.currentProjectId}));}catch{/* session stays usable */}},{detached:true});
+  const monitoring = usePhase1();
+  try {
+    const saved = JSON.parse(localStorage.getItem('iovagent-transport-monitoring') || 'null');
+    if (saved?.schema === 1 && Array.isArray(saved.state?.orders) && saved.state?.configs && Array.isArray(saved.state.events) && Array.isArray(saved.state.anomalies) && Array.isArray(saved.state.logs)) monitoring.$patch(saved.state);
+  } catch { /* Keep a usable workspace when saved data is unavailable. */ }
+  monitoring.now = Date.now();
+  monitoring.seed();
+  monitoring.tick();
+  const work = agentWorkData();
+  const syncSkills = () => {
+    for (const project of work.projects) {
+      const config = monitoring.configs[project.id];
+      if (config) {
+        const ids = [...(project.skillIds ?? []).filter(id => !phaseSkills.some(skill => skill.id === id)), ...config.selectedSkills];
+        if (JSON.stringify(project.skillIds) !== JSON.stringify(ids)) project.skillIds = ids;
+      }
+    }
+  };
+  syncSkills();
+  persistMonitoringProjects(work.projects);
+  work.$subscribe((_mutation, state) => {
+    persistMonitoringProjects(state.projects);
+    for (const order of monitoring.orders) if (!state.projects.some(project => project.id === order.projectId)) monitoring.stop(order.id, '所属项目已删除，结束监听');
+  }, { detached: true });
+  monitoring.$subscribe((_mutation, state) => {
+    syncSkills();
+    try { localStorage.setItem('iovagent-transport-monitoring', JSON.stringify({ schema: 1, state })); } catch { /* Active state remains available. */ }
+  }, { detached: true });
+  const inbound = useLingdongSync();
+  try { const saved=JSON.parse(localStorage.getItem('iovagent-lingdong-inbound-v260')||'null');if(saved?.schema===1&&saved.state&&typeof saved.state.defaultProjectId==='string'&&saved.state.records)inbound.$patch({...saved.state,busy:false}); } catch { /* Use initial inbound state. */ }
+  inbound.ensureDefault(work.projects);
+  const persistInbound=()=>{try{localStorage.setItem('iovagent-lingdong-inbound-v260',JSON.stringify({schema:1,state:inbound.$state}));}catch{/* Keep current session. */}};
+  inbound.$subscribe(persistInbound,{detached:true});
+  if(!inbound.lastSyncAt)inbound.syncLatest(work.projects);
+  persistInbound();
+  ensureMapSamples(work.projects);
   app.use(router);
   app.mount('#app');
 }

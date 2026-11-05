@@ -1,0 +1,16 @@
+{
+  "version": "V2.4",
+  "sourceRepository": "https://github.com/mclssf/iovagent-proto.git",
+  "sourceBranch": "main",
+  "sourceCommit": "8339d80dc15ecfb622c3cefbe2e4c4a96f9985df",
+  "createdAt": "2026-11-05",
+  "port": 5810,
+  "localAdaptations": {
+    "package.json": [
+      "version: 0.2.4",
+      "dev: localhost port 5810"
+    ],
+    "environment": "Local AMap credentials in ignored .env.local"
+  },
+  "scope": "Independent snapshot of remote main; existing local versions retained."
+}
