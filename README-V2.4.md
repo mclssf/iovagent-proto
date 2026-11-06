@@ -1,3 +1,5 @@
+本源码同时发布于 GitHub `263` 分支，基于 260 的新增需求见 [263 更新说明](README-263.md)。
+
 # V2.4 · main 分支本地版本
 
 - 来源：`https://github.com/mclssf/iovagent-proto.git` 的 `main` 分支。
