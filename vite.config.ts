@@ -5,7 +5,7 @@ import tailwindcss from '@tailwindcss/vite';
 import vue from '@vitejs/plugin-vue';
 import ElementPlus from 'unplugin-element-plus/vite';
 import { defineConfig, loadEnv, type Plugin } from 'vite';
-import { companyOpenapiPlugin } from './api/company-openapi.mjs';
+import { companyOpenapiPlugin } from './server/company-openapi.mjs';
 
 function createAmapConfigScript(env: Record<string, string>) {
   return `window.__IOV_AMAP_CONFIG__=${JSON.stringify({

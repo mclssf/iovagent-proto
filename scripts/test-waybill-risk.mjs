@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import {verifyWaybill} from '../api/waybill-risk.mjs';
+import {verifyWaybill} from '../server/waybill-risk.mjs';
 const fmt=t=>new Date(t+8*3600000).toISOString().slice(0,19).replace('T',' ');
 const now=Date.now();
 const order={id:'test',plate:'测试001',customerRecord:{fields:{'发车时间':fmt(now-5*3600000),'预约提货时间':fmt(now-6*3600000),'预约送货时间':fmt(now-3600000),'到货确认时间':fmt(now-2*3600000)}}};
