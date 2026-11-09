@@ -19,7 +19,7 @@ export function projectStatusTone(status: string): Tone {
 }
 
 export function getRiskOrders(list: Order[]) {
-  return list.filter((item) => item.risk === '高风险' || item.risk === '低风险');
+  return list.filter((item) => item.risk === '高风险' || item.risk === '低风险' || item.risk === '待核实');
 }
 
 export function rankByField(list: Order[], field: 'carrier' | 'factory' | 'route') {
@@ -67,8 +67,17 @@ export function tableStatusPillClass() {
 export function tableRiskPillClass(risk: string) {
   const base = 'inline-flex items-center rounded-md px-3 py-1 text-xs font-medium';
   if (risk === '高风险') return `${base} bg-red-50 text-red-600`;
-  if (risk === '低风险') return `${base} bg-orange-50 text-orange-600`;
+  if (risk === '中风险' || risk === '有风险') return `${base} bg-orange-50 text-orange-600`;
+  if (risk === '待核实') return `${base} bg-slate-100 text-slate-600`;
   return `${base} bg-emerald-50 text-emerald-600`;
+}
+
+export function waybillColor(risk: string, index: number) {
+  const colors = risk === '高风险' ? ['#dc2626', '#ef4444', '#b91c1c', '#f87171']
+    : risk === '低风险' || risk === '无风险' ? ['#15803d', '#22c55e', '#047857', '#65a30d']
+    : risk === '待核实' ? ['#475569', '#64748b', '#334155', '#94a3b8']
+    : ['#ea580c', '#f97316', '#c2410c', '#fb923c'];
+  return colors[index % colors.length]!;
 }
 
 export function metricToneCls(tone: 'gray' | Tone) {

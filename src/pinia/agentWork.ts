@@ -1,3 +1,7 @@
+import { createDemoJourneys, loadDemoEvidence, evaluateDemoTimes } from '@/views/AgentWork/demoJourneys';
+import { simulateCustomerOrders } from '@/views/AgentWork/simulatedLocations';
+import { attachTelemetry, fetchTelemetry } from '@/views/AgentWork/companyTelemetry';
+import { customerOrders, reviewCustomerOrder } from '@/views/AgentWork/customerOrders';
 import { migrateCapacitySkillIds } from './capacitySkills';
 import type {
   AgentConversation,
@@ -7,6 +11,7 @@ import type {
   ChatMessage,
   DownloadTask,
   Order,
+  WaybillVerification,
   PageId,
   PrivateCapacity,
   Project,
@@ -31,8 +36,8 @@ import { createProjectMailbox, mailboxSkill, persistMailboxProjects, restoreMail
 import { restoreOrdinaryTaskProjects } from './ordinaryTaskPersistence';
 
 const defaultOrdersDateRange = {
-  start: '2026-05-09',
-  end: '2026-05-16',
+  start: customerOrders.map(o => o.startTime.slice(0, 10)).sort()[0]!,
+  end: customerOrders.map(o => o.startTime.slice(0, 10)).sort().slice(-1)[0]!,
 };
 
 function formatLocalDate(date: Date) {
@@ -318,6 +323,49 @@ const ordersSeedData: Order[] = [
     eta: '已完成',
   },
 ];
+
+// Deterministic demo relationships; each waybill has one loading and one unloading stop.
+const demoCoordinates: [number, number][][] = [
+  [[121.4737, 31.2304], [113.48, 23.158]],
+  [[120.5853, 31.2989], [120.1551, 30.2741]],
+  [[114.0579, 22.5431], [118.0894, 24.4798]],
+  [[104.0665, 30.5723], [106.5516, 29.563]],
+  [[121.5503, 29.8746], [117.2272, 31.8206]],
+  [[120.3826, 36.0671], [117.1201, 36.6512]],
+];
+ordersSeedData.forEach((order, index) => {
+  const coordinates = demoCoordinates[index]!;
+  const names = order.route.split(' → ');
+  order.dispatchId = `TP202605${String(index + 1).padStart(6, '0')}`;
+  order.transportMode = index % 2 === 0 ? '大件整车' : '零担';
+  order.stops = [
+    { id: `${order.dispatchId}-L1`, name: names[0]!, coordinate: coordinates[0]!, kind: '装货' },
+    { id: `${order.dispatchId}-U1`, name: names[1]!, coordinate: coordinates[1]!, kind: '卸货' },
+  ];
+});
+// Separated demo sites make the two waybills legible at dispatch scale.
+const companionSites: { load: string; unload: string; coordinates: [number, number][] }[] = [
+  { load: '南京集货仓', unload: '南宁配送仓', coordinates: [[118.7969, 32.0603], [108.3669, 22.817]] },
+  { load: '无锡集货仓', unload: '宁波配送仓', coordinates: [[120.3119, 31.4912], [121.5503, 29.8746]] },
+  { load: '东莞集货仓', unload: '泉州配送仓', coordinates: [[113.7518, 23.0207], [118.6757, 24.8741]] },
+  { load: '德阳集货仓', unload: '万州配送仓', coordinates: [[104.3979, 31.1274], [108.4087, 30.8079]] },
+  { load: '杭州集货仓', unload: '芜湖配送仓', coordinates: [[120.1551, 30.2741], [118.4331, 31.3525]] },
+  { load: '潍坊集货仓', unload: '德州配送仓', coordinates: [[119.1618, 36.7069], [116.3592, 37.4365]] },
+];
+const companionOrders = ordersSeedData.map((order, index): Order => {
+  const sites = companionSites[index]!;
+  return {
+    ...order,
+    id: `${order.id}-02`,
+    factory: sites.load,
+    route: `${sites.load} → ${sites.unload}`,
+    stops: order.stops!.map((stop, stopIndex) => ({
+      ...stop, id: `${stop.id}-02`, name: stop.kind === '装货' ? sites.load : sites.unload,
+      coordinate: sites.coordinates[stopIndex]!,
+    })),
+  };
+});
+ordersSeedData.push(...companionOrders);
 
 const timelineSeed: TimelineEvent[] = [
   { id: 1, type: 'normal', title: '运单开始-车辆进入装货地', time: '09:10', place: '上海一厂', desc: '车辆进入装货地围栏，开始执行运输任务。' },
@@ -1440,7 +1488,7 @@ export const agentWorkData = defineStore('agentWork', {
       workspaceMode: 'project' as AgentWorkspaceMode,
       showProjectModal: false,
       downloadTask: null as DownloadTask | null,
-      selectedOrder: { ...ordersSeedData[0]! } as Order,
+      selectedOrder: { ...customerOrders[0]! } as Order,
       agentInput: '',
       agentMessages: projectWelcomeMessages.map((message) => ({ ...message })) as ChatMessage[],
       rightPanel: 'overview',
@@ -1451,6 +1499,8 @@ export const agentWorkData = defineStore('agentWork', {
       analysisReportTopic: '',
       ordersRiskFilter: '全部',
       ordersStatusFilter: '全部',
+      transportModeFilter: '全部',
+      orderListView: 'waybill' as 'waybill' | 'dispatch',
       ordersKeyword: '',
       riskOrdersRisk: '全部异常',
       riskOrdersSource: '全部来源',
@@ -1493,7 +1543,20 @@ export const agentWorkData = defineStore('agentWork', {
       privateCapacityKeyword: '',
       privateCapacityLoadStateFilter: '全部',
       /** 演示数据，只读引用 */
-      ordersSeed: ordersSeedData,
+      ordersSeed: createDemoJourneys(customerOrders.map(o => reviewCustomerOrder(o, 120))),
+      demoJourneysEnabled: true,
+      demoJourneysReady: false,
+      simulationEnabled: false,
+      realTelemetryEnabled: false,
+      telemetryLoading: false,
+      telemetrySummary: '尚未查询车辆数据',
+      telemetryCheckedAt: '',
+      telemetryColor: '2',
+      telemetryRecent: false,
+      verificationLoading: false,
+      customerStayThreshold: 120,
+      customerMonitorEnabled: true,
+      customerMonitorCheckedAt: '',
     };
   },
   getters: {
@@ -1509,16 +1572,19 @@ export const agentWorkData = defineStore('agentWork', {
     ordersFiltered(state): Order[] {
       return state.ordersSeed.filter(
         (o) =>
+          (state.transportModeFilter === '全部' || o.transportMode === state.transportModeFilter) &&
           (state.ordersRiskFilter === '全部' || o.risk === state.ordersRiskFilter) &&
           (state.ordersStatusFilter === '全部' || o.status === state.ordersStatusFilter) &&
           (!state.ordersStartDate || getOrderStartDate(o) >= state.ordersStartDate) &&
           (!state.ordersEndDate || getOrderStartDate(o) <= state.ordersEndDate) &&
-          (state.ordersKeyword === '' || `${o.id}${o.plate}${o.carrier}${o.route}`.includes(state.ordersKeyword)),
+          (state.ordersKeyword === '' || `${o.id}${o.dispatchId ?? ''}${o.plate}${o.carrier}${o.route}`.includes(state.ordersKeyword)),
       );
     },
     riskOrdersFiltered(state): Order[] {
       const keyword = state.riskOrdersKeyword.trim().toLowerCase();
       return getRiskOrders(state.ordersSeed)
+        .filter((o) => state.transportModeFilter === '全部' || o.transportMode === state.transportModeFilter)
+        .filter((o) => state.ordersStatusFilter === '全部' || o.status === state.ordersStatusFilter)
         .filter((o) => state.riskOrdersRisk === '全部异常' || o.risk === state.riskOrdersRisk)
         .filter((o) => state.riskOrdersSource === '全部来源' || o.source.includes(state.riskOrdersSource))
         .filter((o) => !state.ordersStartDate || getOrderStartDate(o) >= state.ordersStartDate)
@@ -1526,10 +1592,15 @@ export const agentWorkData = defineStore('agentWork', {
         .filter(
           (o) =>
             keyword === '' ||
-            `${o.id}${o.plate}${o.driver}${o.carrier}${o.route}${o.factory}${o.issue}${o.source}${o.risk}${o.status}`.toLowerCase().includes(keyword),
+            `${o.id}${o.dispatchId ?? ''}${o.plate}${o.driver}${o.carrier}${o.route}${o.factory}${o.issue}${o.source}${o.risk}${o.status}`.toLowerCase().includes(keyword),
         );
     },
     riskOrdersSummary(): string {
+      if (this.simulationEnabled) return `模拟监控共${this.riskOrdersFiltered.length}张异常运单，异常由模拟定位生成。`;
+      if (this.ordersSeed.some(o => o.customerRecord)) {
+        const rows = this.riskOrdersFiltered;
+        return `当前筛选共${rows.length}张客户运单：${rows.filter(o => o.risk === '低风险').length}张有快照复核提示，${rows.filter(o => o.risk === '待核实').length}张缺少履约依据待核实。`;
+      }
       return summarizeOrders(this.riskOrdersFiltered);
     },
     visibleRightPanel(state): string {
@@ -1619,6 +1690,115 @@ export const agentWorkData = defineStore('agentWork', {
     },
   },
   actions: {
+    updateDemoPlanTime(orderId: string, field: string, value: string) {
+      if (!['计划发车时间', '预约送货时间'].includes(field)) return;
+      const normalized = value.replace('T', ' ') + (value.length === 16 ? ':00' : '');
+      if (!Number.isFinite(Date.parse(normalized.replace(' ', 'T') + '+08:00'))) return;
+      this.ordersSeed = this.ordersSeed.map(order => {
+        if (order.id !== orderId || !order.demoTimes) return order;
+        const demoTimes = { ...order.demoTimes, [field]: normalized };
+        const result = evaluateDemoTimes(demoTimes);
+        return { ...order, demoTimes, risk: result.risk, issue: result.issue, source: '测试时间规则判定' };
+      });
+    },
+    async ensureDemoJourneys() {
+      if (!this.demoJourneysEnabled || this.demoJourneysReady) return;
+      const evidence = await loadDemoEvidence();
+      this.ordersSeed = createDemoJourneys(customerOrders.map(o => reviewCustomerOrder(o, this.customerStayThreshold)), evidence);
+      this.demoJourneysReady = true;
+    },
+    applyWaybillVerification(data: WaybillVerification) {
+      this.ordersSeed = this.ordersSeed.map(order => {
+        if (order.id !== data.orderId || order.plate !== data.plate) return order;
+        const base = reviewCustomerOrder(customerOrders.find(o => o.id === order.id)!, this.customerStayThreshold);
+        const priority = (check: WaybillVerification['items'][number]) => (['晚发', '晚到', '超时停车', '停车超时', '线路偏移', '线路偏离'].includes(check.name) ? 0 : 10) + (check.status === '异常' ? 0 : check.status === '待核实' ? 1 : 2);
+        const description = [...data.items].sort((a, b) => priority(a) - priority(b)).map(i => `${i.name}：${i.status}（${i.evidence}）`).join('；');
+        const risk = data.risk === '高风险' ? '高风险' : data.risk === '低风险' || base.risk === '低风险' ? '低风险' : data.risk;
+        return { ...order, verification: data, risk, source: '车辆核验与客户单据',
+          issue: `${description}${base.risk === '低风险' ? '；单据复核：' + base.issue : ''}`, updated: data.checkedAt };
+      });
+    },
+    async verifyOrderRisk(orderId: string, coordinates?: { origin?: [number, number]; destination?: [number, number] }) {
+      const previous = this.ordersSeed.find(o => o.id === orderId)?.verification;
+      if (previous && Date.now() - Date.parse(previous.checkedAt) < 300000 && coordinates &&
+        JSON.stringify(previous.origin) === JSON.stringify(coordinates.origin || null) && JSON.stringify(previous.destination) === JSON.stringify(coordinates.destination || null)) return;
+      const response = await fetch('/api/company-openapi/risk-check', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ orderId, color: this.telemetryColor, ...coordinates }), signal: AbortSignal.timeout(180000),
+      });
+      const data = await response.json();
+      if (!response.ok || data.error) throw new Error(data.error || '运单核验失败');
+      this.applyWaybillVerification(data as WaybillVerification);
+    },
+    async refreshWaybillVerifications() {
+      if (this.verificationLoading) return;
+      this.verificationLoading = true;
+      try {
+        const previous = await fetch('/api/company-openapi/risk-check').then(r => r.json()).catch(() => []);
+        if (Array.isArray(previous)) previous.forEach((data: WaybillVerification) => this.applyWaybillVerification(data));
+        const { loadAMap, resolveWarehouseCoordinates } = await import('@/utils/amap');
+        const amap = await loadAMap(['AMap.Geocoder']).catch(() => undefined);
+        for (const order of [...this.ordersSeed]) {
+          if (order.verification?.origin && order.verification?.destination && Date.now() - Date.parse(order.verification.checkedAt) < 300000) continue;
+          const coordinates: { origin?: [number, number]; destination?: [number, number] } = {};
+          if (amap) for (const [key, kind] of [['origin', '装货'], ['destination', '卸货']] as const) {
+            const stop = order.stops?.find(s => s.kind === kind);
+            if (stop) try { coordinates[key] = (await resolveWarehouseCoordinates(amap, [stop]))[0]; } catch { /* Keep the failed item pending. */ }
+          }
+          try { await this.verifyOrderRisk(order.id, coordinates); }
+          catch { this.ordersSeed = this.ordersSeed.map(o => o.id === order.id ? { ...o, issue: `${o.issue}；运单核验服务未返回有效结果，待重试` } : o); }
+        }
+      } finally { this.verificationLoading = false; }
+    },
+    async refreshRealTelemetry() {
+      if (this.demoJourneysEnabled) return;
+      if (this.telemetryLoading) return;
+      this.telemetryLoading = true;
+      this.realTelemetryEnabled = true;
+      this.simulationEnabled = false;
+      const color = this.telemetryColor, recent = this.telemetryRecent;
+      const base = customerOrders.map(o => reviewCustomerOrder(o, this.customerStayThreshold));
+      this.ordersSeed = base;
+      const plates = [...new Set(base.map(o => o.plate))];
+      let tracked = 0, failed = 0, finished = 0, cursor = 0;
+      const run = async () => {
+        while (cursor < plates.length) {
+          const plate = plates[cursor++]!;
+          try {
+            const data = await fetchTelemetry(plate, base.filter(o => o.plate === plate), color, recent);
+            if (data.track.length) tracked++;
+            if (!data.track.length) failed++;
+            this.ordersSeed = this.ordersSeed.map(o => o.plate === plate ? attachTelemetry(base.find(b => b.id === o.id)!, data) : o);
+          } catch (error) {
+            failed++;
+            const message = error instanceof Error ? error.message : '车辆数据查询失败';
+            this.ordersSeed = this.ordersSeed.map(o => o.plate === plate ? { ...o, source: '车辆数据查询失败', issue: `${o.issue}；${message}` } : o);
+          }
+          finished++;
+          this.telemetrySummary = `${plates.length}辆车：轨迹${tracked}辆 · 无数据或失败${failed}辆（已完成${finished}/${plates.length}）`;
+        }
+      };
+      try { await Promise.all([run(), run()]); }
+      finally {
+        this.telemetryLoading = false;
+        this.telemetryCheckedAt = new Date().toISOString();
+        this.telemetrySummary = `${plates.length}辆车：轨迹${tracked}辆 · 无数据或失败${failed}辆`;
+        void this.refreshWaybillVerifications();
+      }
+    },
+    refreshSimulatedLocations() {
+      this.realTelemetryEnabled = false;
+      this.ordersSeed = this.simulationEnabled ? simulateCustomerOrders(customerOrders) : customerOrders.map(o => reviewCustomerOrder(o, this.customerStayThreshold));
+    },
+    reviewCustomerSnapshot() {
+      if (this.demoJourneysEnabled) return;
+      if (this.realTelemetryEnabled) return;
+      if (this.simulationEnabled) { this.refreshSimulatedLocations(); return; }
+      if (!this.customerMonitorEnabled) return;
+      this.customerStayThreshold = Math.max(1, Number(this.customerStayThreshold) || 120);
+      this.ordersSeed = this.ordersSeed.map(order => reviewCustomerOrder(order, this.customerStayThreshold));
+      this.customerMonitorCheckedAt = new Date().toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', hour12: false });
+    },
     focusCargoQuotes(cargoId: string) {
       this.quoteKeyword = cargoId;
       this.quoteTypeFilter = '全部';
@@ -2107,7 +2287,7 @@ export const agentWorkData = defineStore('agentWork', {
         ...this.agentMessages,
         {
           role: 'agent',
-          text: `今日异常简报：${summarizeOrders(this.riskOrdersFiltered)}建议优先处理高风险非目的地物流园长停和轨迹造假高风险事件。`,
+          text: `客户运单复核简报：${this.riskOrdersSummary}请核实在场停留及缺失的履约数据。`,
         },
       ];
       this.rightPanel = 'risk';

@@ -33,7 +33,8 @@ export default async function handler(request, response) {
 
   try {
     const upstream = await fetch(upstreamUrl, {
-      headers: { Accept: request.headers.accept || '*/*' },
+      headers: { Accept: request.headers.accept || '*/*', ...(request.headers.referer ? { Referer: request.headers.referer } : {}) },
+      signal: AbortSignal.timeout(15000),
       method: request.method === 'HEAD' ? 'HEAD' : 'GET',
     });
     response.status(upstream.status);

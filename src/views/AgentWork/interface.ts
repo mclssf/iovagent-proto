@@ -175,7 +175,36 @@ export interface PrivateCapacity {
   updatedAt: string;
 }
 
+export interface TransportStop {
+  id: string;
+  name: string;
+  coordinate?: [number, number];
+  address?: string;
+  kind: '装货' | '卸货';
+}
+
+export interface SimulatedLocation {
+  scenario: string;
+  state: string;
+  speed: number;
+  timestamp: string;
+  coordinate: [number, number];
+  track: [number, number][];
+  arrivedAt: string;
+  stayMinutes: number;
+}
+
 export interface Order {
+  demoTrip?: { startTime: string; endTime: string; originalStartTime: string };
+  demoGps?: { coordinate: [number, number]; timestamp: string }[];
+  demoTimes?: Record<string, string>;
+  verification?: WaybillVerification;
+  telemetry?: VehicleTelemetry;
+  simulation?: SimulatedLocation;
+  customerRecord?: { sourceRow: number; fields: Record<string, string> };
+  dispatchId?: string;
+  transportMode?: '零担' | '大件整车';
+  stops?: TransportStop[];
   id: string;
   plate: string;
   driver: string;
@@ -189,6 +218,31 @@ export interface Order {
   startTime: string;
   updated: string;
   eta: string;
+}
+
+export interface WaybillVerification {
+  orderId: string;
+  plate: string;
+  checkedAt: string;
+  risk: string;
+  summary: string;
+  items: { name: string; status: string; risk: string; evidence: string; rule: string }[];
+  origin: [number, number] | null;
+  destination: [number, number] | null;
+  color: string;
+}
+
+export interface VehicleTelemetry {
+  plate: string;
+  queriedAt: string;
+  start: string;
+  end: string;
+  color: string;
+  coordinateSystem: 'WGS84';
+  location: { coordinate: [number, number]; timestamp: string | null; address: string; speed: number | null; direction: number | null } | null;
+  track: { coordinate: [number, number]; timestamp: string; speed: number | null }[];
+  locationError: string;
+  trackError: string;
 }
 
 export interface TimelineEvent {

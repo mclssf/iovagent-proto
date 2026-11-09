@@ -1,0 +1,17 @@
+import fs from 'node:fs/promises';
+import ts from 'typescript';
+import assert from 'node:assert/strict';
+const source=await fs.readFile('src/views/AgentWork/orderTrajectory.ts','utf8');
+const js=ts.transpileModule(source,{compilerOptions:{target:ts.ScriptTarget.ES2020,module:ts.ModuleKind.ESNext}}).outputText;
+const {associateOrderTrajectory:associate}=await import('data:text/javascript;base64,'+Buffer.from(js).toString('base64'));
+const order={id:'A',plate:'测试车01',customerRecord:{fields:{'发车时间':'2026-10-28 10:00:00','到货确认时间':'2026-10-28 12:00:00'}}};
+const points=['09:59:59','10:00:00','11:00:00','12:00:00','12:00:01'].map(time=>({timestamp:'2026-10-28T'+time+'+08:00',coordinate:[114,30],speed:1}));
+const vehicle={plate:order.plate,track:points,location:{timestamp:points[4].timestamp,coordinate:[114,30]},queriedAt:new Date().toISOString()};
+const matched=associate(order,vehicle);assert.equal(matched.count,3);assert.equal(matched.confirmed,true);assert.equal(matched.telemetry.location,null);
+assert.equal(associate({...order,plate:'另一辆车'},vehicle).count,0);
+const later={...order,id:'B',customerRecord:{fields:{'发车时间':'2026-10-28 11:00:00','到货确认时间':'2026-10-28 13:00:00'}}};
+assert.notDeepEqual(associate(later,vehicle).telemetry.track,matched.telemetry.track);
+assert.equal(associate({...order,customerRecord:{fields:{'发车时间':'2026-10-28 10:00:00'}}},vehicle).telemetry,undefined);
+assert.equal(associate({...order,customerRecord:{fields:{'发车时间':'2026-10-28 10:00:00','预约送货时间':'2026-10-28 12:00:00'}}},vehicle).confirmed,false);
+assert.equal(associate({...order,customerRecord:{fields:{'发车时间':'2026-10-28 13:00:00','到货确认时间':'2026-10-28 12:00:00'}}},vehicle).telemetry,undefined);
+console.log('Passed: per-waybill time boundaries, wrong plate, unrelated current position, missing/invalid times, planned-time uncertainty.');

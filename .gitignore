@@ -1,10 +1,8 @@
-node_modules
-dist
-dist.zip
-.DS_Store
+node_modules/
+.local/
+dist/
 *.tsbuildinfo
-.env.local
-.env.*.local
-docs
-inputs
-outputs
+.DS_Store
+.env
+.env.*
+!.env.example

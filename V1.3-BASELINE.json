@@ -1,0 +1,15 @@
+{
+  "version": "V1.3",
+  "sourceRepository": "https://github.com/mclssf/iovagent-proto.git",
+  "sourceBranch": "main",
+  "sourceCommit": "bfd810e2a3e734185905da7293053c5c98ca347c",
+  "createdAt": "2026-10-29",
+  "port": 5808,
+  "localAdaptations": {
+    "package.json": [
+      "version: 1.3.0",
+      "dev: vite --host 127.0.0.1 --port 5808 --strictPort"
+    ]
+  },
+  "scope": "Independent snapshot of remote main; existing local versions retained."
+}
