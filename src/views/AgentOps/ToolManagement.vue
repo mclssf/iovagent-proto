@@ -1,9 +1,9 @@
 <script lang="ts" setup>
-import { computed, ref } from 'vue';
+import { computed, ref, watch } from 'vue';
 import { ElMessage } from 'element-plus';
 import AppDialog from '@/components/AppDialog.vue';
 import { Icon } from '@packages/icon';
-import { useAgentOpsStore } from '@/pinia/agentOps';
+import { historyVersionLabel, useAgentOpsStore } from '@/pinia/agentOps';
 import type { AgentCallableSkill, ManagedTool, ToolKind } from '@/pinia/agentOps';
 import type { CodeTool, CodeToolVersion } from '@/pinia/agentOps';
 import type { CustomerAgentTarget } from '@/pinia/customerAgents';
@@ -11,6 +11,7 @@ import { strokeIconPaths } from '../AgentWork/strokeIconPaths';
 import McpServiceForm from './McpServiceForm.vue';
 import McpServiceStatus from './McpServiceStatus.vue';
 import McpToolsDialog from './McpToolsDialog.vue';
+import OutputParameterEditor from './OutputParameterEditor.vue';
 import { sensitiveHeader } from './mcpConfig';
 
 const emit = defineEmits<{ editSkill: [skill: AgentCallableSkill]; editCustomerAgent: [target: CustomerAgentTarget] }>();
@@ -22,16 +23,76 @@ const selectedTool = computed(() => store.tools.find((tool) => tool.id === selec
 const detailOpen = ref(false);
 const draft = ref<CodeTool>();
 const editingTool = ref(false);
+const outputMode = ref<'form' | 'json'>('form');
+const outputJson = ref('');
+const outputError = ref('');
+watch(() => draft.value?.outputs, outputs => {
+  if (outputMode.value === 'form') outputJson.value = JSON.stringify(outputs || [], null, 2);
+}, { deep: true, flush: 'sync' });
+function validateOutputs(value: unknown): void {
+  if (!Array.isArray(value)) throw new Error('输出参数JSON必须为数组');
+  const names = new Set<string>();
+  for (const param of value) {
+    if (!param || typeof param.name !== 'string' || !param.name.trim()) throw new Error('参数名称不能为空');
+    if (names.has(param.name.trim())) throw new Error(`同级参数名称重复：${param.name}`);
+    names.add(param.name.trim());
+    if (!['string','number','boolean','object','array'].includes(param.type) || typeof param.description !== 'string') throw new Error('参数类型或说明格式不正确');
+    if (param.children !== undefined) validateOutputs(param.children);
+  }
+}
+function switchOutputMode() {
+  try {
+    if (!draft.value) return;
+    if (outputMode.value === 'form') { outputJson.value = JSON.stringify(draft.value.outputs, null, 2); outputMode.value = 'json'; }
+    else { const value = JSON.parse(outputJson.value); validateOutputs(value); draft.value.outputs = value; outputMode.value = 'form'; }
+    outputError.value = '';
+  } catch (error) { outputError.value = error instanceof Error ? error.message : 'JSON格式不正确'; }
+}
+function addOutput() { draft.value?.outputs.push({ name: '', type: 'string', required: false, description: '' }); }
 const historyOpen = ref(false);
 const historyId = ref('');
 const historical = ref<CodeToolVersion>();
 const history = computed(() => [...store.toolVersions(historyId.value)].reverse());
 const historyDetailOpen = ref(false);
+const exporting = ref(false);
+async function exportAllCodeTools() {
+  if (exporting.value) return;
+  exporting.value = true;
+  try {
+    const XLSX = await import('xlsx');
+    const all = store.tools.filter(tool => tool.kind === 'code');
+    if (!all.length) { ElMessage.warning('暂无可导出的内置API工具'); return; }
+    const rows: (string | number)[][] = [['工具ID', '工具名称', 'Description', '更新时间', '运行环境', '代码入口', '加载状态', '输入参数数量', '输入参数详情', '输出参数数量', '输出参数详情', 'Agent 默认配置', '直接加载的客户 Agent', '私有化加载的 Skill']];
+    for (const tool of all) {
+      const loading = store.getToolLoading(tool.id);
+      rows.push([
+        tool.id, tool.name, tool.description, tool.updatedAt, tool.runtime, tool.entrypoint,
+        [loading.direct ? 'Agent 直接加载' : '', loading.private ? '私有化加载' : '', loading.unloaded ? '未配置加载' : ''].filter(Boolean).join('、'),
+        tool.inputs.length,
+        tool.inputs.map(param => `${param.name} | 类型：${param.type} | 必填：${param.required ? '是' : '否'} | 说明：${param.description}`).join('\n') || '无输入参数',
+        tool.outputs.length,
+        JSON.stringify(tool.outputs, null, 2),
+        store.agentsUsingToolByDefault(tool.id).map(agent => `${agent.name}（${agent.id}）`).join('\n') || '无默认加载',
+        store.customerAgentsForTool(tool.id).map(agent => `${agent.name}（${agent.id}） | ${agent.mode === 'default' ? '遵循默认' : '自定义'}`).join('\n') || '无客户 Agent 直接加载',
+        store.skillsForTool(tool.id).map(skill => `${skill.name}（${skill.id}） | ${skill.enabled ? '已启用' : '已禁用'}`).join('\n') || '无私有化加载 Skill',
+      ]);
+    }
+    const book = XLSX.utils.book_new();
+    const sheet = XLSX.utils.aoa_to_sheet(rows);
+    sheet['!cols'] = rows[0].map((_, index) => ({ wch: [2, 8, 10, 11, 12, 13].includes(index) ? 60 : 24 }));
+    sheet['!autofilter'] = { ref: sheet['!ref']! };
+    XLSX.utils.book_append_sheet(book, sheet, '全部API详情');
+    XLSX.writeFile(book, `内置API工具详情_${new Date().toISOString().replace(/[:.]/g, '-')}.xlsx`, { compression: true });
+    ElMessage.success(`已导出全部 ${all.length} 个内置API工具`);
+  } catch { ElMessage.error('导出失败，请重试'); }
+  finally { exporting.value = false; }
+}
 function openHistory(id: string) { historyId.value = id; historyOpen.value = true; }
-function setOutputEnabled(name: string, enabled: boolean) { const param = draft.value?.outputs.find(item => item.name === name); if (param) param.enabled = enabled; }
 function saveTool() {
   if (!draft.value) return;
   try {
+    if (outputMode.value === 'json') { const value = JSON.parse(outputJson.value); validateOutputs(value); draft.value.outputs = value; }
+    validateOutputs(draft.value.outputs);
     store.saveCodeTool(draft.value.id, draft.value.description, draft.value.outputs);
     detailOpen.value = false;
     ElMessage.success('已保存并生成新版本');
@@ -69,6 +130,7 @@ function viewMcpTools(id: string) {
   toolsDialogOpen.value = true;
 }
 function showTool(tool: ManagedTool, edit = false) {
+  outputMode.value = 'form'; outputJson.value = ''; outputError.value = '';
   editingTool.value = edit && tool.kind === 'code';
   draft.value = tool.kind === 'code' ? JSON.parse(JSON.stringify(tool)) : undefined;
   selectedToolId.value = tool.id;
@@ -112,7 +174,7 @@ async function syncCodeTools() {
     <div class="flex shrink-0 flex-wrap items-center justify-between gap-3 border-b border-[#e2e2dc] px-5 py-4">
       <div><h2 class="text-base font-semibold">Tool 管理</h2><p class="mt-1 text-xs leading-5 text-slate-500">{{ tab === 'mcp' ? '管理 MCP 服务连接，测试连接并同步工具定义。' : '管理内置API工具的描述、输出参数及历史版本。' }}</p></div>
       <button v-if="tab === 'mcp'" type="button" class="ops-primary" @click="editService()"><Icon :svg="strokeIconPaths.plus" :size="15" />新增 MCP 服务</button>
-      <button v-else type="button" class="ops-primary" :disabled="store.codeToolSync.busy" @click="syncCodeTools"><Icon :svg="strokeIconPaths.refresh" :size="15" />{{ store.codeToolSync.busy ? '同步中…' : '现在同步' }}</button>
+      <div v-else class="flex items-center gap-2"><button type="button" class="ops-secondary" :disabled="exporting || store.codeToolSync.busy" @click="exportAllCodeTools"><Icon :svg="strokeIconPaths.download" :size="15" />{{ exporting ? '导出中…' : '导出全部' }}</button><button type="button" class="ops-primary" :disabled="store.codeToolSync.busy" @click="syncCodeTools"><Icon :svg="strokeIconPaths.refresh" :size="15" />{{ store.codeToolSync.busy ? '同步中…' : '现在同步' }}</button></div>
     </div>
     <div class="flex shrink-0 gap-6 border-b border-[#e2e2dc] px-5" role="tablist" aria-label="Tool 类型">
       <button v-for="kind in kinds" :key="kind.id" type="button" role="tab" :aria-selected="tab === kind.id" :class="['tool-tab', { active: tab === kind.id }]" @click="tab = kind.id">
@@ -154,8 +216,8 @@ async function syncCodeTools() {
             <span v-if="store.getToolLoading(selectedTool.id).unloaded" class="loading-badge unloaded">未配置加载</span>
             <span class="text-xs text-slate-500">{{ selectedTool.kind === 'code' ? '工程更新于' : '更新于' }} {{ selectedTool.updatedAt }}</span>
           </div>
-          <p class="mt-3 text-xs leading-5 text-slate-500">{{ selectedTool.kind === 'code' ? (editingTool ? '可编辑描述、输出参数说明及启用状态，保存后生成历史版本。' : '当前为只读详情，可在列表点击“编辑”修改配置。') : '连接属性可编辑，工具定义从 MCP 服务同步。' }}</p>
-          <div class="mt-4 flex items-center gap-3"><h3 class="text-xs font-semibold">Description</h3></div><label v-if="draft && editingTool" class="ops-field mt-2"><span class="sr-only">Description</span><textarea v-model="draft.description" class="ops-input" rows="3" maxlength="200" aria-label="Description" /><span class="text-right text-xs text-slate-500">{{ draft.description.length }}/200</span></label>
+          <p class="mt-3 text-xs leading-5 text-slate-500">{{ selectedTool.kind === 'code' ? (editingTool ? '可编辑描述、输出参数及子参数，支持JSON代码编辑，保存后生成历史版本。' : '当前为只读详情，可在列表点击“编辑”修改配置。') : '连接属性可编辑，工具定义从 MCP 服务同步。' }}</p>
+          <div class="mt-4 flex items-center gap-3"><h3 class="text-xs font-semibold">Description</h3></div><label v-if="draft && editingTool" class="ops-field mt-2"><span class="sr-only">Description</span><textarea v-model="draft.description" class="ops-input" rows="3" aria-label="Description" /></label>
           <p v-else class="mt-1 whitespace-pre-wrap text-sm leading-6">{{ selectedTool.description }}</p>
         </div>
         <template v-if="selectedTool.kind === 'mcp'">
@@ -165,7 +227,12 @@ async function syncCodeTools() {
         </template>
         <template v-else>
           <dl class="tool-properties"><dt>运行环境</dt><dd>{{ selectedTool.runtime }}</dd><dt>代码入口</dt><dd class="font-mono">{{ selectedTool.entrypoint }}</dd></dl>
-          <section v-for="direction in (['inputs', 'outputs'] as const)" :key="direction"><h3 class="mb-3 font-semibold">{{ direction === 'inputs' ? '输入参数' : '输出参数' }}（{{ selectedTool[direction].length }}）</h3><table class="tool-table"><thead><tr><th>参数名称</th><th>类型</th><th v-if="direction === 'inputs'">必填</th><th>说明</th><th v-if="direction === 'outputs'">状态</th></tr></thead><tbody><tr v-for="param in (direction === 'outputs' && draft ? draft.outputs : selectedTool[direction])" :key="param.name"><td class="font-mono text-xs">{{ param.name }}</td><td class="font-mono text-xs">{{ param.type }}</td><td v-if="direction === 'inputs'">{{ param.required ? '是' : '否' }}</td><td><textarea v-if="direction === 'outputs' && editingTool" v-model="param.description" class="ops-input" rows="2" :aria-label="`${param.name} 参数说明`" /><span v-else>{{ param.description }}</span></td><td v-if="direction === 'outputs'"><label class="flex items-center gap-2 whitespace-nowrap text-xs"><input v-if="editingTool" type="checkbox" :checked="param.enabled !== false" :aria-label="`${param.name} 启用`" @change="setOutputEnabled(param.name, ($event.target as HTMLInputElement).checked)" />{{ param.enabled !== false ? '已启用' : '已禁用' }}</label></td></tr></tbody></table><p v-if="!selectedTool[direction].length" class="py-4 text-xs text-slate-500">无{{ direction === 'inputs' ? '输入' : '输出' }}参数</p></section>
+          <section><h3 class="mb-3 font-semibold">输入参数（{{ selectedTool.inputs.length }}）</h3><table class="tool-table"><thead><tr><th>参数名称</th><th>类型</th><th>必填</th><th>说明</th></tr></thead><tbody><tr v-for="param in selectedTool.inputs" :key="param.name"><td>{{ param.name }}</td><td>{{ param.type }}</td><td>{{ param.required ? '是' : '否' }}</td><td>{{ param.description }}</td></tr></tbody></table></section>
+          <section v-if="draft"><div class="mb-3 flex justify-between gap-2"><h3 class="font-semibold">输出参数（{{ draft.outputs.length }}）</h3><div v-if="editingTool" class="flex gap-2"><button type="button" class="ops-secondary" @click="switchOutputMode">{{ outputMode === 'form' ? 'JSON代码编辑' : '切换表单编辑' }}</button><button v-if="outputMode === 'form'" type="button" class="ops-secondary" @click="addOutput">新增出参</button></div></div>
+            <template v-if="editingTool && outputMode === 'json'"><p class="mb-2 text-xs text-slate-500">使用参数数组，包含 name、type、description；子参数放在 children 数组中。</p><textarea v-model="outputJson" class="ops-input font-mono" rows="16" aria-label="输出参数JSON代码" spellcheck="false" /></template>
+            <OutputParameterEditor v-else :parameters="draft.outputs" :readonly="!editingTool" />
+            <p v-if="!draft.outputs.length && outputMode === 'form'" class="py-3 text-xs text-slate-500">暂无输出参数</p><p v-if="outputError" role="alert" class="mt-2 text-red-600">{{ outputError }}</p>
+          </section>
         </template>
         <section><h3 class="mb-3 font-semibold">Agent 默认配置</h3><div class="flex flex-wrap gap-2"><span v-for="agent in store.agentsUsingToolByDefault(selectedTool.id)" :key="agent.id" class="skill-link">{{ agent.name }}</span><p v-if="!store.agentsUsingToolByDefault(selectedTool.id).length" class="text-xs text-slate-500">未配置默认直接加载。</p></div></section>
         <section><h3 class="mb-3 font-semibold">直接加载的客户 Agent（{{ store.customerAgentsForTool(selectedTool.id).length }}）</h3><div class="flex flex-wrap gap-2"><button v-for="agent in store.customerAgentsForTool(selectedTool.id)" :key="agent.id" class="skill-link" type="button" @click="configureAgent(agent)">{{ agent.name }} · {{ agent.mode === 'default' ? '遵循默认' : '自定义' }}</button></div><p v-if="!store.customerAgentsForTool(selectedTool.id).length" class="text-xs text-slate-500">暂无 客户 Agent 直接加载，可在客户 Agent 配置页中添加。</p></section>
@@ -175,16 +242,17 @@ async function syncCodeTools() {
     </AppDialog>
 
     <AppDialog v-model="historyOpen" title="工具历史记录" width="760px">
-      <table class="tool-table"><thead><tr><th>版本</th><th>保存时间</th><th>操作</th><th>操作人</th><th>详情</th></tr></thead><tbody><tr v-for="version in history" :key="version.version"><td>V{{ version.version }}{{ version.version === history[0]?.version ? '（当前）' : '' }}</td><td>{{ version.savedAt }}</td><td>{{ version.action }}</td><td>{{ version.savedBy || (version.version === 1 ? '系统初始化' : '当前运营用户') }}</td><td><button type="button" class="underline" @click="historical = version; historyDetailOpen = true">查看详情</button></td></tr></tbody></table>
+      <table class="tool-table"><thead><tr><th>版本</th><th>保存时间</th><th>操作</th><th>操作人</th><th>详情</th></tr></thead><tbody><tr v-for="version in history" :key="version.version"><td>{{ historyVersionLabel(version.version) }}{{ version.version === history[0]?.version ? '（当前）' : '' }}</td><td>{{ version.savedAt }}</td><td>{{ version.action }}</td><td>{{ version.savedBy || (version.version === 1 ? '系统初始化' : '当前运营用户') }}</td><td><button type="button" class="underline" @click="historical = version; historyDetailOpen = true">查看详情</button></td></tr></tbody></table>
       <template #footer><button type="button" class="ops-secondary" @click="historyOpen = false">关闭</button></template>
     </AppDialog>
-    <AppDialog v-model="historyDetailOpen" :title="`${historical?.tool.name || ''} · V${historical?.version || ''}`" width="900px">
-      <div v-if="historical" class="space-y-5 text-sm text-slate-700">
-        <p class="text-xs text-slate-500">{{ historical.savedAt }} · {{ historical.action }}</p>
+    <AppDialog v-model="historyDetailOpen" :title="`${historical?.tool.name || ''} · ${historical ? historyVersionLabel(historical.version) : ''}`" width="960px" class="ops-tool-dialog">
+      <div v-if="historical" class="space-y-6 text-slate-700">
+        <p class="text-xs text-slate-500"><code>{{ historical.tool.id }}</code> · {{ historical.savedAt }} · {{ historical.action }}</p>
         <section><h3 class="font-semibold">Description</h3><p class="mt-2 whitespace-pre-wrap break-words">{{ historical.tool.description }}</p></section>
         <dl class="tool-properties"><dt>运行环境</dt><dd>{{ historical.tool.runtime }}</dd><dt>代码入口</dt><dd>{{ historical.tool.entrypoint }}</dd></dl>
-        <section v-for="direction in (['inputs', 'outputs'] as const)" :key="direction"><h3 class="mb-2 font-semibold">{{ direction === 'inputs' ? '输入参数' : '输出参数' }}</h3><table class="tool-table"><thead><tr><th>参数名称</th><th>类型</th><th>说明</th><th>{{ direction === 'inputs' ? '必填' : '状态' }}</th></tr></thead><tbody><tr v-for="param in historical.tool[direction]" :key="param.name"><td>{{ param.name }}</td><td>{{ param.type }}</td><td class="whitespace-pre-wrap">{{ param.description }}</td><td>{{ direction === 'inputs' ? (param.required ? '是' : '否') : (param.enabled !== false ? '已启用' : '已禁用') }}</td></tr></tbody></table><p v-if="!historical.tool[direction].length" class="py-3 text-xs text-slate-500">无参数</p></section>
-        <p class="text-xs text-slate-500">恢复将应用该版本的 Description、输出参数说明和启用状态，并保留现有历史记录。</p>
+          <section><h3 class="mb-3 font-semibold">输入参数（{{ historical.tool.inputs.length }}）</h3><table class="tool-table"><thead><tr><th>参数名称</th><th>类型</th><th>必填</th><th>说明</th></tr></thead><tbody><tr v-for="param in historical.tool.inputs" :key="param.name"><td>{{ param.name }}</td><td>{{ param.type }}</td><td>{{ param.required ? '是' : '否' }}</td><td>{{ param.description }}</td></tr></tbody></table></section>
+        <section><h3 class="mb-3 font-semibold">输出参数（{{ historical.tool.outputs.length }}）</h3><OutputParameterEditor :parameters="historical.tool.outputs" readonly /><p v-if="!historical.tool.outputs.length" class="py-3 text-xs text-slate-500">暂无输出参数</p></section>
+        <p class="text-xs text-slate-500">恢复将应用该版本的 Description、完整输出参数及子参数，并保留现有历史记录。</p>
       </div>
       <template #footer><div class="flex justify-end gap-2"><button type="button" class="ops-secondary" @click="historyDetailOpen = false">关闭</button><button type="button" class="ops-primary" :disabled="historical?.version === history[0]?.version" @click="restoreVersion">恢复此版本</button></div></template>
     </AppDialog>

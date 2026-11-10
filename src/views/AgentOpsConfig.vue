@@ -8,7 +8,7 @@ import AppDialog from '@/components/AppDialog.vue';
 import WechatEmployeeDetails from './AgentWork/component/wechatEmployeeDetails.comp.vue';
 
 import { agentWorkData } from '@/pinia/agentWork';
-import { commonSkillGroups, useAgentOpsStore } from '@/pinia/agentOps';
+import { commonSkillGroups, historyVersionLabel, useAgentOpsStore } from '@/pinia/agentOps';
 import type { AgentCallableSkill, CommonSkillGroup, ManagedSkill, SkillCategory } from '@/pinia/agentOps';
 import { dataEmployeeSkillGroup } from '@/pinia/dataEmployeeSkills';
 import type { DataEmployeeSkill as DataEmployee, LoginType } from '@/pinia/dataEmployeeSkills';
@@ -70,13 +70,13 @@ const editingSkillId = ref('');
 const previewingSkill = ref<ManagedSkill | null>(null);
 const skillHistoryOpen = ref(false);
 const skillHistoryId = ref('');
-const skillHistoricalVersion = ref<number | null>(null);
+const skillHistoricalVersion = ref<string | number | null>(null);
 const skillHistory = computed(() => [...opsStore.getSkillVersions(skillHistoryId.value)].reverse());
 function openSkillHistory(skill: ManagedSkill) {
   skillHistoryId.value = skill.id;
   skillHistoryOpen.value = true;
 }
-function previewSkillVersion(version: number) {
+function previewSkillVersion(version: string | number) {
   const snapshot = skillHistory.value.find(item => item.version === version);
   if (!snapshot) return;
   previewingSkill.value = JSON.parse(JSON.stringify(snapshot.skill));
@@ -963,10 +963,10 @@ function markTmsCustomerProcessed(customerId: string) {
     </AppDialog>
 
     <AppDialog v-model="skillHistoryOpen" title="Skill 历史记录" width="820px">
-      <table class="skill-history-table"><thead><tr><th>版本</th><th>保存时间</th><th>操作人</th><th>查看详情</th></tr></thead><tbody><tr v-for="item in skillHistory" :key="item.version"><td>V{{ item.version }}{{ item.version === skillHistory[0]?.version ? '（当前）' : '' }}</td><td>{{ item.savedAt }}</td><td>{{ item.savedBy }}</td><td><button type="button" @click="previewSkillVersion(item.version)">查看详情</button></td></tr></tbody></table>
+      <table class="skill-history-table"><thead><tr><th>版本</th><th>保存时间</th><th>操作人</th><th>查看详情</th></tr></thead><tbody><tr v-for="item in skillHistory" :key="item.version"><td>{{ historyVersionLabel(item.version) }}{{ item.version === skillHistory[0]?.version ? '（当前）' : '' }}</td><td>{{ item.savedAt }}</td><td>{{ item.savedBy }}</td><td><button type="button" @click="previewSkillVersion(item.version)">查看详情</button></td></tr></tbody></table>
       <template #footer><button type="button" class="dialog-button" @click="skillHistoryOpen = false">关闭</button></template>
     </AppDialog>
-    <AppDialog v-if="previewingSkill" :model-value="isSkillPreviewModalOpen" :title="`${previewingSkill.name}${skillHistoricalVersion !== null ? ' · V' + skillHistoricalVersion : ''}`" width="820px" @update:model-value="closeSkillPreviewModal">
+    <AppDialog v-if="previewingSkill" :model-value="isSkillPreviewModalOpen" :title="`${previewingSkill.name}${skillHistoricalVersion !== null ? ' · ' + historyVersionLabel(skillHistoricalVersion) : ''}`" width="820px" @update:model-value="closeSkillPreviewModal">
         <p class="dialog-description">{{ previewingSkill.fileName }}</p>
         <div class="mb-4 flex flex-wrap gap-x-5 gap-y-1 border-b border-[#e2e2dc] pb-4 text-xs text-slate-500">
           <span>分类：<strong class="font-medium text-slate-700">{{ previewingSkill.category }}</strong></span>
