@@ -1,0 +1,88 @@
+import assert from 'node:assert/strict';
+import { readFile, access } from 'node:fs/promises';
+import { fileURLToPath } from 'node:url';
+import { createServer } from 'vite';
+import { createPinia, setActivePinia } from 'pinia';
+
+const root = fileURLToPath(new URL('../', import.meta.url));
+const server = await createServer({ configFile: false, root, resolve: { alias: { '@': `${root}src` } }, optimizeDeps: { noDiscovery: true, include: [] }, server: { middlewareMode: true, hmr: false, ws: false }, appType: 'custom' });
+try {
+  const { usePhase1, p1ConfigError } = await server.ssrLoadModule('/src/pinia/phase1.ts');
+  const { monitoringHours } = await server.ssrLoadModule('/src/views/Phase1/hourlyResults.ts');
+  const { monitoringOrder } = await server.ssrLoadModule('/src/views/Phase1/presentation.ts');
+  const { anomalyStage } = await server.ssrLoadModule('/src/views/Phase1/orderStages.ts');
+  const HOUR = 3600000, MINUTE = 60000;
+  const fresh = () => { setActivePinia(createPinia()); const store = usePhase1(); store.now = Date.parse('2026-11-17T10:00:00+08:00'); return store; };
+  const place = { name: '装货仓', lat: 31.3, lon: 121.3, radiusMeters: 300, regionCode: '310114' };
+  const create = (store, id = 'A', options = {}) => store.createOrder({ id, projectId: 'P', plate: '沪A12345', plateColor: 2, driver: '司机', source: '上游系统', origin: place, destination: { ...place, name: '卸货仓', lon: 118.8 }, plannedDeparture: store.now + HOUR, plannedArrival: store.now + 3 * HOUR, ...options });
+  let store = fresh();
+  const defaults = store.config('P');
+  assert.equal(defaults.selectedSkills.length, 6);
+  assert(defaults.weather.enabled && defaults.missingPass.origin && defaults.missingPass.destination);
+  assert(defaults.assessments.parking.enabled && defaults.assessments.offline.enabled);
+  assert.deepEqual(defaults.fenceRadii, { origin: 5000, destination: 5000 });
+  assert.equal(defaults.parking.repeatMinutes, 30); assert.equal(defaults.offline.repeatMinutes, 30); assert.equal(defaults.deviation.repeatMinutes, 30);
+  assert.equal(defaults.lateDeparture.graceMinutes, 60); assert.equal(defaults.lateArrival.graceMinutes, 60);
+  assert.equal(p1ConfigError(defaults), '');
+  for (const [group, field, bad] of [['parking', 'thresholdMinutes', 35], ['offline', 'repeatMinutes', 1441], ['deviation', 'radiusMeters', 1050], ['assessments', 'parking', { ...defaults.assessments.parking, radiusMeters: 75 }], ['fenceRadii', 'origin', 5050]]) {
+    const config = structuredClone(defaults); config[group][field] = bad;
+    assert(p1ConfigError(config), `${group}.${field} range/step validation`);
+  }
+  let config = structuredClone(defaults); config.lateDeparture.graceMinutes = 0; config.lateArrival.graceMinutes = 0; assert.equal(p1ConfigError(config), '');
+  config.assessments.parking.filterRule = '规'.repeat(2001); assert.match(p1ConfigError(config), /2000/);
+  assert(create(store)); assert(create(store, 'B'), 'same vehicle may have multiple orders');
+  assert(!create(store, 'A'), 'order ID remains unique');
+  assert.equal(store.orders[0].origin.radiusMeters, 5000);
+  const expiry = store.orders[0].expiresAt;
+  config = store.config('P'); config.fenceRadii = { origin: 6000, destination: 7000 };
+  assert(store.saveConfig('P', config, config.version));
+  assert.equal(store.orders[0].origin.radiusMeters, 6000); assert.equal(store.orders[0].destination.radiusMeters, 7000);
+  assert.equal(store.orders[0].expiresAt, expiry); assert.equal(store.orders[0].session, 'subscribing');
+  const legacy = structuredClone(defaults); delete legacy.fenceRadii; legacy.parking.repeatMinutes = 21; store.configs.LEGACY = legacy;
+  assert.deepEqual(store.config('LEGACY').fenceRadii, { origin: 5000, destination: 5000 }); assert.equal(store.config('LEGACY').parking.repeatMinutes, 21);
+
+  store = fresh(); assert(create(store)); store.advance(10);
+  store.event('A', 'fence', 'exit', 'origin');
+  store.now += 2 * HOUR;
+  const receivedAt = store.now;
+  store.event('A', 'parking', 'started', undefined, { occurredAt: receivedAt - HOUR });
+  assert.equal(monitoringHours(store, 'P', 'p1-parking').filter(hour => hour.eventCount).length, 0, 'current reception hour is not settled');
+  store.now = receivedAt + HOUR;
+  const hours = monitoringHours(store, 'P', 'p1-parking');
+  const receivedHour = hours.find(hour => hour.eventCount);
+  assert.equal(receivedHour.start, Math.floor(receivedAt / HOUR) * HOUR, 'bucket by reception, not occurrence');
+  assert.equal(receivedHour.eventCount, 1); assert.equal(receivedHour.highRisk, 1);
+  assert.equal(monitoringHours(store, 'OTHER', 'p1-parking').length, 0);
+  assert.equal(monitoringHours(store, 'P', 'p1-parking', 'MISSING').length, 0);
+  store.now = Math.max(store.now + MINUTE, store.orders[0].plannedArrival + 61 * MINUTE); store.tick();
+  const late = store.anomalies.find(item => item.kind === '晚到'); assert(late);
+  store.now += HOUR;
+  const lateHours = monitoringHours(store, 'P', 'p1-late');
+  assert(lateHours.some(hour => hour.highRisk > 0 && hour.eventCount === 0 && hour.details.some(detail => detail.id === late.id)), 'standalone time risk is not a base event');
+  assert(hours.some(hour => !hour.details.length && hour.monitoredOrders > 0), 'empty monitored hours remain visible');
+  const order = store.orders[0];
+  assert.equal(monitoringOrder(order, ['晚到'], true).risk, '高风险');
+  assert.equal(monitoringOrder(order, [], true).risk, '低风险');
+  assert.equal(monitoringOrder(order, []).risk, '无风险');
+  assert.equal(anomalyStage(late, order, store.events), '已到达');
+  assert.equal(anomalyStage(store.anomalies.find(item => item.kind === '超时停车'), order, store.events), '在途');
+  const eventCount = store.events.length;
+  store.now = order.plannedArrival + 72 * HOUR; store.tick();
+  assert.equal(order.state, 'completed'); assert.equal(order.completedAt, store.now); assert.equal(order.milestoneMethods.completed, '超时结束');
+  assert.equal(order.session, 'stopped'); assert.equal(store.events.length, eventCount, 'timeout does not invent fence events');
+  assert(store.anomalies.some(item => item.kind === '未经过目的地'));
+  const logs = store.logs.length; store.tick(); assert.equal(store.logs.length, logs, 'timeout completion is idempotent');
+
+  const read = path => readFile(`${root}${path}`, 'utf8');
+  assert.doesNotMatch(await read('src/views/AgentWork/views/orderList.view.vue'), /新增运单|NewMonitoredOrder|待核实/);
+  assert.doesNotMatch(await read('src/views/AgentWork/views/projectCreate.view.vue'), /openMonitorConfig|configuringMonitor|MonitoringConfigDialog/);
+  const panel = await read('src/views/Phase1/MonitoringOrderPanel.vue');
+  assert.doesNotMatch(panel, /CorrectionDialog|修改计划|确认发车|结束监听|状态纠正记录|状态初始化依据/);
+  assert.match(panel, /运单创建/); assert.match(panel, /当前状态/); assert.match(panel, /围栏：/);
+  const detail = await read('src/views/AgentWork/views/orderDetail.view.vue');
+  assert.match(detail, /new amap\.Circle/); assert.match(detail, /mountTransportMapWatermark/); assert.match(detail, /searchDrivingRoute/);
+  assert.doesNotMatch(detail, /showActual|showPlanned|detail-track-legend/);
+  assert.doesNotMatch(await read('src/views/AgentWork/views/agent.view.vue'), /规则判断/);
+  for (const file of ['CorrectionDialog.vue', 'NewMonitoredOrderDialog.vue']) await assert.rejects(access(`${root}src/views/Phase1/${file}`));
+  console.log('PASS: November monitoring defaults, parameter bounds, project fences, same-car orders, hourly reception statistics, risk mapping, stage attribution, automatic completion and UI removals.');
+} finally { await server.close(); }

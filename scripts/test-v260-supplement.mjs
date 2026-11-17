@@ -20,7 +20,7 @@ try {
   assert.equal(blocked.billingExempt, true); assert.equal(blocked.network.status, 'unregistered');
   assert.equal(blocked.session, 'stopped'); assert.equal(m.events.length, 0);
   const projected = monitoringOrder(blocked, ['晚到']);
-  assert.equal(projected.risk, '待核实'); assert.deepEqual(projected.riskTags, ['车辆未入网']);
+  assert.equal(projected.risk, '高风险'); assert.deepEqual(projected.riskTags, ['车辆未入网']);
   assert.equal(getRiskOrders([projected, monitoringOrder(blocked, [])]).length, 1, 'abnormal order count is deduplicated by order');
   assert(sync.ingest(source, projects)); assert.equal(m.orders.length, 3); assert.equal(Object.keys(sync.records).length, 3);
   assert.equal(sync.setDefault('B', projects), '');

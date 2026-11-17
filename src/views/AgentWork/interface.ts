@@ -15,6 +15,7 @@ export interface P1Config {
  offline:{enabled:boolean;thresholdMinutes:number;repeatMinutes:number};
  parking:{enabled:boolean;thresholdMinutes:number;repeatMinutes:number};
  fenceTargets:('origin'|'destination')[];
+ fenceRadii:{origin:number;destination:number};
  missingPass?:{origin:boolean;destination:boolean};
  lateDeparture:{enabled:boolean;graceMinutes:number};lateArrival:{enabled:boolean;graceMinutes:number};
  statusUpdates:Exclude<P1State,'pending'>[];

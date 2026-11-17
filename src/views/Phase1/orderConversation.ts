@@ -43,7 +43,7 @@ export function projectOrderConversation(raw: string, projectId: string, orders:
     if (!target) return reply('请说明要改成哪个运输状态：待发车、装货中、在途、已到达或已完成。');
     const order = store.orders.find(o => o.id === selected.id && o.projectId === projectId);
     if (!order) return reply(`${selected.id}尚未接入本期运单状态更新流程，本次未修改。`);
-    if (states.indexOf(target) <= states.indexOf(order.state)) return reply(`当前为${stateNames[order.state]}，本次不回退或重复推进。时间纠正请使用运单详情中的状态纠正入口。`);
+    if (states.indexOf(target) <= states.indexOf(order.state)) return reply(`当前为${stateNames[order.state]}，本次不回退或重复推进。`);
     let at = store.now;
     const time = raw.match(/(?:(\d{4}-\d{2}-\d{2})|(?:今天|昨天))?\s*(\d{1,2})(?::(\d{2})|点(\d{1,2})?)/);
     if (time) {

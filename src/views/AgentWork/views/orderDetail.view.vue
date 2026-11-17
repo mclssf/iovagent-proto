@@ -46,15 +46,9 @@ const summaryFields = computed(() => [
 const mapReady = ref(false);
 const mapLoading = ref(true);
 const mapError = ref('');
-const actualTrackAvailable = ref(false);
-const showPlanned = ref(true);
-const showActual = ref(true);
 const plannedOverlays: AMap.Polyline[] = [];
 const actualOverlays: AMap.Polyline[] = [];
-watch([showPlanned, showActual], () => {
-  plannedOverlays.forEach(line => showPlanned.value ? line.show() : line.hide());
-  actualOverlays.forEach(line => showActual.value ? line.show() : line.hide());
-});
+const fenceOverlays: AMap.Circle[] = [];
 
 let mapInstance: AMap.Map | null = null;
 let watermark: ReturnType<typeof mountTransportMapWatermark> | undefined;
@@ -67,7 +61,7 @@ const mapMarkers: { content: HTMLElement; open: () => void }[] = [];
 const eventMarkerIndexes: Record<number, number> = monitoredOrder ? Object.fromEntries(monitoredEvents.flatMap((event, index) => positionedEvents.includes(event) ? [[index + 1, positionedEvents.indexOf(event) + 1]] : [])) : { 1: 0, 2: 0, 3: 1, 4: 2, 5: 3, 6: 5 };
 
 function fitMap() {
-  if (!disposed && mapInstance && routeOverlay) mapInstance.setFitView([...plannedOverlays, ...actualOverlays], true, watermark?.padding() ?? (monitoredOrder ? [90, 130, 90, 130] : [60, 60, 60, 60]));
+  if (!disposed && mapInstance && (routeOverlay || fenceOverlays.length)) mapInstance.setFitView([...plannedOverlays, ...actualOverlays, ...fenceOverlays], true, watermark?.padding() ?? (monitoredOrder ? [90, 130, 90, 130] : [60, 60, 60, 60]));
 }
 
 function syncWatermark() {
@@ -315,6 +309,15 @@ async function initMap() {
       WebGLParams: { preserveDrawingBuffer: true },
     });
     mapInstance.addControl(new amap.ToolBar({ position: 'RB' }));
+    if (monitoredOrder) {
+      for (const [index, place] of [monitoredOrder.origin, monitoredOrder.destination].entries()) {
+        const circle = new amap.Circle({ center: convertedWaypoints[index], radius: place.radiusMeters,
+          strokeColor: index === 0 ? '#2563eb' : '#059669', strokeOpacity: 0.85, strokeWeight: 2,
+          fillColor: index === 0 ? '#2563eb' : '#059669', fillOpacity: 0.08, zIndex: 20 });
+        mapInstance.add(circle);
+        fenceOverlays.push(circle);
+      }
+    }
 
     try {
       const roadRoute = await searchDrivingRoute(amap, convertedWaypoints);
@@ -332,10 +335,10 @@ async function initMap() {
     }
     if (convertedActual.length > 1) {
       drawRoute(amap, convertedActual, true);
-      actualTrackAvailable.value = true;
       mapReady.value = true;
     }
     drawMarkers(amap, convertedMarkers);
+    if (fenceOverlays.length) fitMap();
     syncWatermark();
   } catch {
     if (disposed) return;
@@ -373,7 +376,7 @@ onBeforeUnmount(() => {
     <section class="detail-map-section" :class="{ 'has-watermark': watermarkEnabled }" aria-label="运单地图轨迹">
       <header class="detail-panel-header">
         <h1><Icon :svg="strokeIconPaths.map" :size="16" />地图轨迹</h1>
-        <div v-if="monitoredOrder" class="detail-map-badges"><span v-if="monitoredOrder.network?.status === 'unregistered'" :class="badgeToneClass('orange')">车辆未入网</span><span :class="badgeToneClass('orange')">待核实 {{ monitoring.anomalies.filter(item => item.orderId === monitoredOrder.id && item.status === 'active').length }}</span></div>
+        <div v-if="monitoredOrder" class="detail-map-badges"><span v-if="monitoredOrder.network?.status === 'unregistered'" :class="badgeToneClass('orange')">车辆未入网</span><span v-if="monitoring.anomalies.some(item => item.orderId === monitoredOrder.id && item.status === 'active')" :class="badgeToneClass('red')">高风险 {{ monitoring.anomalies.filter(item => item.orderId === monitoredOrder.id && item.status === 'active').length }}</span></div>
         <div v-else class="detail-map-badges"><span :class="badgeToneClass('red')">异常停车 2</span><span :class="badgeToneClass('purple')">轨迹风险 1</span></div>
       </header>
       <div class="detail-map-stage">
@@ -383,11 +386,6 @@ onBeforeUnmount(() => {
         </div>
         <div v-if="!watermarkEnabled || !mapReady" class="detail-route-summary">
           <strong>{{ monitoredOrder ? `${monitoredOrder.origin.name} → ${monitoredOrder.destination.name}` : '上海一厂 → 广州仓' }}</strong><div><span>{{ routeDistance }}</span><span>{{ routeDuration }}</span></div>
-        </div>
-        <div class="detail-track-legend" aria-label="轨迹图例与显示控制">
-          <label><input v-model="showPlanned" type="checkbox" /><i class="planned"></i>规划轨迹</label>
-          <label><input v-model="showActual" type="checkbox" /><i class="actual"></i>实际轨迹</label>
-          <small v-if="!mapLoading && !actualTrackAvailable">{{ monitoredOrder?.network?.status === 'unregistered' ? '车辆未入网，暂无实际轨迹' : '暂无实际轨迹' }}</small>
         </div>
         <div v-if="mapLoading || mapError" class="detail-map-status" :role="mapError ? 'alert' : 'status'">{{ mapError || '正在加载地图与运输轨迹…' }}</div>
       </div>
@@ -639,9 +637,4 @@ onBeforeUnmount(() => {
       0 0 0 16px rgb(2 132 199 / 0%);
   }
 }
-</style>
-
-<style scoped>
-.detail-track-legend{position:absolute;left:16px;bottom:22px;z-index:8;display:flex;flex-wrap:wrap;gap:10px 16px;max-width:calc(100% - 80px);padding:10px 12px;background:#fff;border:1px solid #e2e8f0;border-radius:6px;box-shadow:0 2px 6px #0000000a;font-size:12px;color:#475569}
-.detail-track-legend label{display:flex;align-items:center;gap:6px;cursor:pointer}.detail-track-legend i{display:inline-block;width:24px;border-top:4px solid #059669}.detail-track-legend .planned{border-top:3px dashed #2563eb}.detail-track-legend small{flex-basis:100%;font-size:12px;color:#64748b}
 </style>

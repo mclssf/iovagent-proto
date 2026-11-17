@@ -19,7 +19,7 @@ export function projectStatusTone(status: string): Tone {
 }
 
 export function getRiskOrders(list: Order[]) {
-  return list.filter((item) => item.riskTags?.includes('车辆未入网') || item.risk === '高风险' || item.risk === '低风险' || (item.monitoringId && item.risk === '待核实')).filter((item, index, rows) => rows.findIndex(order => order.id === item.id) === index);
+  return list.filter((item) => item.riskTags?.includes('车辆未入网') || item.risk === '高风险' || item.risk === '低风险').filter((item, index, rows) => rows.findIndex(order => order.id === item.id) === index);
 }
 
 export function rankByField(list: Order[], field: 'carrier' | 'factory' | 'route') {
@@ -39,7 +39,7 @@ export function summarizeOrders(list: Order[]) {
   const low = riskList.filter((item) => item.risk === '低风险').length;
   const loading = list.filter((item) => item.status === '装货中').length;
   const inTransit = list.filter((item) => item.status === '在途').length;
-  const arrived = list.filter((item) => item.status === '已到货' || item.status === '已完成').length;
+  const arrived = list.filter((item) => item.status === '已到达' || item.status === '已到货' || item.status === '已完成').length;
   const carriers = rankByField(list, 'carrier')
     .slice(0, 2)
     .map((item) => item.name)
@@ -55,7 +55,7 @@ export function summarizeOrders(list: Order[]) {
     .map(([name]) => name)
     .join('、') || '暂无集中异常类型';
 
-  return `当前筛选结果共 ${list.length} 单，异常 ${riskList.length} 单，高风险 ${high} 单、低风险 ${low} 单；装货中 ${loading} 单，在途 ${inTransit} 单，已到货/完成 ${arrived} 单。异常主要集中在 ${carriers}，类型以 ${issues} 为主。`;
+  return `当前筛选结果共 ${list.length} 单，异常 ${riskList.length} 单，高风险 ${high} 单、低风险 ${low} 单；装货中 ${loading} 单，在途 ${inTransit} 单，已到达/已完成 ${arrived} 单。异常主要集中在 ${carriers}，类型以 ${issues} 为主。`;
 }
 
 /** 运单表格「状态」列 */

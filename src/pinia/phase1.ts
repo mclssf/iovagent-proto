@@ -11,15 +11,17 @@ export function initialPlanState(departure:number|null,arrival:number|null,now:n
 }
 export const demoEpoch=Date.now();
 export const clone=<T>(value:T):T=>JSON.parse(JSON.stringify(value));
-export const defaultP1Config:P1Config={assessments:defaultAssessments(),version:1,missingPass:{origin:false,destination:false},selectedSkills:phaseSkills.filter(s=>s.id!=='p1-weather').map(s=>s.id),weather:{enabled:false},deviation:{enabled:true,radiusMeters:1000,repeatMinutes:10,routeStrategy:'更多人选择'},offline:{enabled:true,thresholdMinutes:30,repeatMinutes:15},parking:{enabled:true,thresholdMinutes:30,repeatMinutes:15},fenceTargets:['origin','destination'],lateDeparture:{enabled:true,graceMinutes:30},lateArrival:{enabled:true,graceMinutes:30},statusUpdates:['loading','in_transit','arrived','completed']};
+export const defaultP1Config:P1Config={assessments:defaultAssessments(),version:1,missingPass:{origin:true,destination:true},selectedSkills:phaseSkills.map(s=>s.id),weather:{enabled:true},deviation:{enabled:true,radiusMeters:1000,repeatMinutes:30,routeStrategy:'更多人选择'},offline:{enabled:true,thresholdMinutes:30,repeatMinutes:30},parking:{enabled:true,thresholdMinutes:30,repeatMinutes:30},fenceTargets:['origin','destination'],fenceRadii:{origin:5000,destination:5000},lateDeparture:{enabled:true,graceMinutes:60},lateArrival:{enabled:true,graceMinutes:60},statusUpdates:['loading','in_transit','arrived','completed']};
 const HOUR=3600000;const MINUTE=60000;
 const taskFor:Record<Exclude<P1EventType,'fence'|'weather'>,P1SkillId>={parking:'p1-parking',offline:'p1-offline',deviation:'p1-deviation'};
 const kindFor={parking:'超时停车',offline:'在途离线',deviation:'线路偏离'} as const;
 export type EventInput=Omit<P1Event,'projectId'|'receivedAt'|'result'|'taskIds'|'configVersion'>;
 export function p1ConfigError(c:P1Config){
  if(c.deviation.routeStrategy&&!routeStrategies.includes(c.deviation.routeStrategy))return '请选择有效线路策略。';
- if(![c.deviation.radiusMeters,c.deviation.repeatMinutes,c.offline.thresholdMinutes,c.offline.repeatMinutes,c.parking.thresholdMinutes,c.parking.repeatMinutes,c.lateDeparture.graceMinutes,c.lateArrival.graceMinutes].every(n=>Number.isFinite(n)&&Number.isInteger(n)&&n>0))return '距离、时长、间隔均须为正整数。';
- if(c.assessments&&Object.values(c.assessments).some(rule=>!Number.isInteger(rule.radiusMeters)||rule.radiusMeters<=0||typeof rule.filterRule!=='string'))return 'POI查询范围须为正整数米，过滤规则须为文本。';
+ const valid=(value:number,min:number,max:number,step=1)=>Number.isInteger(value)&&value>=min&&value<=max&&(value-min)%step===0;
+ if(!valid(c.deviation.radiusMeters,100,10000,100)||!valid(c.deviation.repeatMinutes,1,1440)||!valid(c.offline.thresholdMinutes,10,4320,10)||!valid(c.parking.thresholdMinutes,10,4320,10)||!valid(c.offline.repeatMinutes,1,1440)||!valid(c.parking.repeatMinutes,1,1440)||!valid(c.lateDeparture.graceMinutes,0,1440)||!valid(c.lateArrival.graceMinutes,0,1440))return '参数超出允许范围或不符合步长。';
+ if(c.assessments&&Object.values(c.assessments).some(rule=>!valid(rule.radiusMeters,50,5000,50)||typeof rule.filterRule!=='string'||rule.filterRule.length>2000))return 'POI查询范围须为50—5000米、步长50米；过滤文字不超过2000字。';
+ if(!c.fenceRadii||!valid(c.fenceRadii.origin,100,50000,100)||!valid(c.fenceRadii.destination,100,50000,100))return '围栏半径须为100—50000米、步长100米。';
  if(c.selectedSkills.some(id=>!phaseSkills.some(s=>s.id===id)))return '存在未知技能。';return '';
 }
 export function monitoringSkillEnabled(c:P1Config,id:P1SkillId){
@@ -35,18 +37,14 @@ function anyWatch(c:P1Config){return c.selectedSkills.some(id=>monitoringSkillEn
 export const usePhase1=defineStore('phase1-v11',{
  state:()=>({now:Date.now(),configs:{'MONITOR-EAST':clone(defaultP1Config)} as Record<string,P1Config>,orders:[] as P1Order[],events:[] as P1Event[],anomalies:[] as P1Anomaly[],logs:[] as P1Log[],sequence:0,error:'',capability:'mock' as 'mock'|'whitepaper',ready:false,lastResetSnapshot:''}),
  actions:{
-  progress(id:string,next:P1State,reason='',source:'手动'|'运单状态同步'|'对话触发'|'超时结束'='手动'){
+  progress(id:string,next:P1State,source:'手动'|'运单状态同步'|'对话触发'|'超时结束'='手动'){
    const o=this.orders.find(o=>o.id===id);if(!o)return '运单不存在';
    const states:P1State[]=['pending','loading','in_transit','arrived','completed'];
-   if(!reason.trim()&&states.indexOf(next)!==states.indexOf(o.state)+1)return '请按运输顺序推进；纠正状态需要填写原因。';
+   if(states.indexOf(next)!==states.indexOf(o.state)+1)return '请按运输顺序推进。';
    const before=o.state;const key={loading:'enteredAt',in_transit:'departedAt',arrived:'arrivedAt',completed:'completedAt'} as const;
-   if(reason.trim()){
-    (o.corrections??=[]).push({at:this.now,reason:reason.trim(),before:stateNames[before],after:stateNames[next],operator:'当前用户'});
-    for(const state of states.slice(states.indexOf(next)+1))if(state!=='pending')delete o[key[state]];
-   }
    o.state=next;if(next!=='pending')o[key[next]]=this.now;
-   (o.milestoneMethods??={})[next]=reason?'人工纠正':source==='手动'?'人工操作':source;
-   this.log(o,'p1-status','结果',`${reason?'状态纠正':source}：${stateNames[before]} → ${stateNames[next]}${reason?`；原因：${reason}`:''}。`);
+   (o.milestoneMethods??={})[next]=source==='手动'?'人工操作':source;
+   this.log(o,'p1-status','结果',`${source}：${stateNames[before]} → ${stateNames[next]}。`);
    if(before!==next)this.checkMissingPass(o,source);this.correctLate(o);if(next==='completed')this.stop(id,'人工确认运输完成');
    return '';
   },
@@ -62,30 +60,18 @@ export const usePhase1=defineStore('phase1-v11',{
    this.log(order,'p1-status','结果',`对话更新：${stateNames[before]} → ${stateNames[next]}；节点时间${dateText(at)}；仅更新数字人，不回写灵动。`);
    this.checkMissingPass(order,'对话触发');this.correctLate(order);if(next==='completed')this.stop(id,'对话确认运输完成');return '';
   },
-  correctResult(id:string,conclusion:string,reason:string){
-   if(!reason.trim()||!conclusion.trim())return '请填写纠正结论和原因。';
-   const a=this.anomalies.find(a=>a.id===id);const e=this.events.find(e=>e.id===id||a?.eventId===e.id);
-   const o=this.orders.find(o=>o.id===(e?.orderId||a?.orderId));if(!o)return '结果不存在';
-   const before=e?.result||`${a?.kind} · ${a?.status}`;
-   const record={at:this.now,reason:reason.trim(),before,after:conclusion.trim(),operator:'当前用户'};
-   if(e){e.originalResult??=e.result;(e.corrections??=[]).push(record);e.result=`人工纠正：${conclusion.trim()}；${reason.trim()}`;}
-   const linked=this.anomalies.filter(x=>x.id===id||e&&x.eventId===e.id);
-   for(const item of linked){(item.corrections??=[]).push(record);item.status='corrected';item.nextReminderAt=0;item.originalReason??=item.reason;item.reason=`${item.originalReason} 人工纠正：${conclusion.trim()}；${reason.trim()}`;}
-   const ids=e?.taskIds.length?e.taskIds:a?[a.taskId]:['p1-status' as P1SkillId];
-   for(const task of ids)this.log(o,task,'结果',`${id} 人工纠正：${conclusion}；原因：${reason}。原始事实与历史结果保留；不自动修改运单状态。`);
-   return '';
-  },
   next(prefix:string){return `${prefix}-${++this.sequence}`;},
-  config(projectId:string):P1Config{const c=clone(this.configs[projectId]||defaultP1Config);c.weather??={enabled:false};c.missingPass??={origin:false,destination:false};c.assessments={...defaultAssessments(),...c.assessments};return c;},
+  config(projectId:string):P1Config{const c=clone(this.configs[projectId]||defaultP1Config);c.weather??={enabled:true};c.missingPass??={origin:true,destination:true};c.fenceRadii??={origin:5000,destination:5000};c.assessments={...defaultAssessments(),...c.assessments};return c;},
   log(order:P1Order,taskId:P1SkillId,kind:P1Log['kind'],text:string){this.logs.push({id:this.next('LOG'),projectId:order.projectId,orderId:order.id,taskId,kind,at:this.now,text});},
   allLog(order:P1Order,kind:P1Log['kind'],text:string){for(const id of order.config.selectedSkills)if(!(id==='p1-weather'&&kind==='开始'))this.log(order,id,kind,text);},
   saveConfig(projectId:string,draft:P1Config,expectedVersion?:number){
    const error=p1ConfigError(draft);if(error){this.error=error;return false;}
    const previous=this.config(projectId);if(expectedVersion!==undefined&&previous.version!==expectedVersion){this.error='配置已被更新，请重新打开配置页面。';return false;}
    const next={...clone(draft),assessments:{...defaultAssessments(),...draft.assessments},weather:draft.weather||{enabled:false},version:previous.version+1};if(next.weather.enabled&&!next.selectedSkills.includes('p1-weather'))next.selectedSkills.push('p1-weather');this.configs[projectId]=next;this.error='';
-const physical=(c:P1Config)=>JSON.stringify({skills:c.selectedSkills.filter(id=>monitoringSkillEnabled(c,id)).sort(),parking:[c.parking.enabled,c.parking.thresholdMinutes],offline:[c.offline.enabled,c.offline.thresholdMinutes],deviation:[c.deviation.enabled,c.deviation.radiusMeters],fences:[...c.fenceTargets].sort()});
+const physical=(c:P1Config)=>JSON.stringify({skills:c.selectedSkills.filter(id=>monitoringSkillEnabled(c,id)).sort(),parking:[c.parking.enabled,c.parking.thresholdMinutes],offline:[c.offline.enabled,c.offline.thresholdMinutes],deviation:[c.deviation.enabled,c.deviation.radiusMeters],fences:[...c.fenceTargets].sort(),fenceRadii:c.fenceRadii});
    for(const order of this.orders.filter(o=>o.projectId===projectId&&!['stopped','cleanup_pending'].includes(o.session))){
     const previousConfig=order.config;const resubscribe=physical(order.config)!==physical(next);for(const a of this.anomalies.filter(a=>a.orderId===order.id&&a.status==='active'&&!['p1-late','p1-weather'].includes(a.taskId))){const type=a.taskId==='p1-parking'?'parking':a.taskId==='p1-offline'?'offline':'deviation';if(previousConfig[type].repeatMinutes!==next[type].repeatMinutes)a.nextReminderAt=this.now+next[type].repeatMinutes*MINUTE;}for(const id of order.config.selectedSkills.filter(id=>!next.selectedSkills.includes(id)))this.log(order,id,'结束','本Skill取消选择，停止处理并释放该任务引用；其他任务保留。');const wasWeather=weatherEnabled(order.config);order.config={...clone(next),deviation:{...clone(next.deviation),routeStrategy:previousConfig.deviation.routeStrategy??'更多人选择'}};if(wasWeather&&!weatherEnabled(next))this.log(order,'p1-weather','结束','天气监听已关闭，停止本单天气事件处理并释放引用；未恢复异常及历史结果保留。');if(!wasWeather&&weatherEnabled(next))this.startWeather(order);
+    order.origin.radiusMeters=next.fenceRadii.origin;order.destination.radiusMeters=next.fenceRadii.destination;
     this.allLog(order,'配置',`读取项目最新配置；${resubscribe?'受控更新订阅，等待生效':'更新时效规则与提醒间隔'}，原72小时截止${dateText(order.expiresAt)}不延长。`);
     if(resubscribe){order.providerMode=this.capability;order.subscriptionRevision++;order.activateAt=this.now+10*MINUTE;order.session=anyWatch(next)?'subscribing':'paused';order.deviationBlocked=this.capability==='whitepaper'&&transportEnabled(next,'deviation');if(order.deviationBlocked)this.log(order,'p1-deviation','失败','当前服务不支持偏离半径参数；该项未生效，其他项继续。');}
     if(!anyWatch(next))order.session='paused';
@@ -95,10 +81,9 @@ const physical=(c:P1Config)=>JSON.stringify({skills:c.selectedSkills.filter(id=>
   createOrder(input:Pick<P1Order,'id'|'projectId'|'plate'|'plateColor'|'driver'|'source'|'origin'|'destination'|'plannedDeparture'|'plannedArrival'> & Partial<Pick<P1Order,'sourceKey'|'sourceUpdatedAt'|'network'>>,createdAt=this.now){
    if(!input.id.trim()||!input.plate.trim()||![1,2].includes(input.plateColor)){this.error='请填写运单号、车牌和蓝/黄车牌颜色。';return false;}
    if(this.orders.some(o=>o.id===input.id)){this.error='运单号已存在，未重复创建。';return false;}
-   if(this.orders.some(o=>o.projectId===input.projectId&&o.plate===input.plate&&!['stopped','cleanup_pending'].includes(o.session))){this.error='同一项目存在该车的未结束运单，请先结束或取消原单。';return false;}
-   for(const p of [input.origin,input.destination])if(!p.name.trim()||!p.regionCode||!Number.isFinite(p.lat)||!Number.isFinite(p.lon)||Math.abs(p.lat)>90||Math.abs(p.lon)>180||!Number.isFinite(p.radiusMeters)||p.radiusMeters<=0){this.error='请填写起終点名称、区县编码、有效坐标和围栏半径。';return false;}
+   for(const p of [input.origin,input.destination])if(!p.name.trim()||!p.regionCode||!Number.isFinite(p.lat)||!Number.isFinite(p.lon)||Math.abs(p.lat)>90||Math.abs(p.lon)>180){this.error='请填写起终点名称、区县编码和有效坐标。';return false;}
    if([input.plannedDeparture,input.plannedArrival].some(t=>t!==null&&!Number.isFinite(t))||input.plannedDeparture!==null&&input.plannedArrival!==null&&input.plannedArrival<input.plannedDeparture){this.error='计划时间无效，预计到达不能早于预计出发。';return false;}
-   const config=this.config(input.projectId);const order:P1Order={...clone(input),createdAt,state:'pending',expiresAt:createdAt+72*HOUR,activateAt:createdAt+10*MINUTE,config,session:anyWatch(config)?'subscribing':'paused',endReason:'',cleanupWillFail:false,cleanupAttempts:0,subscriptionRevision:1,providerMode:this.capability,deviationBlocked:this.capability==='whitepaper'&&transportEnabled(config,'deviation')};
+   const config=this.config(input.projectId);const order:P1Order={...clone(input),origin:{...clone(input.origin),radiusMeters:config.fenceRadii.origin},destination:{...clone(input.destination),radiusMeters:config.fenceRadii.destination},createdAt,state:'pending',expiresAt:createdAt+72*HOUR,activateAt:createdAt+10*MINUTE,config,session:anyWatch(config)?'subscribing':'paused',endReason:'',cleanupWillFail:false,cleanupAttempts:0,subscriptionRevision:1,providerMode:this.capability,deviationBlocked:this.capability==='whitepaper'&&transportEnabled(config,'deviation')};
    // 固定顺序：校验→读取配置→计划初始化→已完成短路→按开关建立监听服务。
    order.state=initialPlanState(order.plannedDeparture,order.plannedArrival,this.now);
    const missing=order.plannedDeparture===null||order.plannedArrival===null;
@@ -221,6 +206,11 @@ const physical=(c:P1Config)=>JSON.stringify({skills:c.selectedSkills.filter(id=>
   }},
   tick(){
    for(const order of this.orders){
+    if(order.state!=='completed'&&order.plannedArrival!==null&&this.now>=order.plannedArrival+72*HOUR){
+     order.state='completed';order.completedAt=this.now;(order.milestoneMethods??={}).completed='超时结束';
+     this.log(order,'p1-status','结果',`计划结束后72小时自动完成；完成时间${dateText(this.now)}，未生成目的地围栏事实。`);
+     this.checkMissingPass(order,'超时结束');this.stop(order.id,'计划结束后72小时自动完成');continue;
+    }
     if(['stopped','cleanup_pending'].includes(order.session))continue;
     if(this.now>=order.expiresAt){this.stop(order.id,'超过72小时监听上限');continue;}
     if(order.session==='subscribing'&&this.now>=order.activateAt){order.session='active';const watched=(['parking','offline','deviation'] as const).filter(type=>transportEnabled(order.config,type)&&!(type==='deviation'&&order.deviationBlocked));this.allLog(order,'开始',`监听服务已生效；${watched.length?`线路${order.routePlan?.id??'RID-'+order.id}供${watched.map(t=>kindFor[t]).join('、')}共享`:'当前无线路订阅，执行所选围栏/时效规则'}。`);}
@@ -249,7 +239,7 @@ const physical=(c:P1Config)=>JSON.stringify({skills:c.selectedSkills.filter(id=>
 resetSamples(){const state={...clone(this.$state),lastResetSnapshot:''};this.lastResetSnapshot=JSON.stringify(state);this.now=demoEpoch;this.configs={...this.configs,'MONITOR-EAST':clone(defaultP1Config)};this.orders=[];this.events=[];this.anomalies=[];this.logs=[];this.sequence=0;this.error='';this.ready=false;this.capability='mock';this.seed();},
   undoReset(){if(!this.lastResetSnapshot)return;const saved=JSON.parse(this.lastResetSnapshot);this.$patch(saved);this.lastResetSnapshot='';},
   seed(){if(this.ready)return;this.ready=true;
-   const origin={name:'上海嘉定工厂',lat:31.374,lon:121.265,radiusMeters:500,regionCode:'310114'};const destination={name:'南京江宁仓',lat:31.95,lon:118.84,radiusMeters:500,regionCode:'320115'};
+   const origin={name:'上海嘉定工厂',lat:31.374,lon:121.265,radiusMeters:5000,regionCode:'310114'};const destination={name:'南京江宁仓',lat:31.95,lon:118.84,radiusMeters:5000,regionCode:'320115'};
    const add=(n:number,created:number,dep:number|null,arr:number|null)=>this.createOrder({id:`WB-MON-${String(n).padStart(3,'0')}`,projectId:'MONITOR-EAST',plate:`沪A${12340+n}`,plateColor:2,driver:`司机${n}`,source:['手动录入','Excel导入','上游系统'][n%3]!,origin,destination,plannedDeparture:dep,plannedArrival:arr},created);
    add(1,this.now-3*HOUR,this.now-2*HOUR,this.now+3*HOUR);
    add(2,this.now-2*HOUR,this.now-HOUR,this.now+4*HOUR);
