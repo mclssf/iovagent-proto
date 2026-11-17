@@ -1,16 +1,15 @@
 <script lang="ts" setup>
 import { Icon } from '@packages/icon';
 import { storeToRefs } from 'pinia';
-import { computed, onMounted, ref } from 'vue';
+import { computed, onMounted } from 'vue';
 import { usePhase1 } from '@/pinia/phase1';
-import NewMonitoredOrderDialog from '@/views/Phase1/NewMonitoredOrderDialog.vue';
 import { dateText, sessionNames } from '@/views/Phase1/catalog';
 
 import { agentWorkData } from '@/pinia/agentWork';
 
 import { strokeIconPaths } from '../strokeIconPaths';
 import { useAgentWorkNav } from '../useAgentWorkNav';
-import { badgeToneClass, tableRiskPillClass, tableStatusPillClass } from '../utils';
+import { tableRiskPillClass, tableStatusPillClass } from '../utils';
 
 const props = defineProps<{
   listMode: 'orders' | 'risk';
@@ -18,14 +17,7 @@ const props = defineProps<{
 
 const store = agentWorkData();
 const monitoring = usePhase1();
-const showCreate = ref(false);
 const monitoringManaged = computed(() => !!monitoring.configs[store.currentProjectId]?.selectedSkills.length);
-function created(id: string) {
-  const record = store.currentProjectOrders.find(item => item.id === id);
-  const dates = store.currentProjectOrders.map(item => item.startTime.slice(0, 10)).filter(Boolean).sort();
-  if (dates.length) { store.ordersStartDate = dates[0]!; store.ordersEndDate = dates.at(-1)!; }
-  if (record) openOrderDetail(record);
-}
 const {
   currentProjectOrders: ordersSeed,
   ordersRiskFilter,
@@ -61,7 +53,6 @@ onMounted(() => {
           </div>
         </div>
         <div v-if="isOrders()" class="flex gap-2">
-          <button v-if="monitoringManaged" type="button" class="inline-flex items-center gap-1.5 rounded-md border border-[#deded9] px-3 py-2 text-xs text-slate-700 hover:bg-[#f7f7f5]" @click="showCreate = true"><Icon :svg="strokeIconPaths.plus" :size="14" />新增运单</button>
           <button
             type="button"
             class="flex items-center rounded-md bg-slate-900 px-4 py-2 text-sm font-medium text-white"
@@ -71,7 +62,7 @@ onMounted(() => {
           </button>
         </div>
       </div>
-      <div v-if="isOrders() && monitoringManaged" class="grid grid-cols-4 gap-3 border-b border-[#e2e2dc] px-4 py-3"><div v-for="item in [{ label: '运单总量', value: ordersSeed.length }, { label: '监听中', value: monitoring.orders.filter(order => order.projectId === store.currentProjectId && ['active', 'subscribing'].includes(order.session)).length }, { label: '待核实', value: ordersSeed.filter(order => order.risk === '待核实').length }, { label: '已完成', value: ordersSeed.filter(order => order.status === '已完成').length }]" :key="item.label"><div class="text-xs text-slate-600">{{ item.label }}</div><div class="mt-1 text-lg font-semibold text-slate-900">{{ item.value }}</div></div></div>
+      <div v-if="isOrders() && monitoringManaged" class="grid grid-cols-4 gap-3 border-b border-[#e2e2dc] px-4 py-3"><div v-for="item in [{ label: '运单总量', value: ordersSeed.length }, { label: '监听中', value: monitoring.orders.filter(order => order.projectId === store.currentProjectId && ['active', 'subscribing'].includes(order.session)).length }, { label: '高风险', value: ordersSeed.filter(order => order.risk === '高风险').length }, { label: '已完成', value: ordersSeed.filter(order => order.status === '已完成').length }]" :key="item.label"><div class="text-xs text-slate-600">{{ item.label }}</div><div class="mt-1 text-lg font-semibold text-slate-900">{{ item.value }}</div></div></div>
       <div v-else-if="isOrders()" class="grid grid-cols-4 gap-3 border-b border-[#e2e2dc] p-4">
         <div class="rounded-md bg-[#f7f7f5] p-3">
           <div class="text-xs text-slate-500">全部</div>
@@ -139,19 +130,18 @@ onMounted(() => {
               <option>全部</option>
               <option>高风险</option>
               <option>低风险</option>
-              <option>无风险</option>
-              <option v-if="monitoringManaged">待核实</option>
+              <option>无风险</option><option>车辆未入网</option>
             </select>
           </label>
           <label class="text-xs text-slate-500"
             ><span class="mb-1 block">运单状态</span>
             <select v-model="ordersStatusFilter" class="min-h-[40px] rounded-md border border-[#deded9] bg-[#fbfbfa] px-3 py-2 text-sm text-slate-700">
               <option>全部</option>
-              <option>在途</option>
+              <option>待发车</option>
               <option>装货中</option>
-              <option>已到货</option>
+              <option>在途</option>
+              <option>已到达</option>
               <option>已完成</option>
-              <option v-if="monitoringManaged">待发车</option><option v-if="monitoringManaged">装货中</option><option v-if="monitoringManaged">已到达</option>
             </select>
           </label>
           <label class="min-w-0 flex-1 basis-[280px] text-xs text-slate-500"
@@ -184,8 +174,7 @@ onMounted(() => {
           <label class="text-xs text-slate-500"
             ><span class="mb-1 block">风险分组</span>
             <select v-model="riskOrdersRisk" class="min-h-[40px] rounded-md border border-[#deded9] bg-[#fbfbfa] px-3 py-2 text-sm text-slate-700">
-              <option>全部异常</option>
-              <option v-if="monitoringManaged">待核实</option>
+              <option>全部异常</option><option>车辆未入网</option>
               <option>高风险</option>
               <option>低风险</option>
             </select>
@@ -240,12 +229,12 @@ onMounted(() => {
                 <div v-if="o.monitoringId" class="mt-1 text-xs text-slate-600">{{ sessionNames[monitoring.orders.find(item => item.id === o.id)!.session] }}</div>
               </td>
               <td class="px-4 py-4 align-middle">
-                <span :class="o.risk === '待核实' ? badgeToneClass('orange') : tableRiskPillClass(o.risk)">{{ o.risk }}</span>
+                <span v-if="o.riskTags?.includes('车辆未入网')" class="mr-1 inline-flex rounded border border-amber-200 bg-amber-50 px-2 py-0.5 text-xs text-amber-800">车辆未入网</span><span v-if="o.risk!=='无风险'||!o.riskTags?.length" :class="tableRiskPillClass(o.risk)">{{ o.risk }}</span>
               </td>
               <td class="px-4 py-4 align-middle">
                 <div class="text-sm text-slate-800">{{ o.issue }}</div>
                 <div class="mt-0.5 text-xs leading-relaxed text-slate-400">
-                  {{ o.source }}
+                  {{ o.source }}<span v-if="o.billingExempt" class="ml-2 text-emerald-700">免计费</span>
                 </div>
               </td>
               <td class="px-4 py-4 align-middle text-sm text-slate-700">
@@ -268,7 +257,6 @@ onMounted(() => {
         </table>
       </div>
     </div>
-    <NewMonitoredOrderDialog v-if="showCreate" :project-id="store.currentProjectId" @close="showCreate = false" @created="created" />
   </div>
 </template>
 

@@ -1,3 +1,5 @@
+import { ensureMapSamples } from './views/Phase1/mapSamples';
+import { useLingdongSync } from './pinia/lingdongSync';
 import { createApp } from 'vue';
 import { createPinia } from 'pinia';
 import { usePhase1 } from './pinia/phase1';
@@ -46,6 +48,14 @@ async function bootstrap(_namespace = 'iovagent') {
     syncSkills();
     try { localStorage.setItem('iovagent-transport-monitoring', JSON.stringify({ schema: 1, state })); } catch { /* Active state remains available. */ }
   }, { detached: true });
+  const inbound = useLingdongSync();
+  try { const saved=JSON.parse(localStorage.getItem('iovagent-lingdong-inbound-v260')||'null');if(saved?.schema===1&&saved.state&&typeof saved.state.defaultProjectId==='string'&&saved.state.records)inbound.$patch({...saved.state,busy:false}); } catch { /* Use initial inbound state. */ }
+  inbound.ensureDefault(work.projects);
+  const persistInbound=()=>{try{localStorage.setItem('iovagent-lingdong-inbound-v260',JSON.stringify({schema:1,state:inbound.$state}));}catch{/* Keep current session. */}};
+  inbound.$subscribe(persistInbound,{detached:true});
+  if(!inbound.lastSyncAt)inbound.syncLatest(work.projects);
+  persistInbound();
+  ensureMapSamples(work.projects);
   app.use(router);
   app.mount('#app');
 }

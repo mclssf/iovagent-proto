@@ -1,7 +1,7 @@
 <script lang="ts" setup>
 import type { ChatMessage, PageId, Project } from '../interface';
 
-import { computed, nextTick, ref } from 'vue';
+import { computed, nextTick, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 
 import { Icon } from '@packages/icon';
@@ -22,13 +22,14 @@ const monitoring = usePhase1();
 function todayCounts(project: Project) {
   if (project.id !== 'MONITOR-EAST') return { total: project.total, risk: project.risk };
   const orders = monitoring.orders.filter(order => order.projectId === project.id && dateText(order.createdAt).slice(0, 10) === dateText(monitoring.now).slice(0, 10));
-  return { total: orders.length, risk: orders.filter(order => monitoring.anomalies.some(item => item.orderId === order.id && item.status === 'active')).length };
+  return { total: orders.length, risk: orders.filter(order => order.network?.status==='unregistered' || monitoring.anomalies.some(item => item.orderId === order.id && item.status === 'active')).length };
 }
 const { projects, recentConversations } = storeToRefs(store);
 const route = useRoute();
 const router = useRouter();
 const isUserMenuOpen = ref(false);
 const expandedProjectId = ref(store.currentProjectId);
+watch(()=>store.currentProjectId,id=>{if(store.workspaceMode==='project')expandedProjectId.value=id;});
 const editingConversationId = ref('');
 const editingConversationTitle = ref('');
 const dismissedConversationCaseIds = ref<string[]>([]);

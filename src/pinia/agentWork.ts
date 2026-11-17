@@ -1,3 +1,5 @@
+import { projectOrderConversation } from '@/views/Phase1/orderConversation';
+import { useLingdongSync } from './lingdongSync';
 import { migrateCapacitySkillIds } from './capacitySkills';
 import { usePhase1 } from './phase1';
 import { monitoringProject, monitoringOrder } from '@/views/Phase1/presentation';
@@ -280,7 +282,7 @@ const ordersSeedData: Order[] = [
     carrier: '远恒运输',
     route: '苏州仓 → 杭州仓',
     factory: '苏州仓',
-    status: '已到货',
+    status: '已到达',
     risk: '低风险',
     issue: '卸车超时',
     source: '规则预警',
@@ -1541,7 +1543,7 @@ export const agentWorkData = defineStore('agentWork', {
     currentProjectOrders(state): Order[] {
       const monitoring = usePhase1();
       const tracked = monitoring.orders.filter(order => order.projectId === state.currentProjectId);
-      const records = tracked.map(order => monitoringOrder(order, monitoring.anomalies.filter(item => item.orderId === order.id && item.status === 'active').map(item => item.kind)));
+      const records = tracked.map(order => monitoringOrder(order, monitoring.anomalies.filter(item => item.orderId === order.id && item.status === 'active').map(item => item.kind), monitoring.events.some(event => event.orderId === order.id && event.assessment?.verdict === 'reasonable')));
       if (state.currentProjectId === monitoringProject.id) return records;
       return shipperScenarioProjects.some(project => project.id === state.currentProjectId)
         ? [...(state.scenarioOrders[state.currentProjectId] ?? []), ...records]
@@ -1559,7 +1561,7 @@ export const agentWorkData = defineStore('agentWork', {
     ordersFiltered(state): Order[] {
       return this.currentProjectOrders.filter(
         (o) =>
-          (state.ordersRiskFilter === '全部' || o.risk === state.ordersRiskFilter) &&
+          (state.ordersRiskFilter === '全部' || (o.risk === state.ordersRiskFilter && !(state.ordersRiskFilter==='无风险'&&o.riskTags?.length)) || o.riskTags?.includes(state.ordersRiskFilter)) &&
           (state.ordersStatusFilter === '全部' || o.status === state.ordersStatusFilter) &&
           (!state.ordersStartDate || getOrderStartDate(o) >= state.ordersStartDate) &&
           (!state.ordersEndDate || getOrderStartDate(o) <= state.ordersEndDate) &&
@@ -1569,7 +1571,7 @@ export const agentWorkData = defineStore('agentWork', {
     riskOrdersFiltered(state): Order[] {
       const keyword = state.riskOrdersKeyword.trim().toLowerCase();
       return getRiskOrders(this.currentProjectOrders)
-        .filter((o) => state.riskOrdersRisk === '全部异常' || o.risk === state.riskOrdersRisk)
+        .filter((o) => state.riskOrdersRisk === '全部异常' || o.risk === state.riskOrdersRisk || o.riskTags?.includes(state.riskOrdersRisk))
         .filter((o) => state.riskOrdersSource === '全部来源' || o.source.includes(state.riskOrdersSource))
         .filter((o) => !state.ordersStartDate || getOrderStartDate(o) >= state.ordersStartDate)
         .filter((o) => !state.ordersEndDate || getOrderStartDate(o) <= state.ordersEndDate)
@@ -1588,19 +1590,20 @@ export const agentWorkData = defineStore('agentWork', {
     timelineEvents(state): TimelineEvent[] {
       const monitoring = usePhase1();
       if (monitoring.orders.some(order => order.id === state.selectedOrder.id)) {
-        const events: TimelineEvent[] = monitoring.events.filter(event => event.orderId === state.selectedOrder.id).map((event, index) => {
-          const alert = monitoring.anomalies.find(item => item.eventId === event.id && item.status === 'active');
-          return { id: index + 1, type: alert ? 'stop' : 'normal', title: eventNames[event.type], time: dateText(event.occurredAt), place: event.address, desc: event.result, agent: event.assessment?.reason, agentVerdict: alert ? '待核实' : event.phase === 'recovered' ? '已恢复' : event.assessment?.verdict === 'reasonable' ? '合理' : undefined, agentTone: alert ? 'orange' : 'green' };
+        const events: TimelineEvent[] = monitoring.events.filter(event => event.orderId === state.selectedOrder.id).flatMap((event, index): TimelineEvent[] => {
+          if (event.type === 'fence') return [];
+          const alert = monitoring.anomalies.find(item => item.eventId === event.id);
+          return [{ id: index + 1, type: alert ? 'stop' : 'normal', title: eventNames[event.type], time: dateText(event.occurredAt), place: event.address, desc: event.result, agent: event.assessment?.reason, agentVerdict: alert ? '高风险' : event.phase === 'recovered' ? '已恢复' : event.assessment?.verdict === 'reasonable' ? '低风险' : undefined, agentTone: alert ? 'red' : 'green' }];
         });
         return state.detailOnlyAbnormal ? events.filter(event => event.type !== 'normal') : events;
       }
       if (state.detailOnlyAbnormal) return timelineSeed.filter((e) => e.type !== 'normal');
-      return state.detailView === 'rule' ? timelineSeed.filter((e) => e.type !== 'risk') : timelineSeed;
+      return timelineSeed;
     },
     currentDetailOrder(state): Order {
       const monitoring = usePhase1();
       const order = monitoring.orders.find(item => item.id === state.selectedOrder.id);
-      if (order) return monitoringOrder(order, monitoring.anomalies.filter(item => item.orderId === order.id && item.status === 'active').map(item => item.kind));
+      if (order) return monitoringOrder(order, monitoring.anomalies.filter(item => item.orderId === order.id && item.status === 'active').map(item => item.kind), monitoring.events.some(event => event.orderId === order.id && event.assessment?.verdict === 'reasonable'));
       return state.selectedOrder ?? state.ordersSeed[0]!;
     },
     cargoSourcesFiltered(state): StandardCargo[] {
@@ -2046,7 +2049,7 @@ export const agentWorkData = defineStore('agentWork', {
         if (dates.length) { this.ordersStartDate = dates[0]!; this.ordersEndDate = dates.at(-1)!; }
       }
       const tracked = usePhase1().orders.filter(order => order.projectId === p.id);
-      const welcome: ChatMessage[] = p.id === monitoringProject.id ? [{ role: 'agent', text: `本项目已接入 ${tracked.length} 条运单，${tracked.filter(order => order.session === 'active').length} 条正在监听；${new Set(usePhase1().anomalies.filter(item => item.status === 'active' && tracked.some(order => order.id === item.orderId)).map(item => item.orderId)).size} 条运单存在待核实异常。` }] : shipperScenarioProjects.some(project => project.id === p.id) ? [] : projectWelcomeMessages;
+      const welcome: ChatMessage[] = p.id === monitoringProject.id ? [{ role: 'agent', text: `本项目已接入 ${tracked.length} 条运单，${tracked.filter(order => order.session === 'active').length} 条正在监听；${new Set(usePhase1().anomalies.filter(item => item.status === 'active' && tracked.some(order => order.id === item.orderId)).map(item => item.orderId)).size} 条运单存在高风险异常。` }] : shipperScenarioProjects.some(project => project.id === p.id) ? [] : projectWelcomeMessages;
       this.agentMessages = cloneChatMessages(this.projectChats[p.id] ?? welcome);
       if (p.id === 'PSC2') {
         this.ordersStartDate = '2026-08-01';
@@ -2178,6 +2181,8 @@ export const agentWorkData = defineStore('agentWork', {
       ElMessage.success('项目已更新');
     },
     removeProjectAt(index: number) {
+      if(this.projects[index]?.id===useLingdongSync().defaultProjectId){ElMessage.warning('请先将其他项目设为默认项目，再删除此项目');return;}
+
       this.projects = this.projects.filter((_, idx) => idx !== index);
       persistMailboxProjects(this.projects);
       useAgentDailyTasks().syncProjects(this.projects, this.ordersSeed);
@@ -2205,7 +2210,12 @@ export const agentWorkData = defineStore('agentWork', {
       const raw = text ?? this.agentInput;
       if (!raw.trim()) return;
       this.ensureConversationStarted();
-      const next: ChatMessage[] = [...this.agentMessages, { role: 'user', text: raw }];
+      const shownInput=/^(?:确认更新|取消更新) UPDATE-/.test(raw)?(raw.startsWith('确认')?'确认更新运单状态':'取消本次状态更新'):raw;
+      const next: ChatMessage[] = [...this.agentMessages, { role: 'user', text: shownInput }];
+      if(!attachments.length){
+        const response=projectOrderConversation(raw,this.workspaceMode==='project'?this.currentProjectId:'',this.workspaceMode==='project'?this.currentProjectOrders:[],this.activeChatContext);
+        if(response){this.agentMessages=[...next,response];this.agentInput='';this.persistActiveConversationMessages();return;}
+      }
       if (/监听|运输节点|未恢复异常|监控状态/.test(raw)) {
         const monitoring = usePhase1();
         const order = monitoring.orders.find(item => raw.toUpperCase().includes(item.id.toUpperCase()));

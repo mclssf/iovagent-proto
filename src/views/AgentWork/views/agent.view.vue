@@ -583,7 +583,6 @@ const eventPanelTimeline: TimelineEvent[] = [
     time: '11:05 - 11:48',
     place: '滁州高速服务区',
     desc: '停车 43 分钟。',
-    rule: '停车时长 43 分钟，未超过 60 分钟阈值；按规则侧记录为低优先级停车提醒。',
     agent: '停车点为高速服务区，轨迹连续，停靠时长符合司机休息场景，判定为低风险合理停车。',
     stopPlace: '高速服务区',
     agentVerdict: '低风险合理停车',
@@ -596,7 +595,6 @@ const eventPanelTimeline: TimelineEvent[] = [
     time: '14:32 - 15:45',
     place: '第三方中转仓',
     desc: '停车 73 分钟，非计划停靠点。',
-    rule: '停车时长 73 分钟 > 阈值 60 分钟，且停靠点不在合同节点内，命中异常停车。',
     agent: '停靠点为第三方中转仓，非合同经停，距离南京仓约 18km，存在倒货、换车或非计划中转风险。',
     stopPlace: '第三方中转仓',
     agentVerdict: '高风险',
@@ -618,7 +616,7 @@ function formatMapDuration(seconds: number) {
 
 function eventCardClass(event: TimelineEvent) {
   if (event.type === 'risk') return 'border-purple-200 bg-purple-50';
-  if (event.type === 'stop' && store.detailView === 'agent' && event.agentTone === 'green') return 'border-emerald-200 bg-emerald-50';
+  if (event.type === 'stop' && event.agentTone === 'green') return 'border-emerald-200 bg-emerald-50';
   if (event.type === 'stop') return 'border-red-200 bg-red-50';
   return 'border-[#deded9] bg-white';
 }
@@ -973,8 +971,9 @@ onBeforeUnmount(() => {
               </a>
             </template>
             <template v-else>
-              <span class="whitespace-pre-line">{{ m.text }}</span>
+              <span class="whitespace-pre-line">{{ m.role==='user' && /^(确认更新|取消更新) UPDATE-/.test(m.text) ? (m.text.startsWith('确认')?'确认更新运单状态':'取消本次状态更新') : m.text }}</span>
             </template>
+              <div v-if="m.orderAction" class="mt-3 flex items-center gap-3 border-t border-slate-200 pt-3"><template v-if="m.orderAction.status==='pending'"><button class="rounded-md bg-slate-900 px-3 py-1.5 text-xs text-white" @click="sendAgent('确认更新 '+m.orderAction.id)">确认更新</button><button class="rounded-md border border-slate-300 px-3 py-1.5 text-xs" @click="sendAgent('取消更新 '+m.orderAction.id)">取消</button></template><span v-else class="text-xs text-slate-500">{{ {done:'已保存',canceled:'已取消',failed:'未保存'}[m.orderAction.status] }}</span></div>
             <button v-if="m.dailyTaskId" type="button" class="agent-ordinary-task" :disabled="!ordinaryTask(m.dailyTaskId)" :aria-label="`查看普通任务 ${ordinaryTask(m.dailyTaskId)?.name ?? '已删除'}`" @click="openOrdinaryTask(m.dailyTaskId)">
               <Icon :svg="strokeIconPaths.file" :size="18" />
               <span><strong>{{ ordinaryTask(m.dailyTaskId)?.name ?? '任务已删除' }}</strong><small>普通任务 · {{ ordinaryTask(m.dailyTaskId)?.runs[0] ? taskRunLabels[ordinaryTask(m.dailyTaskId)!.runs[0]!.status] : '不可用' }}</small></span>
@@ -1270,22 +1269,7 @@ onBeforeUnmount(() => {
               </button>
             </div>
             <div class="m-4 flex rounded-md bg-[#f2f2ef] p-1 text-xs">
-              <button
-                type="button"
-                class="flex-1 rounded-md px-3 py-2"
-                :class="store.detailView === 'agent' ? 'bg-white' : 'text-slate-500'"
-                @click="store.detailView = 'agent'"
-              >
-                智能体判断
-              </button>
-              <button
-                type="button"
-                class="flex-1 rounded-md px-3 py-2"
-                :class="store.detailView === 'rule' ? 'bg-white' : 'text-slate-500'"
-                @click="store.detailView = 'rule'"
-              >
-                规则判断
-              </button>
+              <div class="flex-1 rounded-md bg-white px-3 py-2 text-center">智能体研判</div>
             </div>
             <div class="space-y-3 px-4 pb-4">
               <div v-for="e in eventPanelVisibleTimeline" :key="e.id" class="rounded-md border p-3" :class="eventCardClass(e)">
@@ -1297,13 +1281,13 @@ onBeforeUnmount(() => {
                     {{ e.time }}
                   </div>
                 </div>
-                <div v-if="e.type !== 'stop' || store.detailView === 'rule'" class="mt-1 text-xs text-slate-500">
+                <div v-if="e.type !== 'stop'" class="mt-1 text-xs text-slate-500">
                   {{ e.place }}
                 </div>
                 <div v-if="e.type !== 'stop'" class="mt-2 text-sm text-slate-600">
                   {{ e.desc }}
                 </div>
-                <div v-if="e.type === 'stop' && store.detailView === 'agent'" class="mt-3 flex flex-wrap gap-2">
+                <div v-if="e.type === 'stop'" class="mt-3 flex flex-wrap gap-2">
                   <span class="inline-flex items-center rounded-md border px-2 py-0.5 text-xs font-medium" :class="badgeToneClass('blue')">
                     停靠地点：{{ e.stopPlace }}
                   </span>
@@ -1311,8 +1295,8 @@ onBeforeUnmount(() => {
                     {{ e.agentVerdict }}
                   </span>
                 </div>
-                <div v-if="e.type === 'stop' && e.rule && e.agent" class="mt-3 rounded-md bg-white p-3 text-xs leading-5 text-slate-700">
-                  {{ store.detailView === 'rule' ? e.rule : e.agent }}
+                <div v-if="e.type === 'stop' && e.agent" class="mt-3 rounded-md bg-white p-3 text-xs leading-5 text-slate-700">
+                  {{ e.agent }}
                 </div>
               </div>
             </div>

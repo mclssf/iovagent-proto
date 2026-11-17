@@ -46,6 +46,9 @@ const summaryFields = computed(() => [
 const mapReady = ref(false);
 const mapLoading = ref(true);
 const mapError = ref('');
+const plannedOverlays: AMap.Polyline[] = [];
+const actualOverlays: AMap.Polyline[] = [];
+const fenceOverlays: AMap.Circle[] = [];
 
 let mapInstance: AMap.Map | null = null;
 let watermark: ReturnType<typeof mountTransportMapWatermark> | undefined;
@@ -58,7 +61,7 @@ const mapMarkers: { content: HTMLElement; open: () => void }[] = [];
 const eventMarkerIndexes: Record<number, number> = monitoredOrder ? Object.fromEntries(monitoredEvents.flatMap((event, index) => positionedEvents.includes(event) ? [[index + 1, positionedEvents.indexOf(event) + 1]] : [])) : { 1: 0, 2: 0, 3: 1, 4: 2, 5: 3, 6: 5 };
 
 function fitMap() {
-  if (!disposed && mapInstance && routeOverlay) mapInstance.setFitView([routeOverlay], true, watermark?.padding() ?? (monitoredOrder ? [90, 130, 90, 130] : [60, 60, 60, 60]));
+  if (!disposed && mapInstance && (routeOverlay || fenceOverlays.length)) mapInstance.setFitView([...plannedOverlays, ...actualOverlays, ...fenceOverlays], true, watermark?.padding() ?? (monitoredOrder ? [90, 130, 90, 130] : [60, 60, 60, 60]));
 }
 
 function syncWatermark() {
@@ -161,10 +164,10 @@ const baseMapPoints: MapPoint[] = [
 ];
 
 const routeWaypoints: GpsCoordinate[] = monitoredOrder ? [[monitoredOrder.origin.lat, monitoredOrder.origin.lon], [monitoredOrder.destination.lat, monitoredOrder.destination.lon]] : baseWaypoints;
-const fallbackRoute = monitoredOrder ? routeWaypoints : baseFallback;
 const mapPoints: MapPoint[] = monitoredOrder ? [
   { name: `装货地 · ${monitoredOrder.origin.name}`, coord: routeWaypoints[0]!, desc: '运单装货地点', tone: 'start' },
   ...positionedEvents.map((event): MapPoint => { const place = event.target === 'destination' ? monitoredOrder.destination : event.target === 'origin' ? monitoredOrder.origin : event.position!; return { name: event.address, coord: [place.lat, 'lon' in place ? place.lon : 0], desc: event.result, tone: event.type === 'fence' ? 'start' : 'warn' }; }),
+  ...(monitoredOrder.network?.status !== 'unregistered' && monitoredOrder.actualTrack?.length ? [{ name: '当前位置', coord: [monitoredOrder.actualTrack.at(-1)!.lat, monitoredOrder.actualTrack.at(-1)!.lon] as GpsCoordinate, desc: `定位时间：${dateText(monitoredOrder.actualTrack.at(-1)!.at)}`, tone: 'current' as const }] : []),
   { name: `卸货地 · ${monitoredOrder.destination.name}`, coord: routeWaypoints.at(-1)!, desc: '运单卸货地点', tone: 'end' },
 ] : baseMapPoints;
 
@@ -227,47 +230,17 @@ function popupContent(point: MapPoint) {
   return root;
 }
 
-function nearestRouteIndex(route: AMapCoordinate[], target: AMapCoordinate) {
-  let nearest = 0;
-  let minDistance = Number.POSITIVE_INFINITY;
-
-  route.forEach((coord, index) => {
-    const distance = (coord[0] - target[0]) ** 2 + (coord[1] - target[1]) ** 2;
-    if (distance < minDistance) {
-      nearest = index;
-      minDistance = distance;
-    }
+function drawRoute(amap: typeof AMap, path: AMapCoordinate[], actual = false) {
+  if (!mapInstance || path.length < 2) return;
+  const line = new amap.Polyline({
+    path, strokeColor: actual ? '#059669' : '#2563eb',
+    strokeWeight: actual ? 5 : 4, strokeOpacity: 0.9,
+    strokeStyle: actual ? 'solid' : 'dashed', strokeDasharray: [10, 7],
+    zIndex: actual ? 60 : 50,
   });
-
-  return nearest;
-}
-
-function drawRoute(amap: typeof AMap, route: AMapCoordinate[], riskPoints: AMapCoordinate[]) {
-  if (!mapInstance) return;
-
-  const routeShadow = new amap.Polyline({ path: route, strokeColor: '#ffffff', strokeOpacity: 0.9, strokeWeight: 9 });
-  routeOverlay = routeShadow;
-  const routeLine = new amap.Polyline({ path: route, strokeColor: '#0f172a', strokeOpacity: 0.9, strokeWeight: 5 });
-  mapInstance.add([routeShadow, routeLine]);
-  if (monitoredOrder) return;
-
-  const riskStart = nearestRouteIndex(route, riskPoints[0]!);
-  const riskEnd = nearestRouteIndex(route, riskPoints[1]!);
-  const [from, to] = riskStart < riskEnd ? [riskStart, riskEnd] : [riskEnd, riskStart];
-  const riskSegment = route.slice(from, to + 1);
-
-  if (riskSegment.length > 1) {
-    mapInstance.add(new amap.Polyline({
-      path: riskSegment,
-      strokeColor: '#7c3aed',
-      strokeDasharray: [10, 8],
-      strokeOpacity: 0.95,
-      strokeStyle: 'dashed',
-      strokeWeight: 7,
-    }));
-  }
-
-  mapInstance.setFitView([routeShadow], false, [34, 34, 34, 34]);
+  mapInstance.add(line);
+  (actual ? actualOverlays : plannedOverlays).push(line);
+  routeOverlay ??= line;
 }
 
 function drawMarkers(amap: typeof AMap, coordinates: AMapCoordinate[]) {
@@ -319,10 +292,12 @@ async function initMap() {
   try {
     const amap = await loadAMap(['AMap.Driving', 'AMap.ToolBar']);
     const convert = (coordinates: AMapCoordinate[]) => monitoredOrder?.origin.coordinateSystem === 'gcj02' ? Promise.resolve(coordinates) : convertGpsCoordinates(amap, coordinates);
-    const convertedWaypoints = await convert(routeWaypoints.map(([lat, lng]) => [lng, lat]));
-    const convertedFallback = await convert(fallbackRoute.map(([lat, lng]) => [lng, lat]));
+    const convertedWaypoints = await convert([routeWaypoints[0]!, routeWaypoints.at(-1)!].map(([lat, lng]) => [lng, lat]));
+    const actualCoordinates: AMapCoordinate[] = monitoredOrder
+      ? (monitoredOrder.network?.status === 'unregistered' ? [] : (monitoredOrder.actualTrack ?? []).filter(point => point.at <= monitoring.now).sort((a,b) => a.at-b.at).map(point => [point.lon, point.lat]))
+      : baseFallback.slice(0, -1).map(([lat, lng]) => [lng, lat]);
+    const convertedActual = actualCoordinates.length > 1 ? await convert(actualCoordinates) : [];
     const convertedMarkers = await convert(mapPoints.map(({ coord: [lat, lng] }) => [lng, lat]));
-    const riskPoints = await convertGpsCoordinates(amap, [[112.9388, 28.2282], [113.8546, 27.6229]]);
     if (disposed || !mapRef.value) return;
     markerCoordinates = convertedMarkers;
 
@@ -334,22 +309,36 @@ async function initMap() {
       WebGLParams: { preserveDrawingBuffer: true },
     });
     mapInstance.addControl(new amap.ToolBar({ position: 'RB' }));
+    if (monitoredOrder) {
+      for (const [index, place] of [monitoredOrder.origin, monitoredOrder.destination].entries()) {
+        const circle = new amap.Circle({ center: convertedWaypoints[index], radius: place.radiusMeters,
+          strokeColor: index === 0 ? '#2563eb' : '#059669', strokeOpacity: 0.85, strokeWeight: 2,
+          fillColor: index === 0 ? '#2563eb' : '#059669', fillOpacity: 0.08, zIndex: 20 });
+        mapInstance.add(circle);
+        fenceOverlays.push(circle);
+      }
+    }
 
     try {
       const roadRoute = await searchDrivingRoute(amap, convertedWaypoints);
       if (disposed) return;
       routeDistance.value = `${Math.round(roadRoute.distance / 1000).toLocaleString()} km`;
       routeDuration.value = formatDuration(roadRoute.duration);
-      drawRoute(amap, roadRoute.path, riskPoints);
+      drawRoute(amap, roadRoute.path);
       mapReady.value = true;
     } catch {
       if (disposed) return;
       routeDistance.value = monitoredOrder ? '--' : '约 1,650 km';
       routeDuration.value = monitoredOrder ? '--' : '约 22h';
       mapError.value = '道路路线暂不可用，请刷新页面重试';
-      if (!monitoredOrder) drawRoute(amap, convertedFallback, riskPoints);
+
+    }
+    if (convertedActual.length > 1) {
+      drawRoute(amap, convertedActual, true);
+      mapReady.value = true;
     }
     drawMarkers(amap, convertedMarkers);
+    if (fenceOverlays.length) fitMap();
     syncWatermark();
   } catch {
     if (disposed) return;
@@ -387,7 +376,7 @@ onBeforeUnmount(() => {
     <section class="detail-map-section" :class="{ 'has-watermark': watermarkEnabled }" aria-label="运单地图轨迹">
       <header class="detail-panel-header">
         <h1><Icon :svg="strokeIconPaths.map" :size="16" />地图轨迹</h1>
-        <div v-if="monitoredOrder" class="detail-map-badges"><span :class="badgeToneClass('orange')">待核实 {{ monitoring.anomalies.filter(item => item.orderId === monitoredOrder.id && item.status === 'active').length }}</span></div>
+        <div v-if="monitoredOrder" class="detail-map-badges"><span v-if="monitoredOrder.network?.status === 'unregistered'" :class="badgeToneClass('orange')">车辆未入网</span><span v-if="monitoring.anomalies.some(item => item.orderId === monitoredOrder.id && item.status === 'active')" :class="badgeToneClass('red')">高风险 {{ monitoring.anomalies.filter(item => item.orderId === monitoredOrder.id && item.status === 'active').length }}</span></div>
         <div v-else class="detail-map-badges"><span :class="badgeToneClass('red')">异常停车 2</span><span :class="badgeToneClass('purple')">轨迹风险 1</span></div>
       </header>
       <div class="detail-map-stage">
@@ -409,7 +398,7 @@ onBeforeUnmount(() => {
         <p class="detail-order-number"><span>运单号</span><span>{{ order.id || '—' }}</span></p>
         <div class="detail-order-statuses">
           <span class="detail-badge detail-transport-status" aria-label="运输状态">{{ order.status || '—' }}</span>
-          <span class="detail-badge" :class="`tone-${detailRiskTone(order.risk)}`" aria-label="风险等级">{{ order.risk || '—' }}</span>
+          <span v-if="order.riskTags?.includes('车辆未入网')" class="detail-badge tone-orange">车辆未入网</span><span v-if="order.billingExempt" class="detail-badge tone-green">免计费</span><span v-if="order.risk!=='无风险'||!order.riskTags?.length" class="detail-badge" :class="`tone-${detailRiskTone(order.risk)}`" aria-label="风险等级">{{ order.risk || '—' }}</span>
         </div>
         <dl class="detail-facts">
           <div v-for="field in summaryFields" :key="field.label" :class="{ 'is-wide': field.wide }">

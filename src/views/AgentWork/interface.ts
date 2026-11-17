@@ -1,6 +1,9 @@
 export type P1SkillId = 'p1-status' | 'p1-parking' | 'p1-offline' | 'p1-deviation' | 'p1-late' | 'p1-weather';
 export type P1State = 'pending' | 'loading' | 'in_transit' | 'arrived' | 'completed';
 export type P1EventType = 'fence' | 'parking' | 'offline' | 'deviation' | 'weather';
+export type RouteStrategy = '更多人选择' | '时间优先' | '距离最短';
+export interface OrderNetwork { status: 'registered' | 'unregistered' | 'unknown'; checkedAt: number; source: string; reason: string; monitoringBlocked?: boolean }
+export interface OrderRoutePlan { id: string; strategy: RouteStrategy; plannedAt: number; status: 'ready' | 'failed'; reason: string; source: 'mock'; version: number }
 export interface P1AssessmentConfig {enabled:boolean;radiusMeters:number;filterRule:string}
 export interface P1PoiEvidence {source:'mock';pois:{name:string;category:string;distanceMeters:number;inside:boolean}[];normalActivityConfirmed?:boolean;durationMatches?:boolean;dangerousLocation?:boolean;signalRecovered?:boolean;trackContinuous?:boolean}
 export interface P1Config {
@@ -8,10 +11,11 @@ export interface P1Config {
  assessments:{parking:P1AssessmentConfig;offline:P1AssessmentConfig};
  resumeSettings?:{statusUpdates?:Exclude<P1State,'pending'>[];lateDeparture?:boolean;lateArrival?:boolean};
  version:number; selectedSkills:P1SkillId[];weather:{enabled:boolean};
- deviation:{enabled:boolean;radiusMeters:number;repeatMinutes:number};
+ deviation:{enabled:boolean;radiusMeters:number;repeatMinutes:number;routeStrategy?:RouteStrategy};
  offline:{enabled:boolean;thresholdMinutes:number;repeatMinutes:number};
  parking:{enabled:boolean;thresholdMinutes:number;repeatMinutes:number};
  fenceTargets:('origin'|'destination')[];
+ fenceRadii:{origin:number;destination:number};
  missingPass?:{origin:boolean;destination:boolean};
  lateDeparture:{enabled:boolean;graceMinutes:number};lateArrival:{enabled:boolean;graceMinutes:number};
  statusUpdates:Exclude<P1State,'pending'>[];
@@ -19,6 +23,8 @@ export interface P1Config {
 export interface P1Place {name:string;lat:number;lon:number;radiusMeters:number;regionCode:string;coordinateSystem?:'gps'|'gcj02'}
 export interface P1Correction {at:number;reason:string;before:string;after:string;operator:string}
 export interface P1Order {
+ actualTrack?:{lat:number;lon:number;at:number}[];
+ network?:OrderNetwork; billingExempt?:boolean; billingExemptReason?:string; sourceKey?:string; sourceUpdatedAt?:number; routePlan?:OrderRoutePlan;
  id:string;projectId:string;plate:string;plateColor:1|2;driver:string;source:string;
  origin:P1Place;destination:P1Place;plannedDeparture:number|null;plannedArrival:number|null;
  initialization?:{at:number;state:P1State;basis:string};
@@ -31,6 +37,7 @@ export interface P1Order {
  cleanupWillFail:boolean;cleanupAttempts:number;subscriptionRevision:number;deviationBlocked:boolean;
 }
 export interface P1Event {
+ routePlanId?:string; routeStrategy?:RouteStrategy;
  position?: { lat:number;lon:number };
  poiEvidence?:P1PoiEvidence;assessment?:{verdict:'reasonable'|'review';reason:string;radiusMeters:number;rule:string;pois:P1PoiEvidence['pois'];source:'mock'};
  id:string;orderId:string;projectId:string;type:P1EventType;phase:'started'|'recovered'|'enter'|'exit';
@@ -225,6 +232,8 @@ export interface PrivateCapacity {
 }
 
 export interface Order {
+  riskTags?: string[];
+  billingExempt?: boolean;
   monitoringId?: string;
   sourceFields?: { label: string; value: string }[];
   id: string;
@@ -257,6 +266,8 @@ export interface TimelineEvent {
 }
 
 export interface ChatMessage {
+  orderQueryId?: string;
+  orderAction?: { id: string; projectId: string; orderId: string; plate: string; before: P1State; target: P1State; at: number; fingerprint: string; expiresAt: number; status: 'pending' | 'done' | 'canceled' | 'failed' };
   verificationRows?: { row: string; sourceIndex?: number; order: string; plate: string; color: string; start: string; end: string; startPosition: string; endPosition: string; conclusion: string; hint: string }[];
   pendingPredictionPrompt?: string;
   predictionReport?: {

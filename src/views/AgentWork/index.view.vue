@@ -13,9 +13,9 @@ const isFullBleedRoute = computed(() => ['agent-work-agent', 'agent-work-long-ta
 const work = agentWorkData();
 const tasks = useAgentDailyTasks();
 const monitoring = usePhase1();
-watch(() => [monitoring.orders.length, monitoring.anomalies.filter(item => item.status === 'active').length], () => {
+watch(() => [monitoring.orders.map(order=>`${order.id}:${order.network?.status}`).join('|'), monitoring.anomalies.filter(item => item.status === 'active').length], () => {
   const project = work.projects.find(item => item.id === 'MONITOR-EAST');
-  if (project) { project.total = monitoring.orders.filter(item => item.projectId === project.id).length; project.risk = new Set(monitoring.anomalies.filter(item => item.status === 'active' && monitoring.orders.some(order => order.id === item.orderId && order.projectId === project.id)).map(item => item.orderId)).size; }
+  if (project) { project.total = monitoring.orders.filter(item => item.projectId === project.id).length; project.risk = new Set([...monitoring.orders.filter(order=>order.projectId===project.id&&order.network?.status==='unregistered').map(order=>order.id),...monitoring.anomalies.filter(item => item.status === 'active' && monitoring.orders.some(order => order.id === item.orderId && order.projectId === project.id)).map(item => item.orderId)]).size; }
 }, { immediate: true });
 watch(() => work.projects, (projects) => tasks.syncProjects(projects, work.ordersSeed), { immediate: true, deep: true });
 let taskClock: ReturnType<typeof setInterval> | undefined;

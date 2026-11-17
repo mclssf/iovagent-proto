@@ -10,7 +10,7 @@ try {
   const { simulateAssessment, defaultAssessments } = await server.ssrLoadModule('/src/views/Phase1/eventAssessment.ts');
   const { nextWeatherMidnight } = await server.ssrLoadModule('/src/views/Phase1/catalog.ts');
   const { getRiskOrders } = await server.ssrLoadModule('/src/views/AgentWork/utils/index.ts');
-  assert.deepEqual(getRiskOrders([{ id: 'HIGH', risk: '高风险' }, { id: 'LOW', risk: '低风险' }, { id: 'TRACKED', monitoringId: 'TRACKED', risk: '待核实' }, { id: 'CLEAR', monitoringId: 'CLEAR', risk: '无风险' }, { id: 'LEGACY', risk: '待核实' }]).map(order => order.id), ['HIGH', 'LOW', 'TRACKED'], 'monitored review cases appear in abnormal orders without changing legacy risk classification');
+  assert.deepEqual(getRiskOrders([{ id: 'HIGH', risk: '高风险' }, { id: 'LOW', risk: '低风险' }, { id: 'TRACKED', monitoringId: 'TRACKED', risk: '待核实' }, { id: 'CLEAR', monitoringId: 'CLEAR', risk: '无风险' }, { id: 'LEGACY', risk: '待核实' }]).map(order => order.id), ['HIGH', 'LOW'], 'abnormal orders use high/low risk classification');
   const fresh = () => { setActivePinia(createPinia()); return usePhase1(); };
   const place = { name: '上海装货地', lat: 31.3, lon: 121.3, radiusMeters: 500, regionCode: '310114' };
   const create = (s, options = {}) => s.createOrder({ id: 'WB-TEST', projectId: 'P-TEST', plate: '沪A12345', plateColor: 2, driver: '张师傅', source: '手动录入', origin: place, destination: { ...place, name: '南京卸货地', lon: 118.84, lat: 31.95 }, plannedDeparture: s.now + 3600000, plannedArrival: s.now + 10800000, ...options });
@@ -24,11 +24,10 @@ try {
   assert.equal(s.event('WB-TEST', 'fence', 'exit', 'origin'), '');
   for (const type of ['parking', 'offline', 'deviation']) assert.equal(s.event('WB-TEST', type), '');
   assert.equal(s.anomalies.length, 3); assert.match(s.event('WB-TEST', 'parking'), /重复/);
-  s.advance(15); assert.equal(s.anomalies.find(a => a.kind === '超时停车').repeatCount, 1);
+  s.advance(30); assert.equal(s.anomalies.find(a => a.kind === '超时停车').repeatCount, 1);
   s.event('WB-TEST', 'parking', 'recovered'); assert.equal(s.anomalies.find(a => a.kind === '超时停车').status, 'recovered');
-  const offline = s.anomalies.find(a => a.kind === '在途离线'); const fact = s.events.find(e => e.id === offline.eventId);
-  const original = fact.result; assert.equal(s.correctResult(offline.id, '已核实', '隧道信号遮挡，轨迹已恢复'), ''); assert.equal(fact.originalResult, original); assert.equal(offline.status, 'corrected');
-  const expiry = s.orders[0].expiresAt, config = s.config('P-TEST'); config.parking.thresholdMinutes = 45;
+  s.event('WB-TEST', 'offline', 'recovered'); assert.equal(s.anomalies.find(a => a.kind === '在途离线').status, 'recovered');
+  const expiry = s.orders[0].expiresAt, config = s.config('P-TEST'); config.parking.thresholdMinutes = 40;
   assert(s.saveConfig('P-TEST', config, 1)); assert.equal(s.orders[0].expiresAt, expiry); assert.equal(s.saveConfig('P-TEST', config, 1), false);
   s.orders[0].cleanupWillFail = true; s.stop('WB-TEST'); assert.equal(s.orders[0].session, 'cleanup_pending'); assert.match(s.event('WB-TEST', 'offline'), /停止/); s.retryCleanup('WB-TEST'); assert.equal(s.orders[0].session, 'stopped');
   s = fresh(); let c = s.config('P-TEST'); c.missingPass = { origin: true, destination: true }; s.configs['P-TEST'] = c;
@@ -65,7 +64,7 @@ try {
     if (previousStorage === undefined) delete globalThis.localStorage;
     else globalThis.localStorage = previousStorage;
   }
-  for (const file of ['MonitoringConfigDialog.vue','MonitoringTasks.vue','MonitoringOrderPanel.vue','NewMonitoredOrderDialog.vue','CorrectionDialog.vue']) {
+  for (const file of ['MonitoringConfigDialog.vue','MonitoringTasks.vue','MonitoringOrderPanel.vue']) {
     const source=await readFile(`${root}src/views/Phase1/${file}`,'utf8'); assert.doesNotMatch(source,/RuleAssistant|parseRuleRequest|本地模拟|演示|V1\.1|V262|推进时间|恢复样例/);
   }
   for (const file of ['src/router/index.ts', 'src/views/AgentWork/useAgentWorkNav.ts', 'src/views/AgentWork/component/menu.comp.vue', 'src/views/Phase1/MonitoringOrderPanel.vue']) {

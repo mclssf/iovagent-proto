@@ -18,8 +18,7 @@ import { strokeIconPaths } from '../strokeIconPaths';
 import { vehiclePredictionSkill } from '../vehiclePredictionSkill';
 import { clone, p1ConfigError, usePhase1 } from '@/pinia/phase1';
 import { phaseSkills } from '@/views/Phase1/catalog';
-import type { P1Config, P1SkillId } from '../interface';
-import MonitoringConfigDialog from '@/views/Phase1/MonitoringConfigDialog.vue';
+import type { P1Config } from '../interface';
 import { useAgentWorkNav } from '../useAgentWorkNav';
 import { badgeToneClass, projectStatusTone } from '../utils';
 import { monitorDefinitions } from '../dailyTasks';
@@ -49,12 +48,6 @@ interface LoginAgentMessage {
 const store = agentWorkData();
 const monitoring = usePhase1();
 const monitoringDraft = ref<P1Config>();
-const configuringMonitor = ref<P1SkillId>();
-function openMonitorConfig(id: P1SkillId) {
-  monitoringDraft.value ??= monitoring.config(editingProjectId.value);
-  monitoringDraft.value.selectedSkills = phaseSkills.map(skill => skill.id);
-  configuringMonitor.value = id;
-}
 const agentOpsStore = useAgentOpsStore();
 const { goPage } = useAgentWorkNav();
 const route = useRoute();
@@ -783,7 +776,6 @@ onBeforeUnmount(() => {
                 <span class="rounded-md bg-[#f1f1ef] px-2 py-1 text-xs leading-4 text-slate-600">{{ skillTypeLabels[skill.type] }}</span>
                 <span class="rounded-md bg-[#f1f1ef] px-2 py-1 text-xs leading-4 text-slate-600">{{ skill.usage }}</span>
               </div>
-              <button v-if="phaseSkills.some(item => item.id === skill.id)" type="button" class="skill-card-action" :aria-label="`配置 ${skill.name}`" @click="openMonitorConfig(skill.id as P1SkillId)"><Icon :svg="strokeIconPaths.settings" :size="13" />配置</button>
               <button v-if="skill.type === 'data' && skill.usage === '需登录' && !isSkillConnecting(skill)" type="button" class="skill-card-action" :disabled="authorizedSkillIds.includes(skill.id)" :aria-label="`${authorizedSkillIds.includes(skill.id) ? '已连接' : '连接'} ${skill.name}`" @click="connectSkill(skill)"><Icon :svg="strokeIconPaths.zap" :size="13" />{{ authorizedSkillIds.includes(skill.id) ? '已连接' : '连接系统' }}</button>
             </div>
           </article>
@@ -845,7 +837,6 @@ onBeforeUnmount(() => {
       </template>
     </AppDialog>
 
-    <MonitoringConfigDialog v-if="configuringMonitor" :skill-id="configuringMonitor" :project-id="editingProjectId" :draft="monitoringDraft" draft-only @saved="monitoringDraft = $event" @close="configuringMonitor = undefined" />
     <AppDialog v-if="pendingLoginSkill" :model-value="true" :title="pendingLoginSkill.name" width="560px" @update:model-value="cancelSkillLogin">
         <div class="space-y-4">
           <label v-if="isPendingTmsSyncEmployee" class="block">
