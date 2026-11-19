@@ -9,7 +9,7 @@ import MenuComp from './component/menu.comp.vue';
 
 const route = useRoute();
 const isOrderListRoute = computed(() => ['agent-work-orders', 'agent-work-risk'].includes(String(route.name)));
-const isFullBleedRoute = computed(() => ['agent-work-agent', 'agent-work-long-tasks', 'agent-work-daily-tasks', 'agent-work-downloads', 'agent-work-detail'].includes(String(route.name)) || isOrderListRoute.value);
+const isFullBleedRoute = computed(() => ['agent-work-agent', 'agent-work-long-tasks', 'agent-work-daily-tasks', 'agent-work-downloads', 'agent-work-detail', 'agent-work-dispatches', 'agent-work-dispatch-detail'].includes(String(route.name)) || isOrderListRoute.value);
 const work = agentWorkData();
 const tasks = useAgentDailyTasks();
 const monitoring = usePhase1();

@@ -6,12 +6,22 @@ import { createPinia, setActivePinia } from 'pinia';
 const root = fileURLToPath(new URL('../', import.meta.url));
 const server = await createServer({ configFile: false, root, resolve: { alias: { '@': `${root}src` } }, optimizeDeps: { noDiscovery: true, include: [] }, server: { middlewareMode: true, hmr: false, ws: false }, appType: 'custom' });
 try {
-  const { usePhase1, monitoringSkillEnabled } = await server.ssrLoadModule('/src/pinia/phase1.ts');
+  const { usePhase1, monitoringSkillEnabled, p1ConfigError } = await server.ssrLoadModule('/src/pinia/phase1.ts');
+  const { hourlyReports } = await server.ssrLoadModule('/src/views/Phase1/hourlyReports.ts');
   const { simulateAssessment, defaultAssessments } = await server.ssrLoadModule('/src/views/Phase1/eventAssessment.ts');
   const { nextWeatherMidnight } = await server.ssrLoadModule('/src/views/Phase1/catalog.ts');
   const { getRiskOrders } = await server.ssrLoadModule('/src/views/AgentWork/utils/index.ts');
-  assert.deepEqual(getRiskOrders([{ id: 'HIGH', risk: '高风险' }, { id: 'LOW', risk: '低风险' }, { id: 'TRACKED', monitoringId: 'TRACKED', risk: '待核实' }, { id: 'CLEAR', monitoringId: 'CLEAR', risk: '无风险' }, { id: 'LEGACY', risk: '待核实' }]).map(order => order.id), ['HIGH', 'LOW', 'TRACKED'], 'monitored review cases appear in abnormal orders without changing legacy risk classification');
+  assert.deepEqual(getRiskOrders([{ id: 'HIGH', risk: '高风险' }, { id: 'LOW', risk: '低风险' }, { id: 'CLEAR', monitoringId: 'CLEAR', risk: '无风险' }, { id: 'NETWORK', risk: '无风险', riskTags: ['车辆未入网'] }]).map(order => order.id), ['HIGH', 'LOW', 'NETWORK']);
   const fresh = () => { setActivePinia(createPinia()); return usePhase1(); };
+  const defaults = fresh().config('P-TEST');
+  assert.equal(defaults.selectedSkills.length, 6); assert.equal(defaults.weather.enabled, true);
+  assert.equal(defaults.assessments.parking.enabled, true); assert.equal(defaults.assessments.offline.enabled, true);
+  assert.deepEqual(defaults.missingPass, { origin: true, destination: true });
+  assert.deepEqual(defaults.fenceRadii, { origin: 5000, destination: 5000 });
+  assert.equal(defaults.parking.repeatMinutes, 30); assert.equal(defaults.deviation.repeatMinutes, 30);
+  assert.equal(defaults.lateDeparture.graceMinutes, 60); assert.equal(defaults.lateArrival.graceMinutes, 60);
+  assert(p1ConfigError({ ...defaults, parking: { ...defaults.parking, thresholdMinutes: 15 } }));
+  assert.equal(p1ConfigError({ ...defaults, lateDeparture: { enabled: true, graceMinutes: 0 } }), '');
   const place = { name: '上海装货地', lat: 31.3, lon: 121.3, radiusMeters: 500, regionCode: '310114' };
   const create = (s, options = {}) => s.createOrder({ id: 'WB-TEST', projectId: 'P-TEST', plate: '沪A12345', plateColor: 2, driver: '张师傅', source: '手动录入', origin: place, destination: { ...place, name: '南京卸货地', lon: 118.84, lat: 31.95 }, plannedDeparture: s.now + 3600000, plannedArrival: s.now + 10800000, ...options });
   for (const [departure, arrival, state] of [[60,180,'pending'],[-60,180,'in_transit'],[-180,-60,'completed'],[null,null,'pending']]) {
@@ -20,15 +30,14 @@ try {
     if (state === 'completed') { assert.equal(s.orders[0].session, 'stopped'); assert.equal(s.orders[0].subscriptionRevision, 0); }
   }
   let s = fresh(); assert(create(s)); assert.equal(create(s), false); assert.equal(create(s, { id: 'OTHER', origin: { ...place, lat: 100 } }), false);
+  assert(create(s, { id: 'SAME-PLATE' }), '同车不同运单可同时接入');
   assert.match(s.event('WB-TEST', 'parking'), /未生效/); s.advance(10);
   assert.equal(s.event('WB-TEST', 'fence', 'exit', 'origin'), '');
   for (const type of ['parking', 'offline', 'deviation']) assert.equal(s.event('WB-TEST', type), '');
   assert.equal(s.anomalies.length, 3); assert.match(s.event('WB-TEST', 'parking'), /重复/);
-  s.advance(15); assert.equal(s.anomalies.find(a => a.kind === '超时停车').repeatCount, 1);
+  s.advance(30); assert.equal(s.anomalies.find(a => a.kind === '超时停车').repeatCount, 1);
   s.event('WB-TEST', 'parking', 'recovered'); assert.equal(s.anomalies.find(a => a.kind === '超时停车').status, 'recovered');
-  const offline = s.anomalies.find(a => a.kind === '在途离线'); const fact = s.events.find(e => e.id === offline.eventId);
-  const original = fact.result; assert.equal(s.correctResult(offline.id, '已核实', '隧道信号遮挡，轨迹已恢复'), ''); assert.equal(fact.originalResult, original); assert.equal(offline.status, 'corrected');
-  const expiry = s.orders[0].expiresAt, config = s.config('P-TEST'); config.parking.thresholdMinutes = 45;
+  const expiry = s.orders[0].expiresAt, config = s.config('P-TEST'); config.parking.thresholdMinutes = 40;
   assert(s.saveConfig('P-TEST', config, 1)); assert.equal(s.orders[0].expiresAt, expiry); assert.equal(s.saveConfig('P-TEST', config, 1), false);
   s.orders[0].cleanupWillFail = true; s.stop('WB-TEST'); assert.equal(s.orders[0].session, 'cleanup_pending'); assert.match(s.event('WB-TEST', 'offline'), /停止/); s.retryCleanup('WB-TEST'); assert.equal(s.orders[0].session, 'stopped');
   s = fresh(); let c = s.config('P-TEST'); c.missingPass = { origin: true, destination: true }; s.configs['P-TEST'] = c;
@@ -39,6 +48,25 @@ try {
   s.progress('WB-TEST','in_transit'); assert.equal(s.anomalies.filter(a=>a.kind==='未经过起始地').length,1); s.progress('WB-TEST','arrived'); assert.equal(s.anomalies.filter(a=>a.kind==='未经过目的地').length,1);
   s = fresh(); c = s.config('P-TEST'); c.selectedSkills = ['p1-parking']; c.pausedSkillIds = ['p1-parking']; s.configs['P-TEST'] = c; assert(create(s)); assert.equal(s.orders[0].session,'paused'); c.pausedSkillIds=[]; assert(s.saveConfig('P-TEST',c,c.version)); s.advance(10); assert.equal(s.orders[0].session,'active','resume restarts paused session');
   s = fresh(); c = s.config('P-TEST'); c.missingPass = { origin: true, destination: true }; s.configs['P-TEST'] = c; assert(create(s)); s.advance(10); s.event('WB-TEST','fence','enter','destination'); assert(s.anomalies.some(a=>a.kind==='未经过起始地'),'automatic state transition checks missing origin');
+  s = fresh(); assert(create(s, { plannedArrival: s.now + 3600000 }));
+  const finishAt = s.orders[0].plannedArrival + 72 * 3600000;
+  s.advance(72 * 60); assert.equal(s.orders[0].session, 'stopped'); assert.notEqual(s.orders[0].state, 'completed');
+  s.advance(60); assert.equal(s.now, finishAt); assert.equal(s.orders[0].state, 'completed'); assert.equal(s.orders[0].completedAt, finishAt); assert.equal(s.orders[0].milestoneMethods.completed, '超时结束');
+  assert(s.anomalies.some(a => a.kind === '未经过目的地')); assert(!s.events.some(event => event.target === 'destination'));
+  const completeCount = s.anomalies.length; s.advance(60); assert.equal(s.anomalies.length, completeCount);
+  s = fresh(); assert(create(s)); s.advance(10); s.event('WB-TEST', 'fence', 'exit', 'origin');
+  s.advance(60); const reports = hourlyReports(s, 'P-TEST', 'p1-status');
+  assert(reports.length > 0); assert(reports.some(report => report.eventCount === 1 && report.statusUpdates === 1));
+  assert.equal(hourlyReports(s, 'P-TEST', 'p1-status', 'UNKNOWN').length, 0);
+  const hour = 3600000, base = Math.floor(s.now / hour) * hour;
+  const receivedHour = hourlyReports({
+    orders: [{ id: 'LATE-EVENT', projectId: 'P-TEST', config: { selectedSkills: ['p1-late'] }, subscriptionRevision: 1, activateAt: base, expiresAt: base + 3 * hour }],
+    events: [{ id: 'FENCE', orderId: 'LATE-EVENT', type: 'fence', taskIds: ['p1-late'], occurredAt: base + 60000, receivedAt: base + hour + 60000, address: '起始地', result: '围栏事实' }],
+    anomalies: [{ id: 'LATE', orderId: 'LATE-EVENT', taskId: 'p1-late', firstAt: base + hour + 60000, kind: '晚发', reason: '超过计划时间' }],
+    logs: [], now: base + 3 * hour,
+  }, 'P-TEST', 'p1-late');
+  assert.equal(receivedHour.find(report => report.start === base)?.eventCount, 0);
+  assert.equal(receivedHour.find(report => report.start === base + hour)?.eventCount, 1, '晚发独立异常不计入基础事件，迟到围栏按接收小时计');
   s = fresh(); assert(create(s)); c = s.config('P-TEST'); c.weather.enabled=true; assert(s.saveConfig('P-TEST',c,c.version)); assert.equal(s.orders[0].weatherEffectiveAt,nextWeatherMidnight(s.now)); assert.match(s.weatherSample('WB-TEST'),/待生效/); s.advance((s.orders[0].weatherEffectiveAt-s.now)/60000); assert.equal(s.weatherSample('WB-TEST','暴雨','前方暴雨','WX-TEST'),''); assert.match(s.weatherSample('WB-TEST','暴雨','前方暴雨','WX-TEST'),/重复/);
   const event = { type:'parking', poiEvidence:{source:'mock',pois:[{name:'服务区',category:'服务区',distanceMeters:100,inside:true}],normalActivityConfirmed:true,durationMatches:true} };
   const assessment=defaultAssessments().parking; assert.equal(simulateAssessment(event,assessment).verdict,'reasonable'); assert.equal(simulateAssessment({...event,poiEvidence:{...event.poiEvidence,dangerousLocation:true}},assessment).verdict,'review'); assert.equal(simulateAssessment(event,{...assessment,filterRule:'客户指定规则'}).verdict,'review');
@@ -65,7 +93,7 @@ try {
     if (previousStorage === undefined) delete globalThis.localStorage;
     else globalThis.localStorage = previousStorage;
   }
-  for (const file of ['MonitoringConfigDialog.vue','MonitoringTasks.vue','MonitoringOrderPanel.vue','NewMonitoredOrderDialog.vue','CorrectionDialog.vue']) {
+  for (const file of ['MonitoringConfigDialog.vue','MonitoringTasks.vue','MonitoringOrderPanel.vue']) {
     const source=await readFile(`${root}src/views/Phase1/${file}`,'utf8'); assert.doesNotMatch(source,/RuleAssistant|parseRuleRequest|本地模拟|演示|V1\.1|V262|推进时间|恢复样例/);
   }
   for (const file of ['src/router/index.ts', 'src/views/AgentWork/useAgentWorkNav.ts', 'src/views/AgentWork/component/menu.comp.vue', 'src/views/Phase1/MonitoringOrderPanel.vue']) {
@@ -75,5 +103,5 @@ try {
   assert.doesNotMatch(projectForm, /toggleSkill|isSkillSelected|已选择|未选择|请选择项目技能|selectedSkills\.length|:aria-pressed/);
   assert.match(projectForm, /const skillIds = skills\.value\.map/);
   assert.match(projectForm, /projectNameInput\.value\?\.focus\(\)/);
-  console.log('PASS: monitoring intake, initialized/actual separation, lifecycle, thresholds, duplicate/recovery, corrections, expiry-only guard, paused missing-pass rules, resume, automatic checks, weather, POI review, safe project persistence and formal UI.');
+  console.log('PASS: monitoring intake, initialized/actual separation, lifecycle, thresholds, duplicate/recovery, expiry-only guard, paused missing-pass rules, resume, automatic checks, weather, POI review, safe project persistence and formal UI.');
 } finally { await server.close(); }

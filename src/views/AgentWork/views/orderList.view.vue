@@ -3,8 +3,9 @@ import { Icon } from '@packages/icon';
 import { storeToRefs } from 'pinia';
 import { computed, onMounted, ref } from 'vue';
 import { usePhase1 } from '@/pinia/phase1';
-import NewMonitoredOrderDialog from '@/views/Phase1/NewMonitoredOrderDialog.vue';
 import { dateText, sessionNames } from '@/views/Phase1/catalog';
+import WaybillImportDemo from '@/views/Phase1/WaybillImportDemo.vue';
+import { waybillPlanWindow, waybillStops, waybillVehicles } from '../waybillDisplay';
 
 import { agentWorkData } from '@/pinia/agentWork';
 
@@ -18,14 +19,8 @@ const props = defineProps<{
 
 const store = agentWorkData();
 const monitoring = usePhase1();
-const showCreate = ref(false);
 const monitoringManaged = computed(() => !!monitoring.configs[store.currentProjectId]?.selectedSkills.length);
-function created(id: string) {
-  const record = store.currentProjectOrders.find(item => item.id === id);
-  const dates = store.currentProjectOrders.map(item => item.startTime.slice(0, 10)).filter(Boolean).sort();
-  if (dates.length) { store.ordersStartDate = dates[0]!; store.ordersEndDate = dates.at(-1)!; }
-  if (record) openOrderDetail(record);
-}
+const showImportDemo = ref(false);
 const {
   currentProjectOrders: ordersSeed,
   ordersRiskFilter,
@@ -61,7 +56,7 @@ onMounted(() => {
           </div>
         </div>
         <div v-if="isOrders()" class="flex gap-2">
-          <button v-if="monitoringManaged" type="button" class="inline-flex items-center gap-1.5 rounded-md border border-[#deded9] px-3 py-2 text-xs text-slate-700 hover:bg-[#f7f7f5]" @click="showCreate = true"><Icon :svg="strokeIconPaths.plus" :size="14" />新增运单</button>
+          <button v-if="monitoringManaged" type="button" class="rounded-md border border-slate-300 px-3 py-2 text-xs text-slate-700" @click="showImportDemo = !showImportDemo">接口 / 表格导入演示</button>
           <button
             type="button"
             class="flex items-center rounded-md bg-slate-900 px-4 py-2 text-sm font-medium text-white"
@@ -71,7 +66,8 @@ onMounted(() => {
           </button>
         </div>
       </div>
-      <div v-if="isOrders() && monitoringManaged" class="grid grid-cols-4 gap-3 border-b border-[#e2e2dc] px-4 py-3"><div v-for="item in [{ label: '运单总量', value: ordersSeed.length }, { label: '监听中', value: monitoring.orders.filter(order => order.projectId === store.currentProjectId && ['active', 'subscribing'].includes(order.session)).length }, { label: '待核实', value: ordersSeed.filter(order => order.risk === '待核实').length }, { label: '已完成', value: ordersSeed.filter(order => order.status === '已完成').length }]" :key="item.label"><div class="text-xs text-slate-600">{{ item.label }}</div><div class="mt-1 text-lg font-semibold text-slate-900">{{ item.value }}</div></div></div>
+      <WaybillImportDemo v-if="isOrders() && monitoringManaged && showImportDemo" :project-id="store.currentProjectId" />
+      <div v-if="isOrders() && monitoringManaged" class="grid grid-cols-4 gap-3 border-b border-[#e2e2dc] px-4 py-3"><div v-for="item in [{ label: '运单总量', value: ordersSeed.length }, { label: '监听中', value: monitoring.orders.filter(order => order.projectId === store.currentProjectId && ['active', 'subscribing'].includes(order.session)).length }, { label: '高风险', value: ordersSeed.filter(order => order.risk === '高风险').length }, { label: '已完成', value: ordersSeed.filter(order => order.status === '已完成').length }]" :key="item.label"><div class="text-xs text-slate-600">{{ item.label }}</div><div class="mt-1 text-lg font-semibold text-slate-900">{{ item.value }}</div></div></div>
       <div v-else-if="isOrders()" class="grid grid-cols-4 gap-3 border-b border-[#e2e2dc] p-4">
         <div class="rounded-md bg-[#f7f7f5] p-3">
           <div class="text-xs text-slate-500">全部</div>
@@ -140,18 +136,17 @@ onMounted(() => {
               <option>高风险</option>
               <option>低风险</option>
               <option>无风险</option><option>车辆未入网</option>
-              <option v-if="monitoringManaged">待核实</option>
             </select>
           </label>
           <label class="text-xs text-slate-500"
             ><span class="mb-1 block">运单状态</span>
             <select v-model="ordersStatusFilter" class="min-h-[40px] rounded-md border border-[#deded9] bg-[#fbfbfa] px-3 py-2 text-sm text-slate-700">
               <option>全部</option>
-              <option>在途</option>
+              <option>待发车</option>
               <option>装货中</option>
-              <option>已到货</option>
+              <option>在途</option>
+              <option>卸货中</option>
               <option>已完成</option>
-              <option v-if="monitoringManaged">待发车</option><option v-if="monitoringManaged">装货中</option><option v-if="monitoringManaged">已到达</option>
             </select>
           </label>
           <label class="min-w-0 flex-1 basis-[280px] text-xs text-slate-500"
@@ -185,7 +180,6 @@ onMounted(() => {
             ><span class="mb-1 block">风险分组</span>
             <select v-model="riskOrdersRisk" class="min-h-[40px] rounded-md border border-[#deded9] bg-[#fbfbfa] px-3 py-2 text-sm text-slate-700">
               <option>全部异常</option><option>车辆未入网</option>
-              <option v-if="monitoringManaged">待核实</option>
               <option>高风险</option>
               <option>低风险</option>
             </select>
@@ -209,7 +203,7 @@ onMounted(() => {
         </template>
       </div>
       <div class="order-list-table min-h-0 min-w-0 flex-1 overflow-auto">
-        <table class="w-full min-w-[1000px] border-collapse text-left text-sm">
+        <table class="w-full min-w-[1220px] border-collapse text-left text-sm">
           <thead class="sticky top-0 z-10 bg-[#f7f7f5]">
             <tr class="text-xs font-semibold text-slate-500">
               <th class="px-4 py-3 align-middle">运单</th>
@@ -217,7 +211,7 @@ onMounted(() => {
               <th class="px-4 py-3 align-middle">状态</th>
               <th class="px-4 py-3 align-middle">风险</th>
               <th class="px-4 py-3 align-middle">异常说明</th>
-              <th class="px-4 py-3 align-middle">开始时间</th>
+              <th class="px-4 py-3 align-middle">运单时间</th>
               <th class="px-4 py-3 align-middle">操作</th>
             </tr>
           </thead>
@@ -228,11 +222,17 @@ onMounted(() => {
                   {{ o.id }}
                 </div>
                 <div class="mt-0.5 text-xs leading-relaxed text-slate-400">{{ o.plate }} · {{ o.driver }}</div>
+                <div v-if="o.vehicleSegments?.length" class="order-list-vehicles"><span v-for="(plate, index) in waybillVehicles(o)" :key="`${o.id}-${index}`">第{{ index + 1 }}程 {{ plate }}</span></div>
+                <div v-if="o.loadType || o.dispatchId" class="order-list-tags"><span v-if="o.loadType" :title="o.loadType === '整车' ? '独立运单运输' : '多条运单拼载运输'">{{ o.loadType }}</span><span v-if="o.dispatchId">调度单 {{ o.dispatchId }}</span><span v-else-if="o.loadType === '零担'">调度单待关联</span></div>
               </td>
               <td class="px-4 py-4 align-middle">
                 <div class="font-semibold text-slate-800">{{ o.route }}</div>
                 <div class="mt-0.5 text-xs leading-relaxed text-slate-400">
                   {{ o.carrier }}
+                </div>
+                <div v-if="o.stops?.length" class="order-list-stops">
+                  <div v-for="(stop, index) in waybillStops(o).loading" :key="stop.id"><span>装货点{{ index + 1 }}</span><strong>{{ stop.place.name }}</strong><time>计划装货 {{ stop.plannedAt !== undefined ? dateText(stop.plannedAt) : '待补充' }}</time></div>
+                  <div v-for="(stop, index) in waybillStops(o).unloading" :key="stop.id"><span>卸货点{{ index + 1 }}</span><strong>{{ stop.place.name }}</strong><time>计划卸货 {{ stop.plannedAt !== undefined ? dateText(stop.plannedAt) : '待补充' }}</time></div>
                 </div>
               </td>
               <td class="px-4 py-4 align-middle">
@@ -240,7 +240,7 @@ onMounted(() => {
                 <div v-if="o.monitoringId" class="mt-1 text-xs text-slate-600">{{ sessionNames[monitoring.orders.find(item => item.id === o.id)!.session] }}</div>
               </td>
               <td class="px-4 py-4 align-middle">
-                <span v-if="o.riskTags?.includes('车辆未入网')" class="mr-1 inline-flex rounded border border-amber-200 bg-amber-50 px-2 py-0.5 text-xs text-amber-800">车辆未入网</span><span v-if="o.risk!=='无风险'||!o.riskTags?.length" :class="o.risk === '待核实' ? badgeToneClass('orange') : tableRiskPillClass(o.risk)">{{ o.risk }}</span>
+                <span v-if="o.riskTags?.includes('车辆未入网')" class="mr-1 inline-flex rounded border border-amber-200 bg-amber-50 px-2 py-0.5 text-xs text-amber-800">车辆未入网</span><span v-if="o.risk!=='无风险'||!o.riskTags?.length" :class="tableRiskPillClass(o.risk)">{{ o.risk }}</span>
               </td>
               <td class="px-4 py-4 align-middle">
                 <div class="text-sm text-slate-800">{{ o.issue }}</div>
@@ -248,8 +248,10 @@ onMounted(() => {
                   {{ o.source }}<span v-if="o.billingExempt" class="ml-2 text-emerald-700">免计费</span>
                 </div>
               </td>
-              <td class="px-4 py-4 align-middle text-sm text-slate-700">
-                {{ o.startTime }}
+              <td class="px-4 py-4 align-middle text-xs text-slate-700">
+                <div>计划开始：{{ waybillPlanWindow(o).start !== undefined ? dateText(waybillPlanWindow(o).start) : '待补充' }}</div>
+                <div class="mt-1">计划结束：{{ waybillPlanWindow(o).end !== undefined ? dateText(waybillPlanWindow(o).end) : '待补充' }}</div>
+                <div class="mt-1 text-slate-400">创建：{{ o.startTime }}</div>
               </td>
               <td class="px-4 py-4 align-middle">
                 <button
@@ -268,7 +270,6 @@ onMounted(() => {
         </table>
       </div>
     </div>
-    <NewMonitoredOrderDialog v-if="showCreate" :project-id="store.currentProjectId" @close="showCreate = false" @created="created" />
   </div>
 </template>
 
@@ -276,4 +277,13 @@ onMounted(() => {
 .order-list-filters > label { max-width: 100%; }
 .order-list-filters input[type='date'] { min-width: 0; }
 .order-list-table { overscroll-behavior: contain; scrollbar-width: thin; scrollbar-color: #cbd5e1 transparent; }
+.order-list-table th:nth-child(1), .order-list-table td:nth-child(1) { min-width: 190px; }
+.order-list-table th:nth-child(2), .order-list-table td:nth-child(2) { min-width: 265px; }
+.order-list-table th:nth-child(6), .order-list-table td:nth-child(6) { min-width: 190px; }
+.order-list-vehicles, .order-list-tags { display: flex; flex-wrap: wrap; gap: 3px 6px; margin-top: 5px; color: #526887; font-size: 11px; line-height: 16px; }
+.order-list-vehicles span { display: block; width: 100%; }
+.order-list-tags span { padding: 1px 5px; border: 1px solid #dbe7f8; border-radius: 4px; background: #f8fbff; color: #345891; }
+.order-list-stops { display: grid; gap: 5px; margin-top: 7px; padding-top: 6px; border-top: 1px solid #edf0f0; font-size: 11px; line-height: 16px; }
+.order-list-stops > div { display: grid; grid-template-columns: 52px minmax(0, 1fr); column-gap: 5px; }
+.order-list-stops span { color: #526887; }.order-list-stops strong { min-width: 0; color: #334155; font-weight: 500; overflow-wrap: anywhere; }.order-list-stops time { grid-column: 2; color: #64748b; font-variant-numeric: tabular-nums; }
 </style>

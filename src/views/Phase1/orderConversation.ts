@@ -39,11 +39,11 @@ export function projectOrderConversation(raw: string, projectId: string, orders:
   if (mutation) {
     if (/所有|全部|这些|批量/.test(raw) || matched.length !== 1) return reply(matched.length ? `请指定一张运单，本次未修改。当前匹配：${matched.map(o => o.id).join('、')}` : '当前项目未找到匹配运单，本次未修改。');
     const selected = matched[0]!;
-    const target = /已完成|确认完成/.test(raw) ? 'completed' : /已到达|已到货|确认到达/.test(raw) ? 'arrived' : /在途|确认发车|发车了/.test(raw) ? 'in_transit' : /装货中/.test(raw) ? 'loading' : /待发车/.test(raw) ? 'pending' : undefined;
-    if (!target) return reply('请说明要改成哪个运输状态：待发车、装货中、在途、已到达或已完成。');
+    const target = /已完成|确认完成/.test(raw) ? 'completed' : /卸货中|已到达|已到货|确认到达/.test(raw) ? 'arrived' : /在途|确认发车|发车了/.test(raw) ? 'in_transit' : /装货中/.test(raw) ? 'loading' : /待发车/.test(raw) ? 'pending' : undefined;
+    if (!target) return reply('请说明要改成哪个运输状态：待发车、装货中、在途、卸货中或已完成。');
     const order = store.orders.find(o => o.id === selected.id && o.projectId === projectId);
     if (!order) return reply(`${selected.id}尚未接入本期运单状态更新流程，本次未修改。`);
-    if (states.indexOf(target) <= states.indexOf(order.state)) return reply(`当前为${stateNames[order.state]}，本次不回退或重复推进。时间纠正请使用运单详情中的状态纠正入口。`);
+    if (states.indexOf(target) <= states.indexOf(order.state)) return reply(`当前为${stateNames[order.state]}，本次不回退或重复推进。`);
     let at = store.now;
     const time = raw.match(/(?:(\d{4}-\d{2}-\d{2})|(?:今天|昨天))?\s*(\d{1,2})(?::(\d{2})|点(\d{1,2})?)/);
     if (time) {
@@ -56,7 +56,7 @@ export function projectOrderConversation(raw: string, projectId: string, orders:
     return { ...reply(`${order.id} · ${order.plate}\n${stateNames[order.state]} → ${stateNames[target]}\n节点时间：${dateText(at)}${time ? '' : '（采用当前时间）'}。确认后保存，仅更新数字人，不回写灵动。${target === 'completed' ? '完成后结束本单监听。' : ''}`), orderAction: action, orderQueryId: order.id };
   }
   if (/未入网/.test(raw)) matched = matched.filter(o => o.riskTags?.includes('车辆未入网'));
-  const state = /在途/.test(raw) ? '在途' : /已完成/.test(raw) ? '已完成' : /已到达/.test(raw) ? '已到达' : /装货中/.test(raw) ? '装货中' : /待发车/.test(raw) ? '待发车' : '';
+  const state = /在途/.test(raw) ? '在途' : /已完成/.test(raw) ? '已完成' : /卸货中|已到达|已到货/.test(raw) ? '卸货中' : /装货中/.test(raw) ? '装货中' : /待发车/.test(raw) ? '待发车' : '';
   if (state && !explicitId && !plate && !/这单|那单|刚才/.test(raw)) matched = matched.filter(o => o.status === state);
   if (/晚到|晚发/.test(raw)) matched = matched.filter(o => o.issue.includes(raw.includes('晚到') ? '晚到' : '晚发'));
   if (/今天/.test(raw)) {

@@ -1,58 +1,54 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue';
-import { ElDatePicker, ElForm, ElFormItem, ElMessage } from 'element-plus';
-import { Icon } from '@packages/icon';
-import AppDialog from '@/components/AppDialog.vue';
+import { computed } from 'vue';
 import { usePhase1 } from '@/pinia/phase1';
-import { dateText, sessionNames, stateNames } from './catalog';
-import type { P1State } from '@/views/AgentWork/interface';
-import { strokeIconPaths } from '@/views/AgentWork/strokeIconPaths';
+import type { P1Anomaly, P1Order } from '@/views/AgentWork/interface';
+import { dateText, sessionNames } from './catalog';
 import { useAgentWorkNav } from '@/views/AgentWork/useAgentWorkNav';
-import CorrectionDialog from './CorrectionDialog.vue';
 const props = defineProps<{ orderId: string }>();
 const store = usePhase1();
 const { goPage } = useAgentWorkNav();
 const order = computed(() => store.orders.find(item => item.id === props.orderId));
-const stateCorrection = ref(false);
-const correcting = ref('');
-const editingPlan = ref(false);
-const departure = ref<Date | null>(null);
-const arrival = ref<Date | null>(null);
-const alerts = computed(() => store.anomalies.filter(item => item.orderId === props.orderId));
-const nodes = computed(() => order.value ? [
-  { label: '装货', time: order.value.enteredAt, method: order.value.milestoneMethods?.loading },
-  { label: '发车', time: order.value.departedAt, method: order.value.milestoneMethods?.in_transit },
-  { label: '到达', time: order.value.arrivedAt, method: order.value.milestoneMethods?.arrived },
-  { label: '完成', time: order.value.completedAt, method: order.value.milestoneMethods?.completed },
-] : []);
-const next = computed(() => ({ pending: { state: 'loading', label: '开始装货' }, loading: { state: 'in_transit', label: '确认发车' }, in_transit: { state: 'arrived', label: '确认到达' }, arrived: { state: 'completed', label: '确认完成' } }[order.value?.state ?? 'pending']));
-function progress() { if (next.value) { const error = store.progress(props.orderId, next.value.state as P1State); if (error) ElMessage.warning(error); } }
-function editPlan() { departure.value = order.value?.plannedDeparture ? new Date(order.value.plannedDeparture) : null; arrival.value = order.value?.plannedArrival ? new Date(order.value.plannedArrival) : null; editingPlan.value = true; }
-function savePlan() {
-  if (!order.value) return;
-  const start = departure.value?.getTime() ?? null, end = arrival.value?.getTime() ?? null;
-  if (start !== null && end !== null && end < start) { ElMessage.warning('预计到达不能早于预计出发'); return; }
-  order.value.plannedDeparture = start; order.value.plannedArrival = end;
-  store.allLog(order.value, '配置', '计划时间已更新，原监听截止时间不变。');
-  store.correctLate(order.value); store.tick(); editingPlan.value = false;
+const fenceTime = (target: 'origin' | 'destination', phase: 'enter' | 'exit', stopId?: string) => store.events
+  .filter(event => event.orderId === props.orderId && event.type === 'fence' && (stopId ? event.stopId === stopId : event.target === target) && event.phase === phase)
+  .reduce<number | undefined>((first, event) => first === undefined ? event.occurredAt : Math.min(first, event.occurredAt), undefined);
+function alertPhase(alert: P1Anomaly, current: P1Order) {
+  if (alert.kind === '未经过起始地') return '运单创建';
+  if (alert.kind === '晚发') return '装货中';
+  if (alert.kind === '晚到' || alert.kind === '未经过目的地') return '卸货中';
+  const at = store.events.find(event => event.id === alert.eventId)?.occurredAt ?? alert.firstAt;
+  if (current.completedAt !== undefined && at >= current.completedAt) return '已完成';
+  if (current.arrivedAt !== undefined && at >= current.arrivedAt) return '卸货中';
+  if (current.departedAt !== undefined && at >= current.departedAt) return '在途';
+  if (current.enteredAt !== undefined && at >= current.enteredAt) return '装货中';
+  if (current.initialization?.state === 'in_transit') return '在途';
+  return '运单创建';
 }
+const phaseOrder = ['运单创建', '装货中', '在途', '卸货中', '已完成'];
+const alerts = computed(() => {
+  if (!order.value) return [];
+  return store.anomalies.filter(item => item.orderId === props.orderId)
+    .map(item => ({ ...item, phase: alertPhase(item, order.value!) }))
+    .sort((a, b) => phaseOrder.indexOf(a.phase) - phaseOrder.indexOf(b.phase) || a.firstAt - b.firstAt);
+});
+const nodes = computed(() => order.value ? [
+  { label: '运单创建', time: order.value.createdAt, method: '待发车', planned: undefined, fence: undefined, current: order.value.state === 'pending' },
+  ...(order.value.stops?.length ? order.value.stops.map(stop => ({ label: `${stop.role === 'loading' ? '装货' : '卸货'}点${stop.sequence} · ${stop.place.name}`, time: stop.enteredAt ?? stop.exitedAt, method: stop.enteredAt ? '围栏事件' : undefined, planned: stop.plannedAt, fence: fenceTime(stop.role === 'loading' ? 'origin' : 'destination', 'enter', stop.id), current: order.value?.state === (stop.role === 'loading' ? 'loading' : 'arrived') })) : []),
+  { label: '装货中', time: order.value.enteredAt, method: order.value.milestoneMethods?.loading, planned: undefined, fence: fenceTime('origin', 'enter'), current: order.value.state === 'loading' },
+  { label: '在途', time: order.value.departedAt, method: order.value.milestoneMethods?.in_transit, planned: order.value.plannedDeparture, fence: fenceTime('origin', 'exit'), current: order.value.state === 'in_transit' },
+  { label: '卸货中', time: order.value.arrivedAt, method: order.value.milestoneMethods?.arrived, planned: order.value.plannedArrival, fence: fenceTime('destination', 'enter'), current: order.value.state === 'arrived' },
+  { label: '已完成', time: order.value.completedAt, method: order.value.milestoneMethods?.completed, planned: undefined, fence: fenceTime('destination', 'exit'), current: order.value.state === 'completed' },
+] : []);
 </script>
 <template>
   <section v-if="order" class="monitor-order">
-    <div class="monitor-heading"><h2>运输监控</h2><div><button title="修改计划" aria-label="修改运输计划" @click="editPlan"><Icon :svg="strokeIconPaths.alarmClock" :size="14" /></button><button title="纠正运输状态" aria-label="纠正运输状态" @click="stateCorrection = true"><Icon :svg="strokeIconPaths.edit" :size="14" /></button></div></div>
+    <div class="monitor-heading"><h2>运输监控</h2></div>
     <div v-if="order.network?.status==='unregistered'" class="monitor-alert"><strong>车辆未入网 · 免计费</strong><p>{{ order.network.reason }} · {{ order.network.source }} · {{ dateText(order.network.checkedAt) }}</p><p>相关监听未生效。本单不自动恢复监听，不计入停车、离线等基础事件。</p></div>
     <div v-if="order.routePlan" class="mb-3 text-xs text-slate-600">线路策略：{{ order.routePlan.strategy }} · {{ order.routePlan.status==='ready'?'已规划':'待规划' }}<p>路线版本：{{ order.routePlan.id }} · {{ dateText(order.routePlan.plannedAt) }}</p></div>
-    <dl class="monitor-plan"><div><dt>预计出发</dt><dd>{{ dateText(order.plannedDeparture) }}</dd></div><div><dt>预计到达</dt><dd>{{ dateText(order.plannedArrival) }}</dd></div><div><dt>监听状态</dt><dd>{{ sessionNames[order.session] }}</dd></div><div><dt>监听截止</dt><dd>{{ order.subscriptionRevision ? dateText(order.expiresAt) : '未注册监听' }}</dd></div></dl>
-    <details v-if="order.initialization" class="monitor-disclosure"><summary>状态初始化依据</summary><p>{{ order.initialization.basis }}</p></details>
-    <ol class="monitor-nodes"><li v-for="node in nodes" :key="node.label" :class="{ recorded: node.time }"><span>{{ node.label }}</span><strong>{{ node.time ? dateText(node.time) : '未记录' }}</strong><small v-if="node.time">{{ node.method || '运输事件' }}</small></li></ol>
-    <div class="monitor-actions"><button v-if="next && !['stopped', 'cleanup_pending'].includes(order.session)" class="dialog-button" @click="progress">{{ next.label }}</button><button class="monitor-link" @click="goPage('dailyTasks', { monitor: '1', projectId: order.projectId, orderId })">监听结果</button></div>
-    <details v-if="order.corrections?.length" class="monitor-disclosure"><summary>状态纠正记录</summary><p v-for="(record, index) in order.corrections" :key="index">{{ dateText(record.at) }} · {{ record.before }} → {{ record.after }}；{{ record.reason }}</p></details>
-    <div v-for="alert in alerts" :key="alert.id" class="monitor-alert" :class="{ resolved: alert.status !== 'active' }"><div><strong>{{ alert.kind }}</strong><span>{{ alert.status === 'active' ? '待核实' : alert.status === 'corrected' ? '已纠正' : '已恢复' }}</span></div><p>{{ alert.reason }}</p><footer><span>{{ dateText(alert.firstAt) }}<template v-if="alert.repeatCount"> · 提醒 {{ alert.repeatCount }} 次</template></span><button @click="correcting = alert.id">纠正</button></footer></div>
+    <dl class="monitor-plan"><div><dt>计划开始</dt><dd>{{ dateText(order.plannedDeparture) }}</dd></div><div><dt>计划结束</dt><dd>{{ dateText(order.plannedArrival) }}</dd></div><div><dt>监听状态</dt><dd>{{ sessionNames[order.session] }}</dd></div><div><dt>监控开始</dt><dd>{{ order.monitorStartAt ? dateText(order.monitorStartAt) : '待计算' }}</dd></div><div><dt>最晚监控结束</dt><dd>{{ order.subscriptionRevision ? dateText(order.expiresAt) : '未注册监听' }}</dd></div></dl>
+    <ol class="monitor-nodes"><li v-for="node in nodes" :key="node.label" :class="{ recorded: node.time }"><span>{{ node.label }}<template v-if="node.current"> · 当前状态</template></span><strong>{{ node.time ? dateText(node.time) : '未记录' }}</strong><small v-if="node.time">{{ node.method || '运输事件' }}</small><small v-if="node.planned">计划：{{ dateText(node.planned) }}</small><small v-if="node.fence !== undefined || node.label !== '运单创建'">围栏：{{ node.fence === undefined ? '未发生' : dateText(node.fence) }}</small></li></ol>
+    <div class="monitor-actions"><button class="monitor-link" @click="goPage('dailyTasks', { monitor: '1', projectId: order.projectId, orderId })">监听结果</button><button class="monitor-link" @click="goPage('dailyTasks', { monitor: '1', projectId: order.projectId, taskId: 'p1-transfer', configure: '1', orderId })">换车检测配置</button><span>换车：{{ order.config.transfer.enabled ? `停车点距离 ≤ ${order.config.transfer.distanceMeters} 米，重合 ≥ ${order.config.transfer.overlapMinutes} 分钟` : '已关闭' }}</span></div>
+    <div v-for="alert in alerts" :key="alert.id" class="monitor-alert" :class="{ resolved: alert.status !== 'active' }"><div><strong>{{ alert.phase }} · {{ alert.kind === '未经过起始地' ? '未抵达起点' : alert.kind === '未经过目的地' ? '未抵达终点' : alert.kind }}</strong><span>{{ alert.status === 'active' ? '高风险' : alert.status === 'recovered' ? '已恢复' : '已纠正' }}</span></div><p>{{ alert.reason }}</p><footer><span>{{ dateText(alert.firstAt) }}<template v-if="alert.repeatCount"> · 提醒 {{ alert.repeatCount }} 次</template></span></footer></div>
     <div v-if="order.session === 'cleanup_pending'" class="monitor-actions"><span>监听处理已停止，结束请求待重试</span><button class="monitor-link" @click="store.retryCleanup(order.id)">重试结束</button></div>
-    <details v-else-if="!['stopped'].includes(order.session)" class="monitor-disclosure"><summary>监听管理</summary><div class="monitor-actions"><span>结束后保留历史事件，不改变运输状态</span><button class="monitor-link" @click="store.stop(order.id)">结束监听</button></div></details>
-    <CorrectionDialog v-if="stateCorrection" :id="order.id" :state="order.state" @close="stateCorrection = false" />
-    <CorrectionDialog v-if="correcting" :id="correcting" @close="correcting = ''" />
-    <AppDialog v-model="editingPlan" title="运输计划" width="460px"><ElForm label-position="top"><ElFormItem label="预计出发"><ElDatePicker v-model="departure" type="datetime" placeholder="选择出发时间" /></ElFormItem><ElFormItem label="预计到达"><ElDatePicker v-model="arrival" type="datetime" placeholder="选择到达时间" /></ElFormItem></ElForm><template #footer><div class="dialog-actions"><button class="dialog-button" @click="editingPlan = false">取消</button><button class="dialog-button dialog-primary" @click="savePlan">保存</button></div></template></AppDialog>
   </section>
 </template>
 <style scoped>

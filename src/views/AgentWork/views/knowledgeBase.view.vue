@@ -1,5 +1,5 @@
 <script lang="ts" setup>
-import { nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { useRouter } from 'vue-router';
 
 import { Icon } from '@packages/icon';
@@ -40,6 +40,9 @@ interface PlatformPoi {
   count: number;
   lat: number;
   lng: number;
+  address?: string;
+  status?: '已确认' | '待客户确认';
+  source?: '接口同步' | '爬虫工具' | '批量导入' | '逆地址解析';
 }
 
 
@@ -197,7 +200,7 @@ function generateRandomLines(count: number): PlatformLine[] {
 const platformLines = ref<PlatformLine[]>(generateRandomLines(100));
 
 const platformPois = ref<PlatformPoi[]>([
-  { id: 'P003', name: '苏州工业园区集散点', type: 'consignee', industry: '制造业', count: 74, lat: 31.316, lng: 120.7488 },
+  { id: 'P003', name: '苏州工业园区集散点', type: 'consignee', industry: '制造业', count: 74, lat: 31.316, lng: 120.7488, address: '苏州市工业园区', status: '已确认', source: '接口同步' },
   { id: 'P001', name: '上海外高桥物流中心', type: 'shipper', industry: '仓储物流', count: 86, lat: 31.3226, lng: 121.601 },
   { id: 'P004', name: '南京江宁物流园', type: 'consignee', industry: '仓储物流', count: 58, lat: 31.9533, lng: 118.7975 },
   { id: 'P008', name: '深圳盐田物流园', type: 'consignee', industry: '仓储物流', count: 52, lat: 22.5944, lng: 114.2363 },
@@ -213,6 +216,56 @@ const platformPois = ref<PlatformPoi[]>([
 const store = agentWorkData();
 const router = useRouter();
 const activeFolderId = ref('platformAssets');
+const poiSyncing = ref(false);
+const poiSyncMessage = ref('');
+const poiInput = ref({ name: '', address: '', lat: '', lng: '', type: 'shipper' as PlatformPoi['type'] });
+const poiConfirmQueue = ref<PlatformPoi[]>([
+  { id: 'P-WAIT-001', name: '待确认客户装货点', type: 'shipper', industry: '待识别', count: 0, lat: 31.235, lng: 121.48, address: '上海市浦东新区示例地址', status: '待客户确认', source: '逆地址解析' },
+]);
+const poiCandidateKey = 'iovagent-v3-poi-candidates';
+const confirmedPoiKey = 'iovagent-v3-poi-confirmed';
+function persistPoiCandidates() { localStorage.setItem(poiCandidateKey, JSON.stringify(poiConfirmQueue.value.filter(poi => poi.id !== 'P-WAIT-001'))); }
+const confirmedPoiCount = computed(() => platformPois.value.filter(poi => poi.status !== '待客户确认').length);
+async function syncPois(source: PlatformPoi['source']) {
+  const name = poiInput.value.name.trim();
+  const address = poiInput.value.address.trim();
+  let lat = Number(poiInput.value.lat);
+  let lng = Number(poiInput.value.lng);
+  const hasCoordinates = poiInput.value.lat.trim() !== '' && poiInput.value.lng.trim() !== '';
+  if (!name && !address && !hasCoordinates) { poiSyncMessage.value = '请填写 POI 名称、详细地址或经纬度。'; return; }
+  if (hasCoordinates && (!Number.isFinite(lat) || !Number.isFinite(lng) || Math.abs(lat) > 90 || Math.abs(lng) > 180)) { poiSyncMessage.value = '经纬度格式不正确。'; return; }
+  const existing = platformPois.value.find(poi => poi.name === name);
+  if (existing) { poiSyncMessage.value = `知识库中已有 ${name}，请核对现有 POI；本次未重复添加。`; return; }
+  poiSyncing.value = true;
+  try {
+    const amap = await loadAMap(['AMap.Geocoder']);
+    type GeocodeResult = { geocodes?: { location?: { getLat: () => number; getLng: () => number } }[] };
+    type ReverseResult = { regeocode?: { formattedAddress?: string; pois?: { name?: string }[] } };
+    const geocoder = new (amap as typeof AMap & { Geocoder: new (options: { city: string }) => { getLocation: (query: string, callback: (status: string, result: GeocodeResult) => void) => void; getAddress: (position: AMapCoordinate, callback: (status: string, result: ReverseResult) => void) => void } }).Geocoder({ city: '全国' });
+    if (!hasCoordinates) {
+      [lng, lat] = await new Promise<[number, number]>((resolve, reject) => geocoder.getLocation(address || name, (status, result) => { const point = result.geocodes?.[0]?.location; status === 'complete' && point ? resolve([point.getLng(), point.getLat()]) : reject(new Error('高德地址解析未找到地点，请补充详细地址或经纬度。')); }));
+    }
+    const reversed = await new Promise<ReverseResult>((resolve, reject) => geocoder.getAddress([lng, lat], (status, result) => status === 'complete' && result.regeocode ? resolve(result) : reject(new Error('高德逆地址解析失败，请核对坐标。'))));
+    const resolvedAddress = address || reversed.regeocode?.formattedAddress || '';
+    const candidateName = name || reversed.regeocode?.pois?.[0]?.name || resolvedAddress || `坐标 ${lat.toFixed(4)}, ${lng.toFixed(4)}`;
+    const newPoi: PlatformPoi = { id: `P-SYNC-${Date.now()}`, name: candidateName, type: poiInput.value.type, industry: '待识别', count: 0, lat, lng, address: resolvedAddress, status: '待客户确认', source: !name ? '逆地址解析' : source };
+    poiConfirmQueue.value.unshift(newPoi);
+    persistPoiCandidates();
+    poiSyncMessage.value = `${source}演示已生成 1 条高德解析候选；客户可修改名称和地址后确认。`;
+    poiInput.value = { name: '', address: '', lat: '', lng: '', type: 'shipper' };
+  } catch (error) { poiSyncMessage.value = error instanceof Error ? error.message : 'POI 解析失败，请重试。'; }
+  finally { poiSyncing.value = false; }
+}
+function confirmPoi(poi: PlatformPoi) {
+  if (!poi.name.trim()) { poiSyncMessage.value = '请先填写 POI 名称。'; return; }
+  if (platformPois.value.some(item => item.name === poi.name.trim())) { poiSyncMessage.value = 'POI 名称已存在，请修改后确认。'; return; }
+  poi.status = '已确认';
+  if (!platformPois.value.some(item => item.id === poi.id)) platformPois.value.unshift(poi);
+  poiConfirmQueue.value = poiConfirmQueue.value.filter(item => item.id !== poi.id);
+  persistPoiCandidates();
+  localStorage.setItem(confirmedPoiKey, JSON.stringify(platformPois.value));
+  poiSyncMessage.value = `${poi.name} 已确认，可用于新建运单；历史运单不回写。`;
+}
 
 const highlightedAssetId = ref<string>('');
 
@@ -529,6 +582,12 @@ function goToAgentConversation() {
 
 
 onMounted(() => {
+  try {
+    const confirmed = JSON.parse(localStorage.getItem(confirmedPoiKey) || '[]') as PlatformPoi[];
+    platformPois.value = [...confirmed, ...platformPois.value.filter(poi => !confirmed.some(item => item.name === poi.name))];
+    const pending = JSON.parse(localStorage.getItem(poiCandidateKey) || '[]') as PlatformPoi[];
+    poiConfirmQueue.value = [...pending, ...poiConfirmQueue.value.filter(poi => !pending.some(item => item.id === poi.id))];
+  } catch { poiSyncMessage.value = '本地 POI 缓存无法读取，请重新同步。'; }
   if (activeFolderId.value === 'platformAssets') {
     nextTick(() => initPlatformMap());
   }
@@ -747,6 +806,22 @@ onBeforeUnmount(() => {
               </div>
 
               <template v-if="assetDetailTab === 'poi'">
+                <div class="mb-3 rounded-md border border-blue-100 bg-blue-50/60 p-3">
+                  <div class="flex flex-wrap items-center justify-between gap-2">
+                    <div><p class="text-xs font-medium text-slate-800">客户 POI 同步与确认</p><p class="mt-1 text-[11px] leading-5 text-slate-600">填写一条接口、爬虫或批量导入样例；解析结果是本地演示候选，需客户确认。</p></div>
+                    <div class="flex flex-wrap gap-1.5"><button type="button" class="rounded border border-slate-300 bg-white px-2 py-1 text-[11px] text-slate-700 disabled:opacity-50" :disabled="poiSyncing" @click="syncPois('接口同步')">接口同步</button><button type="button" class="rounded border border-slate-300 bg-white px-2 py-1 text-[11px] text-slate-700 disabled:opacity-50" :disabled="poiSyncing" @click="syncPois('爬虫工具')">爬虫同步</button><button type="button" class="rounded border border-slate-300 bg-white px-2 py-1 text-[11px] text-slate-700 disabled:opacity-50" :disabled="poiSyncing" @click="syncPois('批量导入')">批量导入</button></div>
+                  </div>
+                  <div class="mt-2 grid grid-cols-2 gap-2 text-[11px] max-sm:grid-cols-1">
+                    <label>POI 名称（可缺）<input v-model="poiInput.name" class="mt-1 w-full rounded border border-slate-300 bg-white px-2 py-1" placeholder="客户装卸货地名称" /></label>
+                    <label>详细地址（可缺）<input v-model="poiInput.address" class="mt-1 w-full rounded border border-slate-300 bg-white px-2 py-1" placeholder="城市及详细地址" /></label>
+                    <label>纬度（可缺）<input v-model="poiInput.lat" class="mt-1 w-full rounded border border-slate-300 bg-white px-2 py-1" inputmode="decimal" placeholder="31.2304" /></label>
+                    <label>经度（可缺）<input v-model="poiInput.lng" class="mt-1 w-full rounded border border-slate-300 bg-white px-2 py-1" inputmode="decimal" placeholder="121.4737" /></label>
+                    <label>地点类型<select v-model="poiInput.type" class="mt-1 w-full rounded border border-slate-300 bg-white px-2 py-1"><option value="shipper">装货地</option><option value="consignee">卸货地</option></select></label>
+                  </div>
+                  <p v-if="poiSyncing || poiSyncMessage" class="mt-2 text-[11px] text-blue-700" role="status">{{ poiSyncing ? '正在同步…' : poiSyncMessage }}</p>
+                </div>
+                <div v-if="poiConfirmQueue.length" class="mb-3 rounded-md border border-amber-200 bg-amber-50/60 p-3"><div class="mb-2 flex items-center justify-between"><p class="text-xs font-medium text-amber-900">待客户确认（{{ poiConfirmQueue.length }}）</p><span class="text-[11px] text-amber-700">确认前不用于新建运单</span></div><div v-for="poi in poiConfirmQueue" :key="poi.id" class="flex flex-wrap items-end gap-2 border-t border-amber-100 py-2 text-[11px]"><label class="min-w-40 flex-1">候选名称<input v-model="poi.name" class="mt-1 w-full rounded border border-amber-300 bg-white px-2 py-1" /></label><label class="min-w-40 flex-1">地址<input v-model="poi.address" class="mt-1 w-full rounded border border-amber-300 bg-white px-2 py-1" /></label><span class="text-amber-800">{{ poi.lat.toFixed(4) }}, {{ poi.lng.toFixed(4) }}</span><button type="button" class="shrink-0 rounded bg-amber-700 px-2 py-1 text-white" @click="confirmPoi(poi)">确认 POI</button></div></div>
+                <p class="mb-3 rounded-md bg-slate-50 px-3 py-2 text-xs leading-5 text-slate-600">已确认 POI 共 {{ confirmedPoiCount }} 个，仅用于新建运单，历史运单不自动回写。</p>
                 <div>
                   <p class="mb-2 flex items-center gap-2 text-xs font-medium text-slate-500">
                     <span class="h-2 w-2 rounded-full bg-emerald-500"></span>

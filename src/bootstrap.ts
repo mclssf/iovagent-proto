@@ -2,7 +2,7 @@ import { ensureMapSamples } from './views/Phase1/mapSamples';
 import { useLingdongSync } from './pinia/lingdongSync';
 import { createApp } from 'vue';
 import { createPinia } from 'pinia';
-import { usePhase1 } from './pinia/phase1';
+import { defaultP1Config, usePhase1 } from './pinia/phase1';
 import { agentWorkData } from './pinia/agentWork';
 import { phaseSkills } from './views/Phase1/catalog';
 import { persistMonitoringProjects } from './views/Phase1/persistence';
@@ -26,6 +26,16 @@ async function bootstrap(_namespace = 'iovagent') {
     if (saved?.schema === 1 && Array.isArray(saved.state?.orders) && saved.state?.configs && Array.isArray(saved.state.events) && Array.isArray(saved.state.anomalies) && Array.isArray(saved.state.logs)) monitoring.$patch(saved.state);
   } catch { /* Keep a usable workspace when saved data is unavailable. */ }
   monitoring.now = Date.now();
+  const demoConfig = monitoring.configs['MONITOR-EAST'];
+  if (demoConfig?.version === 1 && !demoConfig.selectedSkills.includes('p1-highway') && !demoConfig.selectedSkills.includes('p1-transfer')) {
+    demoConfig.selectedSkills.push('p1-highway', 'p1-transfer');
+    demoConfig.highway ??= { enabled: true };
+    demoConfig.transfer ??= { enabled: true, distanceMeters: 100, overlapMinutes: 30 };
+  }
+  for (const [projectId, config] of Object.entries(monitoring.configs)) {
+    const previousDefaults = config.version === 1 && config.selectedSkills.length === 5 && !config.selectedSkills.includes('p1-weather') && !config.weather?.enabled && !config.assessments?.parking.enabled && !config.assessments?.offline.enabled && !config.missingPass?.origin && !config.missingPass?.destination && config.parking.repeatMinutes === 15 && config.offline.repeatMinutes === 15 && config.deviation.repeatMinutes === 10 && config.lateDeparture.graceMinutes === 30 && config.lateArrival.graceMinutes === 30;
+    if (previousDefaults) monitoring.saveConfig(projectId, { ...defaultP1Config, version: config.version }, config.version);
+  }
   monitoring.seed();
   monitoring.tick();
   const work = agentWorkData();

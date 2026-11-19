@@ -27,7 +27,7 @@ const selectedAddress = ref('');
           <select class="rounded-md border border-[#deded9] bg-[#fbfbfa] px-3 py-2 text-sm">
             <option>在途</option>
             <option>装货中</option>
-            <option>已到货</option>
+            <option>卸货中</option>
           </select>
           <input class="rounded-md border border-[#deded9] bg-[#fbfbfa] px-3 py-2 text-sm" placeholder="停车阈值，例如 60 分钟" />
         </div>

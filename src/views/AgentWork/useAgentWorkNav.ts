@@ -13,6 +13,7 @@ export const agentWorkRouteName: Record<PageId, string> = {
   longTasks: 'agent-work-long-tasks',
   dailyTasks: 'agent-work-daily-tasks',
   orders: 'agent-work-orders',
+  dispatches: 'agent-work-dispatches',
   risk: 'agent-work-risk',
   detail: 'agent-work-detail',
   cargoSources: 'agent-work-cargo-sources',

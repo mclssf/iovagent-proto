@@ -20,6 +20,7 @@ const skill = computed(() => phaseSkills.find(item => item.id === props.skillId)
 const eventType = computed(() => props.skillId === 'p1-parking' ? 'parking' : 'offline');
 const stateOptions = ['loading', 'in_transit', 'arrived', 'completed'] as const;
 function save() {
+  if (!draft.value.selectedSkills.includes(props.skillId)) draft.value.selectedSkills.push(props.skillId);
   error.value = p1ConfigError(draft.value);
   if (error.value) return;
   if (!props.draftOnly) {
@@ -38,39 +39,51 @@ function save() {
     <ElForm label-position="top" class="monitor-config" @submit.prevent="save">
       <template v-if="skillId === 'p1-parking' || skillId === 'p1-offline'">
         <div class="monitor-form-grid">
-          <ElFormItem :label="eventType === 'parking' ? '停车时长（分钟）' : '离线时长（分钟）'"><ElInputNumber v-model="draft[eventType].thresholdMinutes" :min="1" :max="4320" controls-position="right" /></ElFormItem>
-          <ElFormItem label="重复提醒间隔（分钟）"><ElInputNumber v-model="draft[eventType].repeatMinutes" :min="1" :max="4320" controls-position="right" /></ElFormItem>
+          <ElFormItem :label="eventType === 'parking' ? '停车时长（分钟）' : '离线时长（分钟）'"><ElInputNumber v-model="draft[eventType].thresholdMinutes" :min="10" :max="4320" :step="10" controls-position="right" /></ElFormItem>
+          <ElFormItem label="重复提醒间隔（分钟）"><ElInputNumber v-model="draft[eventType].repeatMinutes" :min="1" :max="1440" controls-position="right" /></ElFormItem>
         </div>
         <ElFormItem label="环境辅助研判"><ElSwitch v-model="draft.assessments[eventType].enabled" aria-label="环境辅助研判" /></ElFormItem>
         <template v-if="draft.assessments[eventType].enabled">
-          <ElFormItem label="周边 POI 查询范围（米）"><ElInputNumber v-model="draft.assessments[eventType].radiusMeters" :min="1" :max="50000" controls-position="right" /></ElFormItem>
-          <ElFormItem label="过滤规则"><ElInput v-model="draft.assessments[eventType].filterRule" type="textarea" :rows="4" :placeholder="eventType === 'parking' ? defaultParkingFilter : defaultOfflineFilter" /></ElFormItem>
+          <ElFormItem label="周边 POI 查询范围（米）"><ElInputNumber v-model="draft.assessments[eventType].radiusMeters" :min="50" :max="5000" :step="50" controls-position="right" /></ElFormItem>
+          <ElFormItem label="过滤规则"><ElInput v-model="draft.assessments[eventType].filterRule" type="textarea" :rows="4" :maxlength="2000" :placeholder="eventType === 'parking' ? defaultParkingFilter : defaultOfflineFilter" /></ElFormItem>
           <p class="dialog-note">仅在附近存在相关场所，不足以判定合理；证据不足时保留异常待复核。</p>
         </template>
       </template>
       <div v-else-if="skillId === 'p1-deviation'" class="monitor-form-grid">
         <ElFormItem label="线路策略" style="grid-column:1/-1"><ElSelect v-model="draft.deviation.routeStrategy" aria-label="线路策略"><ElOption v-for="strategy in routeStrategies" :key="strategy" :label="strategy" :value="strategy" /></ElSelect><p class="dialog-note">先规划路线，再监听偏离。保存后仅对新运单生效，已有运单继续使用原路线。</p></ElFormItem>
-        <ElFormItem label="偏离距离（米）"><ElInputNumber v-model="draft.deviation.radiusMeters" :min="1" :max="100000" controls-position="right" /></ElFormItem>
-        <ElFormItem label="重复提醒间隔（分钟）"><ElInputNumber v-model="draft.deviation.repeatMinutes" :min="1" :max="4320" controls-position="right" /></ElFormItem>
+        <ElFormItem label="偏离距离（米）"><ElInputNumber v-model="draft.deviation.radiusMeters" :min="100" :max="10000" :step="100" controls-position="right" /></ElFormItem>
+        <ElFormItem label="重复提醒间隔（分钟）"><ElInputNumber v-model="draft.deviation.repeatMinutes" :min="1" :max="1440" controls-position="right" /></ElFormItem>
       </div>
+      <template v-else-if="skillId === 'p1-highway'">
+        <ElFormItem label="上下高速事件监听"><ElSwitch v-model="draft.highway.enabled" aria-label="上下高速事件监听" /></ElFormItem>
+        <p class="dialog-note">检测到驶入或驶离高速时记录运输事件，不生成异常报警；本任务没有距离和时长配置。</p>
+      </template>
+      <template v-else-if="skillId === 'p1-transfer'">
+        <ElFormItem label="换车事件监听"><ElSwitch v-model="draft.transfer.enabled" aria-label="换车事件监听" /></ElFormItem>
+        <div class="monitor-form-grid">
+          <ElFormItem label="候选停车点距离（米）"><ElInputNumber v-model="draft.transfer.distanceMeters" :min="10" :max="10000" :step="10" controls-position="right" /></ElFormItem>
+          <ElFormItem label="停车重合时长（分钟）"><ElInputNumber v-model="draft.transfer.overlapMinutes" :min="1" :max="1440" controls-position="right" /></ElFormItem>
+        </div>
+        <p class="dialog-note">历史轨迹比较顺序相邻车辆，实时监控增量比较当前车辆与下一辆车；命中后只记录换车事件，不生成异常。</p>
+      </template>
       <template v-else-if="skillId === 'p1-late'">
         <div class="monitor-form-grid">
           <ElFormItem label="晚发检查"><ElSwitch v-model="draft.lateDeparture.enabled" aria-label="晚发检查" /></ElFormItem>
           <ElFormItem label="晚到检查"><ElSwitch v-model="draft.lateArrival.enabled" aria-label="晚到检查" /></ElFormItem>
-          <ElFormItem v-if="draft.lateDeparture.enabled" label="晚发容许时间（分钟）"><ElInputNumber v-model="draft.lateDeparture.graceMinutes" :min="1" :max="4320" controls-position="right" /></ElFormItem>
-          <ElFormItem v-if="draft.lateArrival.enabled" label="晚到容许时间（分钟）"><ElInputNumber v-model="draft.lateArrival.graceMinutes" :min="1" :max="4320" controls-position="right" /></ElFormItem>
+          <ElFormItem v-if="draft.lateDeparture.enabled" label="晚发容许时间（分钟）"><ElInputNumber v-model="draft.lateDeparture.graceMinutes" :min="0" :max="1440" controls-position="right" /></ElFormItem>
+          <ElFormItem v-if="draft.lateArrival.enabled" label="晚到容许时间（分钟）"><ElInputNumber v-model="draft.lateArrival.graceMinutes" :min="0" :max="1440" controls-position="right" /></ElFormItem>
         </div>
         <ElFormItem label="经过记录检查"><ElCheckbox v-model="draft.missingPass!.origin">未经过起始地</ElCheckbox><ElCheckbox v-model="draft.missingPass!.destination">未经过目的地</ElCheckbox></ElFormItem>
         <p class="dialog-note">仅在运输状态变化时检查。缺少经过记录不等于证实车辆未经过，需结合运输事实复核。</p>
       </template>
       <template v-else-if="skillId === 'p1-status'">
-        <ElFormItem label="围栏监听范围"><ElCheckboxGroup v-model="draft.fenceTargets"><ElCheckbox value="origin">起始地</ElCheckbox><ElCheckbox value="destination">目的地</ElCheckbox></ElCheckboxGroup></ElFormItem>
+        <ElFormItem label="围栏监听范围"><div v-for="target in (['origin', 'destination'] as const)" :key="target" class="flex items-center gap-3"><ElCheckbox :model-value="draft.fenceTargets.includes(target)" @change="checked => draft.fenceTargets = checked ? [...new Set([...draft.fenceTargets, target])] : draft.fenceTargets.filter(value => value !== target)">{{ target === 'origin' ? '起始地' : '目的地' }}</ElCheckbox><ElInputNumber v-if="draft.fenceTargets.includes(target)" v-model="draft.fenceRadii[target]" :min="100" :max="50000" :step="100" controls-position="right" /></div></ElFormItem>
         <ElFormItem label="自动更新运输状态"><ElCheckboxGroup v-model="draft.statusUpdates"><ElCheckbox v-for="state in stateOptions" :key="state" :value="state">{{ stateNames[state] }}</ElCheckbox></ElCheckboxGroup></ElFormItem>
         <p class="dialog-note">关闭某项状态更新后，仍保留已采集的围栏事实。</p>
       </template>
       <template v-else>
         <ElFormItem label="恶劣天气监听"><ElSwitch v-model="draft.weather.enabled" aria-label="恶劣天气监听" /></ElFormItem>
-        <p class="dialog-note">预计次日零点生效。有效天气事件直接生成异常，运单结束或监听满 72 小时后停止。</p>
+        <p class="dialog-note">预计次日零点生效。有效天气事件直接生成异常，运单达到最晚监控结束时间后停止。</p>
       </template>
       <p v-if="error" class="text-xs text-red-700" role="alert">{{ error }}</p>
     </ElForm>

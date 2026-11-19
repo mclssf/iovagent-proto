@@ -8,7 +8,7 @@ try {
   const { detailRiskTone, detailEventDuration, detailEventConclusion, detailEventSupplement } = await server.ssrLoadModule('/src/views/AgentWork/orderDetailPresentation.ts');
   assert.equal(detailRiskTone('高风险'), 'danger');
   assert.equal(detailRiskTone('合理', 'green'), 'normal');
-  assert.equal(detailRiskTone('待核实'), 'warning');
+  assert.equal(detailRiskTone('高风险'), 'danger');
   assert.equal(detailRiskTone(), 'neutral');
   assert.equal(detailRiskTone('异常停车'), 'neutral', 'event names do not determine risk');
   const event = { id: 3, type: 'stop', title: '异常停车事件', time: '13:42 - 15:21', place: '服务区', desc: '停车 99 分钟。' };

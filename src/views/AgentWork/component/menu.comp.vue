@@ -311,6 +311,7 @@ const projectNavs: { icon: string; id: PageId; label: string }[] = [
   { id: 'agent', label: '智能体工作台', icon: strokeIconPaths.bot },
   { id: 'dailyTasks', label: '做任务', icon: strokeIconPaths.file },
   { id: 'orders', label: '运单列表', icon: strokeIconPaths.list },
+  { id: 'dispatches', label: '调度单', icon: strokeIconPaths.route },
   { id: 'risk', label: '异常运单列表', icon: strokeIconPaths.shield },
 ];
 

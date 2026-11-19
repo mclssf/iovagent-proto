@@ -5,7 +5,7 @@ export function detailRiskTone(verdict?: string, tone?: Tone) {
   if (tone === 'orange') return 'warning';
   if (tone === 'green') return 'normal';
   if (verdict === '高风险') return 'danger';
-  if (['待核实', '待核验', '中风险', '低风险'].includes(verdict ?? '')) return 'warning';
+  if (['待核验', '中风险', '低风险'].includes(verdict ?? '')) return 'warning';
   if (['正常', '合理', '无风险'].includes(verdict ?? '')) return 'normal';
   return 'neutral';
 }

@@ -1,9 +1,9 @@
-export type P1SkillId = 'p1-status' | 'p1-parking' | 'p1-offline' | 'p1-deviation' | 'p1-late' | 'p1-weather';
+export type P1SkillId = 'p1-status' | 'p1-parking' | 'p1-offline' | 'p1-deviation' | 'p1-late' | 'p1-weather' | 'p1-highway' | 'p1-transfer';
 export type P1State = 'pending' | 'loading' | 'in_transit' | 'arrived' | 'completed';
-export type P1EventType = 'fence' | 'parking' | 'offline' | 'deviation' | 'weather';
+export type P1EventType = 'fence' | 'parking' | 'offline' | 'deviation' | 'weather' | 'highway' | 'transfer';
 export type RouteStrategy = '更多人选择' | '时间优先' | '距离最短';
 export interface OrderNetwork { status: 'registered' | 'unregistered' | 'unknown'; checkedAt: number; source: string; reason: string; monitoringBlocked?: boolean }
-export interface OrderRoutePlan { id: string; strategy: RouteStrategy; plannedAt: number; status: 'ready' | 'failed'; reason: string; source: 'mock'; version: number }
+export interface OrderRoutePlan { id: string; strategy: RouteStrategy; plannedAt: number; status: 'ready' | 'failed'; reason: string; source: 'mock'; version: number; stopIds?: string[] }
 export interface P1AssessmentConfig {enabled:boolean;radiusMeters:number;filterRule:string}
 export interface P1PoiEvidence {source:'mock';pois:{name:string;category:string;distanceMeters:number;inside:boolean}[];normalActivityConfirmed?:boolean;durationMatches?:boolean;dangerousLocation?:boolean;signalRecovered?:boolean;trackContinuous?:boolean}
 export interface P1Config {
@@ -14,21 +14,35 @@ export interface P1Config {
  deviation:{enabled:boolean;radiusMeters:number;repeatMinutes:number;routeStrategy?:RouteStrategy};
  offline:{enabled:boolean;thresholdMinutes:number;repeatMinutes:number};
  parking:{enabled:boolean;thresholdMinutes:number;repeatMinutes:number};
+ highway:{enabled:boolean};
+ transfer:{enabled:boolean;distanceMeters:number;overlapMinutes:number};
  fenceTargets:('origin'|'destination')[];
+ fenceRadii:{origin:number;destination:number};
  missingPass?:{origin:boolean;destination:boolean};
  lateDeparture:{enabled:boolean;graceMinutes:number};lateArrival:{enabled:boolean;graceMinutes:number};
  statusUpdates:Exclude<P1State,'pending'>[];
 }
 export interface P1Place {name:string;lat:number;lon:number;radiusMeters:number;regionCode:string;coordinateSystem?:'gps'|'gcj02'}
+export type P1StopRole = 'loading' | 'unloading';
+export interface P1Stop {
+ id:string; sequence:number; role:P1StopRole; place:P1Place; plannedAt?:number;
+ enteredAt?:number; exitedAt?:number; status?:'pending'|'loading'|'in_transit'|'arrived'|'completed'; source?:string;
+}
+export interface P1VehicleSegment {
+ plate:string; sequence:number; startedAt?:number; endedAt?:number; source?:string; transferFrom?:string; transferTo?:string;
+}
+export interface P1TrackPoint { lat:number; lon:number; at:number; vehiclePlate?:string; speedKmh?:number; onHighway?:boolean; roadName?:string; address?:string }
 export interface P1Correction {at:number;reason:string;before:string;after:string;operator:string}
 export interface P1Order {
- actualTrack?:{lat:number;lon:number;at:number}[];
+ actualTrack?:P1TrackPoint[];
+  stops?:P1Stop[]; vehicleSegments?:P1VehicleSegment[]; loadType?:'整车'|'零担'; dispatchId?:string;
+  customFields?:{label:string;value:string}[]; monitoringOwner?:'waybill'|'dispatch';
  network?:OrderNetwork; billingExempt?:boolean; billingExemptReason?:string; sourceKey?:string; sourceUpdatedAt?:number; routePlan?:OrderRoutePlan;
  id:string;projectId:string;plate:string;plateColor:1|2;driver:string;source:string;
  origin:P1Place;destination:P1Place;plannedDeparture:number|null;plannedArrival:number|null;
  initialization?:{at:number;state:P1State;basis:string};
  milestoneMethods?:Partial<Record<P1State,string>>;corrections?:P1Correction[];
- createdAt:number;state:P1State;enteredAt?:number;departedAt?:number;arrivedAt?:number;completedAt?:number;
+ createdAt:number;state:P1State;enteredAt?:number;departedAt?:number;arrivedAt?:number;completedAt?:number;monitorStartAt?:number;estimatedTransportMinutes?:number;
  weatherRequestedAt?:number;weatherEffectiveAt?:number;weatherActiveLogged?:boolean;
  expiresAt:number;activateAt:number;config:P1Config;
  providerMode:'mock'|'whitepaper';
@@ -36,7 +50,9 @@ export interface P1Order {
  cleanupWillFail:boolean;cleanupAttempts:number;subscriptionRevision:number;deviationBlocked:boolean;
 }
 export interface P1Event {
- routePlanId?:string; routeStrategy?:RouteStrategy;
+ detectionSource?:'historical'|'incremental'|'external';
+ routePlanId?:string; routeStrategy?:RouteStrategy; stopId?:string; stopRole?:P1StopRole; plannedAt?:number;
+  vehiclePlate?:string; fromPlate?:string; toPlate?:string;
  position?: { lat:number;lon:number };
  poiEvidence?:P1PoiEvidence;assessment?:{verdict:'reasonable'|'review';reason:string;radiusMeters:number;rule:string;pois:P1PoiEvidence['pois'];source:'mock'};
  id:string;orderId:string;projectId:string;type:P1EventType;phase:'started'|'recovered'|'enter'|'exit';
@@ -45,7 +61,7 @@ export interface P1Event {
  originalResult?:string;corrections?:P1Correction[];target?:'origin'|'destination';result:string;taskIds:P1SkillId[];configVersion:number;
 }
 export interface P1Anomaly {
- id:string;orderId:string;kind:'超时停车'|'在途离线'|'线路偏离'|'晚发'|'晚到'|'恶劣天气'|'未经过起始地'|'未经过目的地';
+ id:string;orderId:string;kind:'超时停车'|'在途离线'|'线路偏离'|'晚发'|'晚到'|'恶劣天气'|'未经过起始地'|'未经过目的地'; stopId?: string;
  status:'active'|'recovered'|'corrected';firstAt:number;lastAt:number;nextReminderAt:number;
  originalReason?:string;corrections?:P1Correction[];repeatCount:number;reason:string;deadlineAt?:number;eventId?:string;configVersion:number;taskId:P1SkillId;
 }
@@ -111,6 +127,7 @@ export type PageId =
   | 'knowledgeBaseEmpty'
   | 'longTasks'
   | 'orders'
+  | 'dispatches'
   | 'projectCreate'
   | 'projects'
   | 'risk';
@@ -248,6 +265,30 @@ export interface Order {
   startTime: string;
   updated: string;
   eta: string;
+  loadType?: '整车' | '零担';
+  dispatchId?: string;
+  stops?: P1Stop[];
+  vehicleSegments?: P1VehicleSegment[];
+  customFields?: { label: string; value: string }[];
+  monitoringOwner?: 'waybill' | 'dispatch';
+  dispatch?: {
+    id: string;
+    customer: string;
+    status: string;
+    risk: string;
+    plannedStart: string;
+    plannedEnd: string;
+    plate: string;
+    driver: string;
+    carrier: string;
+    upstreamOrderId?: string;
+    externalSystemId?: string;
+    cargo?: string;
+    pieces?: number;
+    weightKg?: string;
+    volumeM3?: string;
+    customFields?: { label: string; value: string }[];
+  };
 }
 
 export interface TimelineEvent {
@@ -257,11 +298,19 @@ export interface TimelineEvent {
   time: string;
   place: string;
   desc: string;
-  rule?: string;
   agent?: string;
   stopPlace?: string;
   agentVerdict?: string;
   agentTone?: Tone;
+  eventType?: P1EventType;
+  riskLevel?: '高风险' | '低风险' | '无风险';
+  vehiclePlate?: string;
+  stopId?: string;
+  rawEventId?: string;
+  stage?: 'loading' | 'in_transit' | 'arrived';
+  mapCoordinate?: [number, number];
+  routePercent?: number;
+  plannedAt?: string;
 }
 
 export interface ChatMessage {

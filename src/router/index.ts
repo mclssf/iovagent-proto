@@ -50,6 +50,16 @@ export function handleRouter(_routerList: any) {
             props: { listMode: 'orders' as const },
           },
           {
+            path: 'dispatches',
+            name: 'agent-work-dispatches',
+            component: () => import('@/views/Dispatch/DispatchWorkspace.vue'),
+          },
+          {
+            path: 'dispatches/:dispatchId',
+            name: 'agent-work-dispatch-detail',
+            component: () => import('@/views/Dispatch/DispatchWorkspace.vue'),
+          },
+          {
             path: 'risk',
             name: 'agent-work-risk',
             component: () => import('@/views/AgentWork/views/orderList.view.vue'),

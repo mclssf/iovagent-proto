@@ -9,3 +9,6 @@ docs/*
 !docs/PRODUCT_CONTEXT.md
 inputs
 outputs
+.env
+.env.*
+!.env.example
