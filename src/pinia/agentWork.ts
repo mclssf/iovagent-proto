@@ -11,6 +11,7 @@ import type {
   AgentWorkspaceMode,
   CargoQuote,
   ChatMessage,
+  ComposerSubmission,
   DownloadTask,
   Order,
   PageId,
@@ -1474,6 +1475,7 @@ export const agentWorkData = defineStore('agentWork', {
       tmsSyncCustomers: loadTmsSyncCustomers(),
       currentProjectId: projectsSeed[0]!.id,
       currentConversationId: '',
+      conversationAgentId: 'general-chat-agent',
       workspaceMode: 'project' as AgentWorkspaceMode,
       showProjectModal: false,
       downloadTask: null as DownloadTask | null,
@@ -1913,11 +1915,12 @@ export const agentWorkData = defineStore('agentWork', {
           : conversation,
       );
     },
-    startNewConversation() {
+    startNewConversation(agentId = 'general-chat-agent') {
       clearAgentProcessTimers();
       this.persistActiveConversationMessages();
       this.workspaceMode = 'conversation';
       this.currentConversationId = '';
+      this.conversationAgentId = agentId;
       this.agentMessages = [];
       this.agentInput = '';
       this.rightPanel = 'overview';
@@ -1929,6 +1932,7 @@ export const agentWorkData = defineStore('agentWork', {
       clearAgentProcessTimers();
       this.workspaceMode = 'conversation';
       this.currentConversationId = conversation.id;
+      this.conversationAgentId = conversation.agentId ?? 'general-chat-agent';
       this.agentMessages = cloneChatMessages(conversation.messages);
       this.agentInput = '';
       this.rightPanel = 'overview';
@@ -1972,6 +1976,7 @@ export const agentWorkData = defineStore('agentWork', {
         {
           id: conversationId,
           title: '对第一项对话的总结',
+          agentId: this.conversationAgentId,
           updatedAt: '刚刚',
           messages: [],
         },
@@ -2204,16 +2209,24 @@ export const agentWorkData = defineStore('agentWork', {
       this.ordersEndDate = defaultOrdersDateRange.end;
     },
     /** 智能体对话：由调用方传入 `navigate`，避免 store 依赖 router */
-    async appendAgentExchange(text: string | undefined, navigate: (page: PageId) => void, attachments: TaskAttachment[] = [], sourceFiles: File[] = []) {
+    async appendAgentExchange(text: string | undefined, navigate: (page: PageId) => void, attachments: TaskAttachment[] = [], sourceFiles: File[] = [], submission?: ComposerSubmission) {
       if (this.agentMessages.at(-1)?.streaming) return;
       clearAgentProcessTimers();
       const raw = text ?? this.agentInput;
       if (!raw.trim()) return;
       this.ensureConversationStarted();
       const shownInput=/^(?:确认更新|取消更新) UPDATE-/.test(raw)?(raw.startsWith('确认')?'确认更新运单状态':'取消本次状态更新'):raw;
-      const next: ChatMessage[] = [...this.agentMessages, { role: 'user', text: shownInput }];
+      const previousContext = this.activeChatContext;
+      const next: ChatMessage[] = [...this.agentMessages, { role: 'user', text: shownInput,
+        ...(submission?.summonedSkill ? { summonedSkill: { ...submission.summonedSkill } } : {}),
+        ...(submission?.files.length ? { inputFiles: submission.files } : {}),
+      }];
+      if (submission) {
+        this.agentMessages = next;
+        submission.accepted();
+      }
       if(!attachments.length){
-        const response=projectOrderConversation(raw,this.workspaceMode==='project'?this.currentProjectId:'',this.workspaceMode==='project'?this.currentProjectOrders:[],this.activeChatContext);
+        const response=projectOrderConversation(raw,this.workspaceMode==='project'?this.currentProjectId:'',this.workspaceMode==='project'?this.currentProjectOrders:[],previousContext);
         if(response){this.agentMessages=[...next,response];this.agentInput='';this.persistActiveConversationMessages();return;}
       }
       if (/监听|运输节点|未恢复异常|监控状态/.test(raw)) {
@@ -2230,7 +2243,7 @@ export const agentWorkData = defineStore('agentWork', {
           return;
         }
       }
-      const previousPrediction = this.activeChatContext.at(-1)?.pendingPredictionPrompt;
+      const previousPrediction = previousContext.at(-1)?.pendingPredictionPrompt;
       const projectId = this.workspaceMode === 'project' ? this.currentProjectId : '';
       const stopRisk = (projectId === 'PSC3' && /停靠|停车|风险|附件：/.test(raw)) || (sourceFiles.length > 0 && /异常停靠.*(?:风险|分析)|停靠点风险/.test(raw));
       const authenticity = /核验出厂.*完成.*车辆.*对应地点/.test(raw) || projectId === 'PSC1' && /运单真实性|核验|甄别|附件：/.test(raw);
@@ -2260,7 +2273,7 @@ export const agentWorkData = defineStore('agentWork', {
         }
         return;
       }
-      const pendingMessage = this.activeChatContext.at(-1);
+      const pendingMessage = previousContext.at(-1);
       const pendingPrompt = pendingMessage?.pendingAsyncPrompt;
       const pendingRoutePrompt = pendingMessage?.pendingExperienceRoutePrompt;
       const pendingCompliancePrompt = pendingMessage?.pendingCompliancePrompt;
@@ -2323,7 +2336,7 @@ export const agentWorkData = defineStore('agentWork', {
       const regionVisitRequest = extractRegionVisitRequest(raw);
       const spreadsheetRequest = regionVisitRequest || hasWaybillComplianceIntent(compliancePrompt) ? null : extractSpreadsheetRequest(raw);
       const mcpPrompt = extractMcpPrompt(raw);
-      const emailDeliveryRequest = extractEmailDeliveryRequest(raw, this.activeChatContext);
+      const emailDeliveryRequest = extractEmailDeliveryRequest(raw, previousContext);
       const analysisReportRequest = extractAnalysisReportRequest(raw);
       const transportStatusRequest = extractTransportStatusRequest(raw);
       const vehiclePositionRequest = transportStatusRequest ? null : extractVehiclePositionRequest(raw);

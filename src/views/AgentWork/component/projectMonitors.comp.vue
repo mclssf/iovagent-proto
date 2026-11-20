@@ -1,7 +1,8 @@
 <script lang="ts" setup>
 import { computed } from 'vue';
 import { monitoringSkillEnabled, usePhase1 } from '@/pinia/phase1';
-import { phaseSkills } from '@/views/Phase1/catalog';
+import { monitorTaskCode, phaseSkills } from '@/views/Phase1/catalog';
+import { useMonitorHours } from '@/views/Phase1/useMonitorHours';
 import { Icon } from '@packages/icon';
 import { useAgentDailyTasks } from '@/pinia/agentDailyTasks';
 import type { DailyTask } from '../dailyTasks';
@@ -14,6 +15,7 @@ const props = defineProps<{ projectId: string }>();
 const tasks = useAgentDailyTasks();
 const monitoring = usePhase1();
 const systemTasks = computed(() => phaseSkills.filter(skill => monitoring.configs[props.projectId]?.selectedSkills.includes(skill.id)));
+const { hours } = useMonitorHours(computed(() => props.projectId), computed(() => systemTasks.value.map(skill => skill.id)));
 const { goPage } = useAgentWorkNav();
 const runtime = computed(() => tasks.projects[props.projectId]);
 const monitors = computed(() => monitorDefinitions.map((definition) => {
@@ -47,7 +49,13 @@ function dailyStatus(task: DailyTask) {
       </div>
       <details class="dt-monitor-phases"><summary>运单状态流转</summary><div class="dt-phase-flow"><template v-for="(phase, index) in waybillPhases" :key="phase"><Icon v-if="index" :svg="strokeIconPaths.chevron" :size="10" /><span>{{ phase }}</span></template></div></details>
     </section>
-    <section v-if="systemTasks.length" class="dt-monitor-group" aria-label="在途监听任务"><div class="dt-monitor-group-title"><h3>在途监听 <span>{{ systemTasks.length }}</span></h3><button class="dt-icon" title="查看监听任务" aria-label="查看监听任务" @click="goPage('dailyTasks', { monitor: '1', projectId })"><Icon :svg="strokeIconPaths.chevron" :size="14" /></button></div><button v-for="skill in systemTasks" :key="skill.id" class="dt-monitor-row dt-monitor-task" @click="goPage('dailyTasks', { monitor: '1', taskId: skill.id, projectId })"><Icon :svg="strokeIconPaths[skill.icon]" :size="15" /><div class="dt-monitor-name"><strong>{{ skill.name }}</strong><small>{{ monitoring.logs.filter(log => log.projectId === projectId && log.taskId === skill.id && log.kind === '结果').length }} 条结果</small></div><span class="dt-state" :class="{ live: monitoringSkillEnabled(monitoring.config(projectId), skill.id) }">{{ monitoringSkillEnabled(monitoring.config(projectId), skill.id) ? '运行中' : '已暂停' }}</span></button></section>
+    <section v-if="systemTasks.length" class="dt-monitor-group" aria-label="在途监听任务">
+      <div class="dt-monitor-group-title"><h3>在途监听 <span>{{ systemTasks.length }}</span></h3><button class="dt-icon" title="查看监听任务" aria-label="查看监听任务" @click="goPage('dailyTasks', { monitor: '1', projectId })"><Icon :svg="strokeIconPaths.chevron" :size="14" /></button></div>
+      <button v-for="skill in systemTasks" :key="skill.id" class="dt-monitor-row dt-monitor-task" @click="goPage('dailyTasks', { monitor: '1', taskCode: monitorTaskCode(skill.id), projectId })">
+        <Icon :svg="strokeIconPaths[skill.icon]" :size="15" /><div class="dt-monitor-name"><strong>{{ skill.name }}</strong><small>{{ hours(skill.id).length }} 条小时结果</small></div>
+        <span class="dt-state" :class="{ live: monitoringSkillEnabled(monitoring.config(projectId), skill.id) }">{{ monitoringSkillEnabled(monitoring.config(projectId), skill.id) ? '运行中' : '已暂停' }}</span>
+      </button>
+    </section>
     <section class="dt-monitor-group" aria-label="做任务摘要">
       <div class="dt-monitor-group-title"><h3>做任务 <span>{{ dailyTasks.length }}</span></h3><button type="button" class="dt-icon" title="管理做任务" aria-label="管理做任务" @click="goPage('dailyTasks')"><Icon :svg="strokeIconPaths.chevron" :size="14" /></button></div>
       <button v-for="task in visibleTasks" :key="task.id" type="button" class="dt-monitor-row dt-monitor-task" :title="task.name" @click="goPage('dailyTasks', { taskId: task.id })">

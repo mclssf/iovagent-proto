@@ -17,6 +17,7 @@ import { useAgentWorkNav } from '../useAgentWorkNav';
 import DailyTaskDialog from '../component/dailyTask.dialog.vue';
 import EmailOrderResult from '../component/emailOrderResult.comp.vue';
 import MonitoringTasks from '@/views/Phase1/MonitoringTasks.vue';
+import { monitorSkillId } from '@/views/Phase1/catalog';
 import '../dailyTasks.css';
 
 const work = agentWorkData();
@@ -25,7 +26,9 @@ const { goPage } = useAgentWorkNav();
 const route = useRoute();
 const selectedId = ref('');
 const taskView = ref('ordinary');
-watch(() => route.query.monitor, value => { taskView.value = value === '1' ? 'monitor' : 'ordinary'; }, { immediate: true });
+watch(() => [route.query.monitor, route.query.taskCode, route.query.monitorTaskId, route.query.taskId], ([monitor, code, monitorId, taskId]) => {
+  taskView.value = monitor === '1' || monitorSkillId(code ?? monitorId ?? taskId) ? 'monitor' : 'ordinary';
+}, { immediate: true });
 const runId = ref('');
 const showForm = ref(false);
 const search = ref('');
@@ -86,7 +89,8 @@ function receiveMail(task: DailyTask) {
       <button class="dt-icon" type="button" title="返回智能体工作台" aria-label="返回智能体工作台" @click="goPage('agent')"><Icon :svg="strokeIconPaths.msg" :size="16" /></button>
     </header>
     <div v-if="!isPersonal" class="flex h-10 shrink-0 items-center gap-6 border-b border-[#e5e7eb] px-4 text-xs"><button type="button" class="h-full border-b-2" :class="taskView === 'ordinary' ? 'border-blue-600 text-blue-700' : 'border-transparent text-slate-600'" @click="taskView = 'ordinary'">任务</button><button type="button" class="h-full border-b-2" :class="taskView === 'monitor' ? 'border-blue-600 text-blue-700' : 'border-transparent text-slate-600'" @click="taskView = 'monitor'">在途监听</button></div>
-    <MonitoringTasks v-if="!isPersonal && taskView === 'monitor'" :project-id="projectId" />
+    <div v-if="taskView === 'monitor' && route.query.projectId && !work.projects.some(project => project.id === route.query.projectId)" class="dt-empty compact"><h2>未找到该监听项目</h2></div>
+    <MonitoringTasks v-else-if="!isPersonal && taskView === 'monitor'" :key="projectId" :project-id="projectId" />
     <div v-else class="dt-page-body" :class="{ 'has-panel': selected }">
       <div class="dt-task-column">
         <div class="dt-list-toolbar">

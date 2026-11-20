@@ -49,6 +49,7 @@ export type CommonSkillGroup = typeof commonSkillGroups[number];
 export type SkillGroup = typeof skillGroups[number];
 export type ToolKind = 'mcp' | 'code';
 export interface ManagedSkill {
+  recommendedPrompt?: string;
   id: string;
   name: string;
   category: SkillCategory;
@@ -185,8 +186,16 @@ const skillDescriptions: Record<string, string> = {
 };
 
 function createSkills(): ManagedSkill[] {
+  const prompts: Record<string, string> = {
+    'operations-logistics-sheet': '请根据上传的运单表，补充当前车辆位置、在途状态和预计到达时间，并列出未能填写的原因。',
+    'operations-license-recognition': '请识别上传的运输证照，整理证件号码、有效期和需要人工核验的字段。',
+    'route-risk-expert': '请分析[运单号]在[时间范围]内的停车、偏航和晚到风险，列出判断依据及处理建议。',
+    'gps-trace-expert': '请核验[车牌号]从[开始时间]至[结束时间]的轨迹连续性，并标出需要复核的路段。',
+    'vehicle-trace-query': '请根据上传的运单表查询运输期间的历史轨迹，汇总无法查询的运单和原因。',
+  };
   return skillSeed.map((skill, index) => ({
     ...skill,
+    recommendedPrompt: prompts[skill.id] ?? '',
     content: skill.id === vehiclePredictionSkill.id ? vehiclePredictionSkill.instructions : `# ${skill.name}\n\n## 适用范围\n${skill.category}\n\n## 执行指引\n根据用户任务识别所需数据和业务约束，调用 ${skill.name} 完成处理，并返回结构化结果与必要的执行说明。`,
     description: skillDescriptions[skill.id] ?? '',
     enabled: true,
@@ -240,15 +249,26 @@ export const useAgentOpsStore = defineStore('agentOps', () => {
   const skills = ref(createSkills());
   const skillVersions = ref<Record<string, SkillVersion[]>>({});
   const skillHistoryKey = 'iovagent-skill-versions-v1';
-  try {
-    const saved = JSON.parse(localStorage.getItem(skillHistoryKey) || '{}') as Record<string, SkillVersion[]>;
+  let lastHistory: string | null | undefined;
+  function refreshHistory() {
+    const raw = localStorage.getItem(skillHistoryKey);
+    if (raw === lastHistory) return;
+    const saved = JSON.parse(raw || '{}') as Record<string, SkillVersion[]>;
+    const catalog = createSkills();
     for (const [id, versions] of Object.entries(saved)) {
-      if (!Array.isArray(versions) || !versions.length || versions.some(item => !item.skill || item.skill.id !== id || !Array.isArray(item.skill.privateToolIds))) continue;
-      skillVersions.value[id] = versions;
-      const index = skills.value.findIndex(item => item.id === id);
-      if (index >= 0) skills.value[index] = JSON.parse(JSON.stringify(versions[versions.length - 1].skill));
-      else skills.value.push(JSON.parse(JSON.stringify(versions[versions.length - 1].skill)));
+      if (!Array.isArray(versions) || versions.some(item => !item.skill || item.skill.id !== id || !Array.isArray(item.skill.privateToolIds))) throw new Error('技能目录格式无效');
+      const index = catalog.findIndex(item => item.id === id);
+      if (!versions.length) { if (index >= 0) catalog.splice(index, 1); continue; }
+      const latest = JSON.parse(JSON.stringify(versions[versions.length - 1].skill));
+      if (index >= 0) catalog[index] = latest;
+      else catalog.push(latest);
     }
+    skillVersions.value = saved;
+    skills.value = catalog;
+    lastHistory = raw;
+  }
+  try {
+    refreshHistory();
   } catch { /* Keep the initial catalog if browser storage is unavailable. */ }
   const cloneSkill = (skill: ManagedSkill): ManagedSkill => JSON.parse(JSON.stringify(skill));
   function getSkillVersions(id: string): SkillVersion[] {
@@ -257,17 +277,18 @@ export const useAgentOpsStore = defineStore('agentOps', () => {
   }
   let previousSkills = skills.value.map(cloneSkill);
   function persistSkillVersions() {
-    try { localStorage.setItem(skillHistoryKey, JSON.stringify(skillVersions.value)); }
+    try { const raw = JSON.stringify(skillVersions.value); localStorage.setItem(skillHistoryKey, raw); lastHistory = raw; }
     catch { /* In-memory versions remain available for this session. */ }
   }
   watch(skills, current => {
+    if (JSON.stringify(previousSkills) === JSON.stringify(current)) return;
     for (const skill of current) {
       const previous = previousSkills.find(item => item.id === skill.id);
       if (previous && JSON.stringify(previous) === JSON.stringify(skill)) continue;
       const versions = skillVersions.value[skill.id] || (previous ? [{ version: 1, savedAt: previous.updatedAt, savedBy: previous.updatedBy, skill: previous }] : []);
       skillVersions.value[skill.id] = [...versions, { version: (versions[versions.length - 1]?.version || 0) + 1, savedAt: new Date().toLocaleString('zh-CN', { hour12: false }), savedBy: skill.updatedBy, skill: cloneSkill(skill) }];
     }
-    for (const previous of previousSkills) if (!current.some(item => item.id === previous.id)) delete skillVersions.value[previous.id];
+    for (const previous of previousSkills) if (!current.some(item => item.id === previous.id)) skillVersions.value[previous.id] = [];
     previousSkills = current.map(cloneSkill);
     persistSkillVersions();
   }, { deep: true });
@@ -285,6 +306,7 @@ export const useAgentOpsStore = defineStore('agentOps', () => {
     ...dataEmployeeSkills.value.map((skill) => ({
       id: skill.id, name: skill.name, category: '数据员工' as const, source: 'data-employee' as const,
       description: skill.description, content: skill.skillContent, fileName: skill.skillFileName,
+      recommendedPrompt: skill.recommendedPrompt,
       enabled: true, privateToolIds: skill.privateToolIds, group: skill.group,
       updatedAt: skill.skillUpdated, updatedBy: '数据员工配置',
       sourceConfig: {
@@ -349,6 +371,46 @@ export const useAgentOpsStore = defineStore('agentOps', () => {
     }),
   })));
   const customerReports = ref<Record<string, Record<string, AgentConflictReport>>>({});
+  // Use the existing config records across same-origin tabs; no second entitlement list.
+  const configPrefix = 'iovagent-agent-loading-v1:';
+  const seenConfig = new Map<string, string | null>();
+  function saveLocal(key: string, value: unknown) {
+    if (typeof localStorage === 'undefined') return;
+    const raw = JSON.stringify(value);
+    localStorage.setItem(configPrefix + key, raw);
+    seenConfig.set(key, raw);
+  }
+  function readLocal<T>(key: string, apply: (value: T) => void) {
+    const raw = localStorage.getItem(configPrefix + key);
+    if (seenConfig.get(key) === raw) return;
+    if (raw !== null) apply(JSON.parse(raw));
+    seenConfig.set(key, raw);
+  }
+  function refreshSummonConfig() {
+    if (typeof localStorage === 'undefined') return;
+    const before = lastHistory;
+    refreshHistory();
+    if (before !== lastHistory) previousSkills = skills.value.map(cloneSkill);
+    for (const customer of customers.value) {
+      readLocal<CustomerAgentBinding[]>('customer:' + customer.id, value => {
+        if (!Array.isArray(value)) throw new Error('客户配置格式无效');
+        customer.agentConfigs = value;
+      });
+    }
+    for (const agent of agents.value) {
+      readLocal<AgentCapabilities>('defaults:' + agent.id, value => { agentDefaults.value[agent.id] = value; });
+    }
+    readLocal<DataEmployeeSkill[]>('employees', value => { dataEmployeeSkills.value = value; });
+  }
+  try { refreshSummonConfig(); } catch { /* The skill picker exposes retry for invalid or unavailable local data. */ }
+  function summonSkills(customerId: string, agentId: string) {
+    const customer = customers.value.find(item => item.id === customerId);
+    if (!customer || !agents.value.some(agent => agent.id === agentId)) return [];
+    const loaded = new Set(resolveCustomerAgent(customerId, agentId).skillIds);
+    const employees = new Set(filterDataEmployeeSkillsForEnterprise(dataEmployeeSkills.value, customerId).map(item => item.id));
+    return availableSkillsForAgent(agentId).filter(skill => skill.enabled && loaded.has(skill.id) &&
+      (skill.source !== 'data-employee' || employees.has(skill.id)));
+  }
   const agentSync = ref({ busy: false, lastSyncedAt: '', error: '', summary: '' });
   const codeToolSync = ref({ busy: false, lastSyncedAt: '', error: '', summary: '' });
 
@@ -491,6 +553,7 @@ export const useAgentOpsStore = defineStore('agentOps', () => {
     const record = { ...skill, group: dataEmployeeSkillGroup, privateToolIds: [...new Set(skill.privateToolIds)], ...(skill.wechatSource ? { wechatSource: { ...skill.wechatSource } } : {}) };
     if (index >= 0) dataEmployeeSkills.value[index] = record;
     else dataEmployeeSkills.value.unshift(record);
+    saveLocal('employees', dataEmployeeSkills.value);
   }
 
   function agentDefaultConfig(agentId: string): AgentCapabilities {
@@ -539,7 +602,7 @@ export const useAgentOpsStore = defineStore('agentOps', () => {
     };
     const index = agents.value.findIndex((agent) => agent.id === record.id);
     agents.value[index] = record;
-    if (nextDefaults) agentDefaults.value[agentId] = nextDefaults;
+    if (nextDefaults) { saveLocal('defaults:' + agentId, nextDefaults); agentDefaults.value[agentId] = nextDefaults; }
     configuredAgentIds.value = [...new Set([...configuredAgentIds.value, agentId])];
     return record;
   }
@@ -566,6 +629,7 @@ export const useAgentOpsStore = defineStore('agentOps', () => {
     }));
     const next = agents.value.map(agent => submitted.get(agent.id)
       ?? customerAgentBindings(customerId).find(binding => binding.agentId === agent.id)!);
+    saveLocal('customer:' + customer.id, next);
     customer.agentConfigs = next;
     customer.updatedAt = new Date().toLocaleString('zh-CN', { hour12: false });
     customer.updatedBy = '当前运营用户';
@@ -595,7 +659,7 @@ export const useAgentOpsStore = defineStore('agentOps', () => {
     const privateLoading = skillsForTool(toolId).length > 0;
     return { direct, private: privateLoading, unloaded: !direct && !privateLoading };
   }
-  return { getSkillVersions, restoreSkillVersion, skills, dataEmployeeSkills, visibleDataEmployeeSkills, agentCallableSkills, availableSkillsForAgent, saveDataEmployeeSkill, tools, agents,
+  return { refreshSummonConfig, summonSkills, getSkillVersions, restoreSkillVersion, skills, dataEmployeeSkills, visibleDataEmployeeSkills, agentCallableSkills, availableSkillsForAgent, saveDataEmployeeSkill, tools, agents,
     agentDefaultConfig, customerAgentBindings, resolveAgentCapabilities, resolveAgentSystemPrompt, defaultFollowers, agentsUsingToolByDefault,
     customers, customerReports, saveCustomerAgents, resolveCustomerAgent, detectCustomerAgentConflicts,
     toolVersions, saveCodeTool, restoreCodeTool, saveAgent, skillsForTool, customerAgentsForTool, getToolLoading, agentSync, codeToolSync, syncAgents, syncCodeTools, saveMcp, deleteMcp, mcpUsage, testMcpConnection, syncMcpTools };

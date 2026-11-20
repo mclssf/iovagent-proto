@@ -14,6 +14,7 @@ export interface WechatEmployeeSource {
   recognitionDescription: string;
 }
 export interface DataEmployeeSkill {
+  recommendedPrompt?: string;
   description: string;
   privateToolIds: string[];
   id: string;

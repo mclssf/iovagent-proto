@@ -9,6 +9,7 @@ import { ElMessage, ElMessageBox } from 'element-plus';
 import { storeToRefs } from 'pinia';
 
 import { agentWorkData } from '@/pinia/agentWork';
+import { useSkillComposer } from '@/pinia/skillComposer';
 import { usePhase1 } from '@/pinia/phase1';
 import { dateText } from '@/views/Phase1/catalog';
 import { removeToken } from '@/utils/auth';
@@ -18,6 +19,7 @@ import { agentWorkRouteName } from '../useAgentWorkNav';
 import { badgeToneClass, projectStatusTone } from '../utils';
 
 const store = agentWorkData();
+const composer = useSkillComposer();
 const monitoring = usePhase1();
 function todayCounts(project: Project) {
   if (project.id !== 'MONITOR-EAST') return { total: project.total, risk: project.risk };
@@ -457,6 +459,7 @@ async function deleteConversation(conversationId: string, title: string) {
 }
 
 function logout() {
+  composer.clearSession();
   removeToken();
   localStorage.removeItem('token');
   localStorage.removeItem('iovagent_login_user');
@@ -489,6 +492,9 @@ function logout() {
       >
         <Icon :svg="strokeIconPaths.plus" :size="17" />
         新对话
+      </button>
+      <button type="button" class="flex h-9 w-full items-center gap-2.5 rounded-md px-3 text-sm text-slate-700 hover:bg-white/80" @click="composer.panel = 'global'">
+        <Icon :svg="strokeIconPaths.zap" :size="17" />数字人技能
       </button>
     </div>
 

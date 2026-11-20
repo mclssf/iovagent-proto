@@ -1,4 +1,4 @@
-import type { Order, PageId } from '@/views/AgentWork/interface';
+import type { ComposerSubmission, Order, PageId } from '@/views/AgentWork/interface';
 import type { TaskAttachment } from './dailyTasks';
 
 import { useRoute, useRouter } from 'vue-router';
@@ -50,8 +50,8 @@ export function useAgentWorkNav() {
     return goPage('downloads');
   }
 
-  function sendAgent(text?: string, attachments?: TaskAttachment[], sourceFiles?: File[]) {
-    return store.appendAgentExchange(text, goPage, attachments, sourceFiles);
+  function sendAgent(text?: string, attachments?: TaskAttachment[], sourceFiles?: File[], submission?: ComposerSubmission) {
+    return store.appendAgentExchange(text, goPage, attachments, sourceFiles, submission);
   }
 
   return { goPage, openOrderDetail, createDownload, sendAgent };

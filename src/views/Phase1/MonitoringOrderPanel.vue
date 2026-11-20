@@ -28,7 +28,7 @@ const nodes = computed(() => order.value ? [
 <template>
   <section v-if="order" class="monitor-order">
     <div class="monitor-heading"><h2>运输监控</h2></div>
-    <div v-if="order.network?.status === 'unregistered'" class="monitor-alert"><strong>车辆未入网 · 免计费</strong><p>{{ order.network.reason }} · {{ order.network.source }} · {{ dateText(order.network.checkedAt) }}</p><p>相关监听未生效。本单不自动恢复监听，不计入停车、离线等基础事件。</p></div>
+    <div v-if="order.network?.status === 'unregistered'" class="monitor-alert"><strong>车辆未入网<template v-if="order.billingExempt"> · 免计费</template></strong><p>{{ order.network.reason }} · {{ order.network.source }} · {{ dateText(order.network.checkedAt) }}</p><p>相关监听未生效。本单不自动恢复监听，不计入停车、离线等基础事件。</p></div>
     <div v-if="order.routePlan" class="mb-3 text-xs text-slate-600">线路策略：{{ order.routePlan.strategy }} · {{ order.routePlan.status === 'ready' ? '已规划' : '待规划' }}<p>路线版本：{{ order.routePlan.id }} · {{ dateText(order.routePlan.plannedAt) }}</p></div>
     <dl class="monitor-plan"><div><dt>预计出发</dt><dd>{{ dateText(order.plannedDeparture) }}</dd></div><div><dt>预计到达</dt><dd>{{ dateText(order.plannedArrival) }}</dd></div><div><dt>监听状态</dt><dd>{{ sessionNames[order.session] }}</dd></div><div><dt>监听截止</dt><dd>{{ order.subscriptionRevision ? dateText(order.expiresAt) : '未注册监听' }}</dd></div></dl>
     <ol class="monitor-nodes">

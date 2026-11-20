@@ -1,4 +1,12 @@
 import type { P1SkillId } from '@/views/AgentWork/interface';
+const monitorCodes: Record<P1SkillId, string> = {
+  'p1-status': 'S01', 'p1-parking': 'S02', 'p1-offline': 'S03',
+  'p1-deviation': 'S04', 'p1-late': 'S05', 'p1-weather': 'S06',
+};
+export function monitorSkillId(value: unknown) {
+  return (Object.keys(monitorCodes) as P1SkillId[]).find(id => id === value || monitorCodes[id] === value);
+}
+export const monitorTaskCode = (id: P1SkillId) => monitorCodes[id];
 export const phaseSkills: {id:P1SkillId;name:string;description:string;icon:'truck'|'alert'|'route'|'locate'|'alarmClock'}[] = [
  {id:'p1-status',name:'运单状态自动更新',description:'自动记录运单的运输进展。',icon:'locate'},
  {id:'p1-parking',name:'超时停车监听',description:'及时发现运输途中长时间停车。',icon:'truck'},

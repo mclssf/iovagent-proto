@@ -7,7 +7,8 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute } from 'vue-router';
 import { usePhase1 } from '@/pinia/phase1';
 import MonitoringOrderPanel from '@/views/Phase1/MonitoringOrderPanel.vue';
-import { dateText } from '@/views/Phase1/catalog';
+import { dateText, eventNames } from '@/views/Phase1/catalog';
+import { monitorTimeline, monitorEventPoint } from '@/views/Phase1/monitorTimeline';
 
 import { agentWorkData } from '@/pinia/agentWork';
 import { convertGpsCoordinates, loadAMap, searchDrivingRoute, type AMapCoordinate } from '@/utils/amap';
@@ -27,15 +28,38 @@ watch(() => [route.query.projectId, route.query.orderId], ([projectId, orderId])
   const record = store.currentProjectOrders.find(item => item.id === orderId);
   if (record) store.setSelectedOrder(record);
 }, { immediate: true });
-const monitoredOrder = monitoring.orders.find(item => item.id === store.selectedOrder.id);
-const monitoredEvents = monitoring.events.filter(item => item.orderId === monitoredOrder?.id);
-const positionedEvents = monitoredEvents.filter(event => event.target || event.position);
+const monitoredOrder = monitoring.orders.find(item => item.id === store.selectedOrder.id && item.projectId === store.currentProjectId);
+const positionedEvents = monitoredOrder ? monitoring.events.flatMap(event => {
+  if (event.projectId !== monitoredOrder.projectId || event.orderId !== monitoredOrder.id) return [];
+  const point = monitorEventPoint(monitoredOrder, event);
+  return point ? [{ event, point }] : [];
+}) : [];
+const alarmCounts = computed(() => {
+  const counts = new Map<string, { count: number; high: boolean }>();
+  const add = (kind: string, high: boolean) => {
+    const previous = counts.get(kind);
+    counts.set(kind, { count: (previous?.count ?? 0) + 1, high: high || !!previous?.high });
+  };
+  const alarmEvents = new Set<string>();
+  for (const item of monitoring.anomalies) {
+    if (item.orderId !== monitoredOrder?.id) continue;
+    add(item.kind, true);
+    if (item.eventId) alarmEvents.add(item.eventId);
+  }
+  for (const event of monitoring.events) {
+    if (event.projectId === monitoredOrder?.projectId && event.orderId === monitoredOrder?.id &&
+        event.assessment?.verdict === 'reasonable' && !alarmEvents.has(event.id)) add(eventNames[event.type], false);
+  }
+  return counts;
+});
 const mapRef = ref<HTMLDivElement | null>(null);
 const routeDistance = ref('--');
 const routeDuration = ref('--');
 const watermarkEnabled = ref(false);
-const selectedEventId = ref<number | null>(null);
-const expandedEvents = ref<number[]>([]);
+type EventKey = string | number;
+const selectedEventId = ref<EventKey | null>(null);
+const expandedEvents = ref<EventKey[]>([]);
+const eventList = ref<HTMLElement>();
 const order = computed(() => store.currentDetailOrder);
 const summaryFields = computed(() => [
   { label: '车牌', value: order.value.plate },
@@ -49,6 +73,11 @@ const mapError = ref('');
 const plannedOverlays: AMap.Polyline[] = [];
 const actualOverlays: AMap.Polyline[] = [];
 const fenceOverlays: AMap.Circle[] = [];
+type MonitorLayer = 'fence' | 'parking' | 'offline';
+const layerOptions = ([
+  { id: 'fence', label: '装卸货围栏' }, { id: 'parking', label: '停车点' }, { id: 'offline', label: '离线点' },
+] as const).filter(option => option.id === 'fence' || positionedEvents.some(({ event }) => event.type === option.id));
+const layers = ref<Record<MonitorLayer, boolean>>({ fence: true, parking: true, offline: true });
 
 let mapInstance: AMap.Map | null = null;
 let watermark: ReturnType<typeof mountTransportMapWatermark> | undefined;
@@ -57,8 +86,10 @@ let markerCoordinates: AMapCoordinate[] = [];
 let disposed = false;
 let mapResizeObserver: ResizeObserver | undefined;
 let resizeFrame = 0;
-const mapMarkers: { content: HTMLElement; open: () => void }[] = [];
-const eventMarkerIndexes: Record<number, number> = monitoredOrder ? Object.fromEntries(monitoredEvents.flatMap((event, index) => positionedEvents.includes(event) ? [[index + 1, positionedEvents.indexOf(event) + 1]] : [])) : { 1: 0, 2: 0, 3: 1, 4: 2, 5: 3, 6: 5 };
+const mapMarkers: { content: HTMLElement; open: () => void; marker: AMap.Marker; layer?: MonitorLayer }[] = [];
+const eventMarkerIndexes = new Map<EventKey, number>(monitoredOrder
+  ? positionedEvents.map(({ event }, index): [EventKey, number] => ['event:' + event.id, index + 1])
+  : [[1, 0], [2, 0], [3, 1], [4, 2], [5, 3], [6, 5]]);
 
 function fitMap() {
   if (!disposed && mapInstance && (routeOverlay || fenceOverlays.length)) mapInstance.setFitView([...plannedOverlays, ...actualOverlays, ...fenceOverlays], true, watermark?.padding() ?? (monitoredOrder ? [90, 130, 90, 130] : [60, 60, 60, 60]));
@@ -81,6 +112,13 @@ function syncWatermark() {
 }
 
 watch(watermarkEnabled, syncWatermark);
+function syncLayers() {
+  for (const circle of fenceOverlays) layers.value.fence ? circle.show() : circle.hide();
+  for (const { marker, layer } of mapMarkers) {
+    if (layer) layers.value[layer] ? marker.show() : marker.hide();
+  }
+}
+watch(layers, syncLayers, { deep: true });
 
 type GpsCoordinate = [number, number];
 
@@ -91,6 +129,7 @@ interface MapPoint {
   desc: string;
   name: string;
   tone: MapTone;
+  layer?: MonitorLayer;
 }
 
 const baseWaypoints: GpsCoordinate[] = [
@@ -164,14 +203,21 @@ const baseMapPoints: MapPoint[] = [
 ];
 
 const routeWaypoints: GpsCoordinate[] = monitoredOrder ? [[monitoredOrder.origin.lat, monitoredOrder.origin.lon], [monitoredOrder.destination.lat, monitoredOrder.destination.lon]] : baseWaypoints;
+const actualTrack = monitoredOrder?.network?.status === 'unregistered' ? [] : (monitoredOrder?.actualTrack ?? [])
+  .filter(point => point.at <= monitoring.now).sort((a, b) => a.at - b.at);
+const lastPoint = actualTrack[actualTrack.length - 1];
 const mapPoints: MapPoint[] = monitoredOrder ? [
   { name: `装货地 · ${monitoredOrder.origin.name}`, coord: routeWaypoints[0]!, desc: '运单装货地点', tone: 'start' },
-  ...positionedEvents.map((event): MapPoint => { const place = event.target === 'destination' ? monitoredOrder.destination : event.target === 'origin' ? monitoredOrder.origin : event.position!; return { name: event.address, coord: [place.lat, 'lon' in place ? place.lon : 0], desc: event.result, tone: event.type === 'fence' ? 'start' : 'warn' }; }),
-  ...(monitoredOrder.network?.status !== 'unregistered' && monitoredOrder.actualTrack?.length ? [{ name: '当前位置', coord: [monitoredOrder.actualTrack.at(-1)!.lat, monitoredOrder.actualTrack.at(-1)!.lon] as GpsCoordinate, desc: `定位时间：${dateText(monitoredOrder.actualTrack.at(-1)!.at)}`, tone: 'current' as const }] : []),
-  { name: `卸货地 · ${monitoredOrder.destination.name}`, coord: routeWaypoints.at(-1)!, desc: '运单卸货地点', tone: 'end' },
+  ...positionedEvents.map(({ event, point }): MapPoint => ({
+    name: event.address, coord: [point.lat, point.lon], desc: !event.position && event.type === 'fence' ? event.result + '（围栏中心）' : event.result,
+    tone: event.type === 'fence' ? 'start' : 'warn',
+    layer: event.type === 'parking' || event.type === 'offline' || event.type === 'fence' ? event.type : undefined,
+  })),
+  ...(lastPoint ? [{ name: '当前位置', coord: [lastPoint.lat, lastPoint.lon] as GpsCoordinate, desc: `定位时间：${dateText(lastPoint.at)}`, tone: 'current' as const }] : []),
+  { name: `卸货地 · ${monitoredOrder.destination.name}`, coord: routeWaypoints[routeWaypoints.length - 1]!, desc: '运单卸货地点', tone: 'end' },
 ] : baseMapPoints;
 
-function eventTone(event: TimelineEvent) {
+function eventTone(event: Pick<TimelineEvent, 'agentVerdict' | 'agentTone'>) {
   return `tone-${detailRiskTone(event.agentVerdict, event.agentTone)}`;
 }
 
@@ -183,7 +229,17 @@ function eventIcon(event: TimelineEvent) {
   return strokeIconPaths.waypoints;
 }
 
-function toggleEventDetails(event: TimelineEvent) {
+const timeline = computed(() => monitoredOrder
+  ? monitorTimeline(monitoredOrder, monitoring.events, monitoring.anomalies)
+      .filter(row => !store.detailOnlyAbnormal || row.abnormal)
+      .map(row => ({ ...row, icon: strokeIconPaths[row.iconKey], description: '' }))
+  : store.timelineEvents.map(event => ({
+      ...event, abnormal: event.type !== 'normal', icon: eventIcon(event), place: event.place || event.stopPlace,
+      duration: event.type === 'stop' ? detailEventDuration(event) : '', conclusion: detailEventConclusion(event),
+      supplement: detailEventSupplement(event), analysis: !!event.agent, description: event.agent ? event.desc : '',
+    })));
+
+function toggleEventDetails(event: { id: EventKey }) {
   expandedEvents.value = expandedEvents.value.includes(event.id)
     ? expandedEvents.value.filter(id => id !== event.id)
     : [...expandedEvents.value, event.id];
@@ -193,11 +249,16 @@ function highlightMarker(index: number) {
   mapMarkers.forEach((entry, markerIndex) => entry.content.classList.toggle('is-selected', markerIndex === index));
 }
 
-function selectEvent(event: TimelineEvent) {
+function selectEvent(event: { id: EventKey }) {
   selectedEventId.value = event.id;
-  const index = eventMarkerIndexes[event.id];
-  if (index === undefined) return;
+  const index = eventMarkerIndexes.get(event.id);
+  if (index === undefined) {
+    if (monitoredOrder) { highlightMarker(-1); mapInstance?.clearInfoWindow(); }
+    return;
+  }
   highlightMarker(index);
+  const layer = mapMarkers[index]?.layer;
+  if (layer) layers.value[layer] = true;
   mapMarkers[index]?.open();
 }
 
@@ -270,17 +331,21 @@ function drawMarkers(amap: typeof AMap, coordinates: AMapCoordinate[]) {
         offset: new amap.Pixel(0, -14),
       }).open(mapInstance!, coordinates[index]!);
     };
-    mapMarkers.push({ content, open });
+    mapMarkers.push({ content, open, marker, layer: point.layer });
     marker.on('click', () => {
-      const eventId = Object.keys(eventMarkerIndexes).map(Number).find(id => eventMarkerIndexes[id] === index);
+      const eventId = [...eventMarkerIndexes].find(([, marker]) => marker === index)?.[0];
       selectedEventId.value = eventId ?? null;
+      if (monitoredOrder && eventId !== undefined) {
+        if (!timeline.value.some(row => row.id === eventId)) store.detailOnlyAbnormal = false;
+        void nextTick(() => eventList.value?.querySelector(`[data-event-id="${CSS.escape(String(eventId))}"]`)?.scrollIntoView({ block: 'nearest' }));
+      }
       highlightMarker(index);
       open();
     });
     mapInstance!.add(marker);
   });
   if (selectedEventId.value !== null) {
-    const index = eventMarkerIndexes[selectedEventId.value];
+    const index = eventMarkerIndexes.get(selectedEventId.value);
     if (index !== undefined) { highlightMarker(index); mapMarkers[index]?.open(); }
   }
 }
@@ -292,9 +357,9 @@ async function initMap() {
   try {
     const amap = await loadAMap(['AMap.Driving', 'AMap.ToolBar']);
     const convert = (coordinates: AMapCoordinate[]) => monitoredOrder?.origin.coordinateSystem === 'gcj02' ? Promise.resolve(coordinates) : convertGpsCoordinates(amap, coordinates);
-    const convertedWaypoints = await convert([routeWaypoints[0]!, routeWaypoints.at(-1)!].map(([lat, lng]) => [lng, lat]));
+    const convertedWaypoints = await convert([routeWaypoints[0]!, routeWaypoints[routeWaypoints.length - 1]!].map(([lat, lng]) => [lng, lat]));
     const actualCoordinates: AMapCoordinate[] = monitoredOrder
-      ? (monitoredOrder.network?.status === 'unregistered' ? [] : (monitoredOrder.actualTrack ?? []).filter(point => point.at <= monitoring.now).sort((a,b) => a.at-b.at).map(point => [point.lon, point.lat]))
+      ? actualTrack.map(point => [point.lon, point.lat])
       : baseFallback.slice(0, -1).map(([lat, lng]) => [lng, lat]);
     const convertedActual = actualCoordinates.length > 1 ? await convert(actualCoordinates) : [];
     const convertedMarkers = await convert(mapPoints.map(({ coord: [lat, lng] }) => [lng, lat]));
@@ -338,6 +403,7 @@ async function initMap() {
       mapReady.value = true;
     }
     drawMarkers(amap, convertedMarkers);
+    if (monitoredOrder) syncLayers();
     if (fenceOverlays.length) fitMap();
     syncWatermark();
   } catch {
@@ -376,16 +442,20 @@ onBeforeUnmount(() => {
     <section class="detail-map-section" :class="{ 'has-watermark': watermarkEnabled }" aria-label="运单地图轨迹">
       <header class="detail-panel-header">
         <h1><Icon :svg="strokeIconPaths.map" :size="16" />地图轨迹</h1>
-        <div v-if="monitoredOrder" class="detail-map-badges"><span v-if="monitoredOrder.network?.status === 'unregistered'" :class="badgeToneClass('orange')">车辆未入网</span><span v-if="monitoring.anomalies.some(item => item.orderId === monitoredOrder.id && item.status === 'active')" :class="badgeToneClass('red')">高风险 {{ monitoring.anomalies.filter(item => item.orderId === monitoredOrder.id && item.status === 'active').length }}</span></div>
+        <div v-if="monitoredOrder" class="detail-map-badges monitor-badges" aria-label="异常事件统计"><span v-if="monitoredOrder.network?.status === 'unregistered'" :class="badgeToneClass('orange')">车辆未入网</span><span v-for="[kind, group] in alarmCounts" :key="kind" :title="`运输期间累计：${kind} ${group.count} 条`" :class="badgeToneClass(group.high ? 'red' : 'orange')">{{ kind }} {{ group.count }}</span></div>
         <div v-else class="detail-map-badges"><span :class="badgeToneClass('red')">异常停车 2</span><span :class="badgeToneClass('purple')">轨迹风险 1</span></div>
       </header>
       <div class="detail-map-stage">
         <div ref="mapRef" class="detail-map-canvas" style="color:#253440;background-color:#eef3f6;font-family:sans-serif"></div>
         <div class="detail-map-tools" aria-label="地图操作">
-          <div class="detail-watermark-toggle"><span>水印</span><ElSwitch v-model="watermarkEnabled" size="small" aria-label="显示地图水印" /></div>
+          <details v-if="monitoredOrder" class="monitor-layers"><summary>图层</summary><div>
+            <label v-for="option in layerOptions" :key="option.id"><input v-model="layers[option.id]" type="checkbox" />{{ option.label }}</label>
+          </div></details>
+          <div class="detail-watermark-toggle"><span>水印</span><ElSwitch v-model="watermarkEnabled" :disabled="!!monitoredOrder && !mapReady" size="small" aria-label="显示地图水印" /></div>
         </div>
         <div v-if="!watermarkEnabled || !mapReady" class="detail-route-summary">
           <strong>{{ monitoredOrder ? `${monitoredOrder.origin.name} → ${monitoredOrder.destination.name}` : '上海一厂 → 广州仓' }}</strong><div><span>{{ routeDistance }}</span><span>{{ routeDuration }}</span></div>
+          <div v-if="monitoredOrder && actualTrack.length < 2 && positionedEvents.length">仅有事件定位，暂无有效行车轨迹</div>
         </div>
         <div v-if="mapLoading || mapError" class="detail-map-status" :role="mapError ? 'alert' : 'status'">{{ mapError || '正在加载地图与运输轨迹…' }}</div>
       </div>
@@ -413,32 +483,32 @@ onBeforeUnmount(() => {
       </section>
       <section class="detail-events" aria-label="运输事件流">
         <header class="detail-events-header">
-          <h2>运输事件<span>{{ store.timelineEvents.length }}</span></h2>
+          <h2>运输事件<span>{{ timeline.length }}</span></h2>
           <button type="button" class="detail-filter" :class="{ 'is-active': store.detailOnlyAbnormal }" :aria-pressed="store.detailOnlyAbnormal" title="只看异常事件" @click="store.detailOnlyAbnormal = !store.detailOnlyAbnormal"><Icon :svg="strokeIconPaths.filter" :size="13" />只看异常</button>
         </header>
-        <div class="detail-event-list">
-          <MonitoringOrderPanel v-if="monitoredOrder" :order-id="monitoredOrder.id" />
-          <article v-for="event in store.timelineEvents" :key="event.id" class="detail-event" :class="[eventTone(event), { 'is-abnormal': event.type !== 'normal', 'is-selected': selectedEventId === event.id }]" :data-event-id="event.id">
-            <div class="detail-event-track" aria-hidden="true"><span><Icon :svg="eventIcon(event)" :size="13" /></span></div>
+        <div ref="eventList" class="detail-event-list">
+          <details v-if="monitoredOrder" class="monitor-facts"><summary>监听信息</summary><MonitoringOrderPanel :order-id="monitoredOrder.id" /></details>
+          <article v-for="event in timeline" :key="event.id" class="detail-event" :class="[eventTone(event), { 'is-abnormal': event.abnormal, 'is-selected': selectedEventId === event.id }]" :data-event-id="event.id">
+            <div class="detail-event-track" aria-hidden="true"><span><Icon :svg="event.icon" :size="13" /></span></div>
             <div class="detail-event-content">
-              <button type="button" class="detail-event-select" :aria-pressed="selectedEventId === event.id" :aria-label="`${event.title}，${event.time}，定位地图`" @click="selectEvent(event)">
-                <span class="detail-event-heading"><span class="detail-event-title">{{ event.title }}</span><span v-if="event.agentVerdict" class="detail-badge detail-event-verdict">{{ event.agentVerdict }}</span><Icon class="detail-event-locate" :svg="strokeIconPaths.locate" :size="13" /></span>
-                <span class="detail-event-timing"><time>{{ event.time || '—' }}</time><span v-if="event.type === 'stop' && detailEventDuration(event)" class="detail-event-duration">{{ detailEventDuration(event) }}</span></span>
-                <span class="detail-event-place"><Icon :svg="strokeIconPaths.locate" :size="12" /><span>{{ event.place || event.stopPlace || '—' }}</span></span>
-                <span class="detail-event-conclusion">{{ detailEventConclusion(event) }}</span>
+              <button type="button" class="detail-event-select" :aria-pressed="selectedEventId === event.id" :aria-label="[event.title, event.time, eventMarkerIndexes.has(event.id) ? '定位地图' : ''].filter(Boolean).join('，')" @click="selectEvent(event)">
+                <span class="detail-event-heading"><span class="detail-event-title">{{ event.title }}</span><span v-if="event.agentVerdict" class="detail-badge detail-event-verdict">{{ event.agentVerdict }}</span><Icon v-if="!monitoredOrder || eventMarkerIndexes.has(event.id)" class="detail-event-locate" :svg="strokeIconPaths.locate" :size="13" /></span>
+                <span class="detail-event-timing"><time>{{ event.time || '—' }}</time><span v-if="event.duration" class="detail-event-duration">{{ event.duration }}</span></span>
+                <span v-if="event.place || !monitoredOrder" class="detail-event-place"><Icon :svg="strokeIconPaths.locate" :size="12" /><span>{{ event.place || '—' }}</span></span>
+                <span class="detail-event-conclusion">{{ event.conclusion }}</span>
               </button>
-              <template v-if="detailEventSupplement(event)">
+              <template v-if="event.supplement">
                 <button type="button" class="detail-event-expand" :aria-expanded="expandedEvents.includes(event.id)" :aria-controls="`event-details-${event.id}`" @click="toggleEventDetails(event)">
-                  <span v-if="event.agent" class="detail-ai-label"><Icon :svg="strokeIconPaths.zap" :size="11" />AI 分析</span>
+                  <span v-if="event.analysis" class="detail-ai-label"><Icon :svg="strokeIconPaths.zap" :size="11" />AI 分析</span>
                   {{ expandedEvents.includes(event.id) ? '收起说明' : '查看说明' }}<Icon :svg="strokeIconPaths.chevron" :size="12" :class="{ 'is-expanded': expandedEvents.includes(event.id) }" />
                 </button>
                 <div v-if="expandedEvents.includes(event.id)" :id="`event-details-${event.id}`" class="detail-event-supplement">
-                  <p v-if="event.agent && event.desc">{{ event.desc }}</p><p>{{ detailEventSupplement(event) }}</p>
+                  <p v-if="event.description">{{ event.description }}</p><p>{{ event.supplement }}</p>
                 </div>
               </template>
             </div>
           </article>
-          <p v-if="!store.timelineEvents.length" class="detail-events-empty">暂无{{ store.detailOnlyAbnormal ? '异常' : '' }}事件</p>
+          <p v-if="!timeline.length" class="detail-events-empty">暂无{{ store.detailOnlyAbnormal ? '异常' : '' }}事件</p>
         </div>
       </section>
     </aside>
@@ -451,11 +521,18 @@ onBeforeUnmount(() => {
 .detail-panel-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 48px; padding: 0 14px; border-bottom: 1px solid #e2e2dc; }
 .detail-panel-header h1, .detail-panel-header h2 { display: flex; align-items: center; gap: 8px; margin: 0; font-size: 13px; font-weight: 600; line-height: 20px; color: #202a37; }
 .detail-map-badges { display: flex; gap: 6px; }
+.monitor-badges { flex-wrap: wrap; justify-content: flex-end; }
+.monitor-facts { margin-bottom: 8px; border-bottom: 1px solid #e5eaf2; }
+.monitor-facts summary { padding-block: 8px; cursor: pointer; color: #345891; font-size: 12px; }
 .detail-map-badges > span { padding: 2px 6px; border: 1px solid; border-radius: 4px; font-size: 11px; line-height: 17px; white-space: nowrap; }
 .detail-map-stage { position: relative; flex: 1; min-height: 0; overflow: hidden; }
 .detail-map-canvas { width: 100%; height: 100%; min-height: 100%; }
 .detail-map-tools { position: absolute; top: 12px; right: 12px; z-index: 1000; display: flex; align-items: center; gap: 10px; height: 36px; padding: 0 10px; border: 1px solid #dfe3e6; border-radius: 6px; background: #fff; box-shadow: 0 2px 6px rgb(25 39 51 / 8%); }
 .detail-watermark-toggle { display: flex; align-items: center; gap: 8px; font-size: 12px; color: #3d4c5c; }
+.monitor-layers { position: relative; font-size: 12px; color: #3d4c5c; }
+.monitor-layers summary, .monitor-layers label { cursor: pointer; }
+.monitor-layers > div { position: absolute; top: calc(100% + 9px); right: 0; min-width: 112px; padding: 6px 10px; border: 1px solid #dfe3e6; border-radius: 6px; background: #fff; }
+.monitor-layers label { display: flex; align-items: center; gap: 6px; padding-block: 4px; }
 .detail-route-summary { position: absolute; top: 16px; left: 16px; z-index: 500; max-width: calc(100% - 210px); pointer-events: none; font-size: 12px; color: #314556; text-shadow: 0 1px 2px #fff, 1px 0 2px #fff; }
 .detail-route-summary strong { font-weight: 600; }
 .detail-route-summary > div { display: flex; flex-wrap: wrap; gap: 3px 12px; margin-top: 4px; font-size: 11px; }

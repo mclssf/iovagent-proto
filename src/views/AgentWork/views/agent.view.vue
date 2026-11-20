@@ -1,5 +1,5 @@
 <script lang="ts" setup>
-import type { AgentResultLink, ChatMessage, TimelineEvent } from '../interface';
+import type { AgentResultLink, ChatMessage, ComposerSubmission, TimelineEvent } from '../interface';
 
 import { storeToRefs } from 'pinia';
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
@@ -7,6 +7,8 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { Icon } from '@packages/icon';
 
 import { agentWorkData, quickPrompts, rightPanelTabs } from '@/pinia/agentWork';
+import { summonIcon, useSkillComposer } from '@/pinia/skillComposer';
+import AppDialog from '@/components/AppDialog.vue';
 import { useAgentDailyTasks } from '@/pinia/agentDailyTasks';
 import { convertGpsCoordinates, loadAMap, searchDrivingRoute, type AMapCoordinate } from '@/utils/amap';
 import { taskRunLabels } from '../dailyTasks';
@@ -38,7 +40,13 @@ function openOrdinaryTask(id: string) {
   }
   goPage('dailyTasks', { taskId: id, scope: task.projectId ? 'project' : 'personal' });
 }
-const { agentMessages, agentInput } = storeToRefs(store);
+const { agentMessages } = storeToRefs(store);
+const composer = useSkillComposer();
+const agentInput = computed({ get: () => composer.draft.text, set: (text: string) => composer.edit(text) });
+const previewPrompt = ref(false);
+const draftTip = computed(() => composer.draft.automatic ? '已为你填入推荐提示词，可修改车牌、时间、地点或任务要求后再发送。'
+  : composer.draft.template ? '已保留你的输入，可继续修改，或使用该技能的推荐提示词。'
+  : composer.draft.text ? '已保留你的输入，可继续修改后发送。' : '请描述希望该技能完成的任务，可补充车牌、时间、地点或上传文件。');
 const { goPage, createDownload, sendAgent } = useAgentWorkNav();
 const agentMessageListRef = ref<HTMLDivElement | null>(null);
 const agentMessageContentRef = ref<HTMLDivElement | null>(null);
@@ -158,7 +166,7 @@ const isModelSelectOpen = ref(false);
 const modelSelectRef = ref<HTMLDivElement | null>(null);
 const fileInputRef = ref<HTMLInputElement | null>(null);
 const composerTextareaRef = ref<HTMLTextAreaElement | null>(null);
-const uploadedFiles = ref<File[]>([]);
+const uploadedFiles = computed({ get: () => composer.draft.files, set: (files: File[]) => composer.attach(files) });
 const readingAttachments = ref(false);
 let attachmentReadGeneration = 0;
 const isFileDragActive = ref(false);
@@ -264,7 +272,7 @@ function isDeferredWaybillImportRequest(text: string, files: File[]) {
   return hasImportAction && hasMergeDestination;
 }
 
-function startDeferredWaybillImport(text: string, files: File[]) {
+function startDeferredWaybillImport(text: string, files: File[], submission: ComposerSubmission) {
   const excelFiles = files.filter(isExcelFile);
   const sourceFileNames = excelFiles.map((file) => file.name);
   const attachmentText = `附件：${sourceFileNames.join('、')}`;
@@ -273,7 +281,7 @@ function startDeferredWaybillImport(text: string, files: File[]) {
     (project) => text.includes(project.name) || text.includes(project.name.replace(/项目$/, '')),
   );
   store.ensureConversationStarted();
-  const next: ChatMessage[] = [...store.agentMessages, { role: 'user', text: raw }];
+  const next: ChatMessage[] = [...store.agentMessages, { role: 'user', text: raw, inputFiles: submission.files, summonedSkill: submission.summonedSkill }];
   store.startDelayedAgentProcess(
     next,
     {
@@ -300,6 +308,7 @@ function startDeferredWaybillImport(text: string, files: File[]) {
       };
     },
   );
+  submission.accepted();
 }
 
 function selectNewConversationGuide(guide: NewConversationGuide) {
@@ -350,6 +359,7 @@ function cancelWaybillImport() {
 function confirmWaybillImport(payload: { mode: 'create' | 'merge'; projectId: string; projectName: string }) {
   const pendingImport = pendingWaybillImport.value;
   if (!pendingImport) return;
+  const importDraft = composer.draft;
   const sourceFileNames = pendingImport.files.map((file) => file.name);
   if (payload.mode === 'create') {
     store.createImportedWaybillProject(payload.projectName, pendingImport.importedCount, sourceFileNames);
@@ -358,42 +368,38 @@ function confirmWaybillImport(payload: { mode: 'create' | 'merge'; projectId: st
   }
 
   const importedFileKeys = new Set(pendingImport.files.map((file) => `${file.name}-${file.size}-${file.lastModified}`));
-  uploadedFiles.value = uploadedFiles.value.filter((file) => !importedFileKeys.has(`${file.name}-${file.size}-${file.lastModified}`));
-  if (pendingImport.source === 'waybill' && agentInput.value === waybillImportPrompt) agentInput.value = '';
+  importDraft.files = importDraft.files.filter((file) => !importedFileKeys.has(`${file.name}-${file.size}-${file.lastModified}`));
+  if (pendingImport.source === 'waybill' && importDraft.text === waybillImportPrompt) importDraft.text = '';
+  importDraft.revision++;
   pendingWaybillImport.value = null;
 }
 
 async function sendComposerMessage() {
-  if (readingAttachments.value) return;
+  if (readingAttachments.value || store.agentMessages.at(-1)?.streaming) return;
   const text = agentInput.value.trim();
-  if (!text && uploadedFiles.value.length === 0) return;
+  const files = [...uploadedFiles.value];
+  if (!text && !files.length) return;
+  const key = composer.key, revision = composer.draft.revision, skillId = composer.draft.skillId;
+  const generation = ++attachmentReadGeneration;
   isFollowingLatest.value = true;
-
-  if (uploadedFiles.value.length > 0) {
-    if (text && !hasVehiclePredictionIntent(text) && isDeferredWaybillImportRequest(text, uploadedFiles.value)) {
-      startDeferredWaybillImport(text, uploadedFiles.value);
-      uploadedFiles.value = [];
-      agentInput.value = '';
-      return;
-    }
-    const attachmentText = `附件：${uploadedFiles.value.map((file) => file.name).join('、')}`;
-    const readGeneration = ++attachmentReadGeneration;
-    const context = `${store.workspaceMode}:${store.currentProjectId}:${store.currentConversationId}`;
-    readingAttachments.value = true;
-    try {
-      const files = [...uploadedFiles.value];
-      const excel = await readTaskAttachments(files.filter(isTaskExcel));
-      if (readGeneration !== attachmentReadGeneration || context !== `${store.workspaceMode}:${store.currentProjectId}:${store.currentConversationId}`) return;
-      const attachments = files.map(file => excel.find(item => item.name === file.name && item.size === file.size && item.lastModified === file.lastModified) ?? { name: file.name, size: file.size, type: file.type, lastModified: file.lastModified });
-      await sendAgent(text ? `${text}\n${attachmentText}` : attachmentText, attachments, files);
-    } catch (error) { ElMessage.warning((error as Error).message); return; }
-    finally { readingAttachments.value = false; }
-    uploadedFiles.value = [];
-    agentInput.value = '';
-    return;
-  }
-
-  sendAgent();
+  readingAttachments.value = true;
+  try {
+    const deferred = text && !hasVehiclePredictionIntent(text) && isDeferredWaybillImportRequest(text, files);
+    const excel = !deferred && files.some(isTaskExcel) ? await readTaskAttachments(files.filter(isTaskExcel)) : [];
+    if (generation !== attachmentReadGeneration || key !== composer.key) return;
+    const submission: ComposerSubmission = {
+      summonedSkill: composer.validate(skillId),
+      files: files.map(({ name, size, type }) => ({ name, size, type })),
+      accepted: () => { composer.accepted(key, revision); readingAttachments.value = false; },
+    };
+    if (deferred) { startDeferredWaybillImport(text, files, submission); return; }
+    const attachments = files.map(file => excel.find(item => item.name === file.name && item.size === file.size && item.lastModified === file.lastModified)
+      ?? { name: file.name, size: file.size, type: file.type, lastModified: file.lastModified });
+    const raw = [text, files.length ? '附件：' + files.map(f => f.name).join('、') : ''].filter(Boolean).join('\n');
+    await sendAgent(raw, attachments, files, submission);
+  } catch (e) {
+    ElMessage.warning(e instanceof Error ? e.message : '消息未提交，请重试。');
+  } finally { if (generation === attachmentReadGeneration) readingAttachments.value = false; }
 }
 
 function sendQuickPrompt(text: string) {
@@ -762,6 +768,12 @@ onMounted(() => {
 });
 
 watch(agentInput, () => nextTick(resizeComposer));
+watch(() => [composer.key, composer.draft.skillId, composer.selected?.id], () => {
+  composer.invalidate();
+  previewPrompt.value = false;
+}, { immediate: true });
+watch(() => composer.key, () => { attachmentReadGeneration++; readingAttachments.value = false; });
+watch(() => composer.focusRequest, () => nextTick(() => composerTextareaRef.value?.focus()));
 watch(isRightPanelRendered, () => { isTaskCardOpen.value = false; scrollAgentMessagesToBottom(); });
 
 watch(
@@ -882,6 +894,7 @@ onBeforeUnmount(() => {
                 m.role === 'user' ? 'is-user bg-slate-900 px-4 py-3 text-white' : m.title ? 'is-agent border border-[#deded9] bg-white px-4 py-3 text-slate-700' : 'is-agent text-slate-700',
               ]"
             >
+            <small v-if="m.role === 'user' && m.summonedSkill" class="block text-xs leading-5">本次召唤：{{ m.summonedSkill.name }}</small>
             <template v-if="m.role === 'agent' && m.title">
               <div class="mb-3 flex items-center justify-between gap-3 border-b border-[#ededea] pb-2">
                 <div>
@@ -1052,8 +1065,12 @@ onBeforeUnmount(() => {
               @input="resizeComposer"
               @keydown.enter.exact="handleComposerEnter"
             />
-            <div class="mt-1 flex items-center justify-between gap-3">
-              <div class="flex min-w-0 items-center gap-1.5">
+            <p v-if="composer.selected || composer.draft.notice" class="skill-input-tip" role="status">
+              {{ composer.draft.notice || draftTip }}
+              <button v-if="composer.selected && !composer.draft.automatic && composer.draft.template" type="button" @click="previewPrompt = true">查看推荐提示词</button>
+            </p>
+            <div class="mt-1 flex items-center justify-between gap-2">
+              <div class="flex min-w-0 flex-wrap items-center gap-1.5">
                 <input ref="fileInputRef" type="file" class="hidden" multiple :accept="filePickerAccept" @change="handleFileSelect" />
                 <button
                   type="button"
@@ -1068,6 +1085,7 @@ onBeforeUnmount(() => {
                   <button
                     type="button"
                     role="combobox"
+                    aria-label="内置模型"
                     aria-haspopup="listbox"
                     :aria-expanded="isModelSelectOpen"
                     class="flex h-8 max-w-[190px] items-center justify-between gap-2 rounded-full px-3 text-sm text-slate-800 transition hover:bg-[#f3f3f1]"
@@ -1107,6 +1125,13 @@ onBeforeUnmount(() => {
                       <Icon v-if="selectedAgentModel.value === option.value" :svg="strokeIconPaths.check" :size="15" svg-class="text-slate-900" />
                     </button>
                   </div>
+                </div>
+                <div class="summon-tool" :class="{ bound: composer.selected }">
+                  <button type="button" class="summon-trigger" :title="composer.selected?.name || '数字人技能'" @click="composer.panel = 'composer'">
+                    <Icon :svg="composer.selected ? strokeIconPaths[summonIcon(composer.selected)] : strokeIconPaths.zap" :size="14" />
+                    <span>{{ composer.selected?.name || '数字人技能' }}</span>
+                  </button>
+                  <button v-if="composer.selected" type="button" class="summon-remove" aria-label="取消召唤" title="取消召唤" @click.stop="composer.cancel(); composerTextareaRef?.focus()"><Icon :svg="strokeIconPaths.x" :size="10" /></button>
                 </div>
               </div>
               <button
@@ -1414,6 +1439,11 @@ onBeforeUnmount(() => {
       </template>
     </div>
   </div>
+  <AppDialog v-model="previewPrompt" title="推荐提示词" @closed="composerTextareaRef?.focus()">
+    <p class="whitespace-pre-wrap break-words text-sm leading-6 text-slate-700">{{ composer.draft.template }}</p>
+    <template #footer><div class="dialog-actions"><button type="button" class="dialog-button" @click="previewPrompt = false">取消</button>
+      <button type="button" class="dialog-button dialog-primary" @click="composer.useTemplate(); previewPrompt = false">替换当前输入</button></div></template>
+  </AppDialog>
   <WaybillImportDialog
     :file-names="pendingWaybillImport?.files.map((file) => file.name) ?? []"
     :imported-count="pendingWaybillImport?.importedCount ?? 0"
@@ -1427,6 +1457,16 @@ onBeforeUnmount(() => {
 </template>
 
 <style lang="scss" scoped>
+.summon-tool { position:relative; min-width:0; max-width:100%; border-radius:5px; }
+.summon-trigger { display:flex; align-items:center; gap:5px; max-width:150px; min-height:28px; padding:3px 8px; color:#475569; font-size:12px; }
+.summon-trigger span { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.summon-trigger :deep(svg) { flex-shrink:0; }
+.summon-tool:hover { background:#f4f5f5; }
+.summon-tool.bound { background:#eff5ff; border:1px solid #d4e2fa; }
+.bound .summon-trigger { color:#305e9e; padding-right:14px; }
+.summon-remove { position:absolute; top:-5px; right:-5px; display:grid; place-items:center; width:18px; height:18px; border:1px solid #cfdae8; border-radius:50%; color:#405675; background:#fff; }
+.skill-input-tip { padding:2px 4px 5px; margin:0; font-size:12px; line-height:18px; color:#52647b; }
+.skill-input-tip button { margin-left:4px; color:#245ca5; text-decoration:underline; text-underline-offset:2px; }
 :deep(.amap-container) {
   background: #e2e8f0;
   color: #0f172a;

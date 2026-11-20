@@ -230,11 +230,12 @@ onMounted(() => {
               </td>
               <td class="px-4 py-4 align-middle">
                 <span v-if="o.riskTags?.includes('车辆未入网')" class="mr-1 inline-flex rounded border border-amber-200 bg-amber-50 px-2 py-0.5 text-xs text-amber-800">车辆未入网</span><span v-if="o.risk!=='无风险'||!o.riskTags?.length" :class="tableRiskPillClass(o.risk)">{{ o.risk }}</span>
+                <span v-if="o.monitoringId && o.billingExempt" class="inline-flex rounded border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-xs text-emerald-800">免计费</span>
               </td>
               <td class="px-4 py-4 align-middle">
                 <div class="text-sm text-slate-800">{{ o.issue }}</div>
                 <div class="mt-0.5 text-xs leading-relaxed text-slate-400">
-                  {{ o.source }}<span v-if="o.billingExempt" class="ml-2 text-emerald-700">免计费</span>
+                  {{ o.source }}<span v-if="!o.monitoringId && o.billingExempt" class="ml-2 text-emerald-700">免计费</span>
                 </div>
               </td>
               <td class="px-4 py-4 align-middle text-sm text-slate-700">

@@ -9,6 +9,13 @@ const server = await createServer({ configFile: false, root, resolve: { alias: {
 try {
   const { usePhase1, p1ConfigError } = await server.ssrLoadModule('/src/pinia/phase1.ts');
   const { monitoringHours } = await server.ssrLoadModule('/src/views/Phase1/hourlyResults.ts');
+  const { monitorSkillId, monitorTaskCode, phaseSkills } = await server.ssrLoadModule('/src/views/Phase1/catalog.ts');
+  const { monitorTimeline, monitorEventPoint } = await server.ssrLoadModule('/src/views/Phase1/monitorTimeline.ts');
+  for (const { id } of phaseSkills) {
+    assert.equal(monitorSkillId(monitorTaskCode(id)), id);
+    assert.equal(monitorSkillId(id), id);
+  }
+  assert.equal(monitorSkillId('ordinary'), undefined);
   const { monitoringOrder } = await server.ssrLoadModule('/src/views/Phase1/presentation.ts');
   const { anomalyStage } = await server.ssrLoadModule('/src/views/Phase1/orderStages.ts');
   const HOUR = 3600000, MINUTE = 60000;
@@ -61,6 +68,25 @@ try {
   assert(lateHours.some(hour => hour.highRisk > 0 && hour.eventCount === 0 && hour.details.some(detail => detail.id === late.id)), 'standalone time risk is not a base event');
   assert(hours.some(hour => !hour.details.length && hour.monitoredOrders > 0), 'empty monitored hours remain visible');
   const order = store.orders[0];
+  const parking = store.events.find(event => event.type === 'parking');
+  const fence = store.events.find(event => event.type === 'fence');
+  const stats = { now: store.now, orders: store.orders, anomalies: store.anomalies, logs: store.logs,
+    events: [...store.events, { ...parking, id: 'foreign', projectId: 'OTHER' }] };
+  const scoped = monitoringHours(stats, 'P', 'p1-parking', order.id).flatMap(hour => hour.details);
+  assert(scoped.some(detail => detail.id === parking.id && detail.plate === order.plate && detail.occurredAt === receivedAt - HOUR && detail.source));
+  assert(!scoped.some(detail => detail.id === 'foreign'));
+  const rows = monitorTimeline(order, stats.events, store.anomalies);
+  assert.deepEqual(rows.map(row => row.at), rows.map(row => row.at).sort((a, b) => a - b));
+  assert(!rows.some(row => row.id === 'event:foreign'));
+  assert(rows.some(row => row.id === 'event:' + fence.id && !row.abnormal));
+  assert(!rows.some(row => row.id === 'node:in_transit' || row.id === 'node:completed'));
+  assert(rows.some(row => row.id === 'event:' + parking.id && row.abnormal && row.duration));
+  assert(!rows.some(row => row.id === 'alarm:' + store.anomalies.find(item => item.eventId === parking.id).id));
+  assert(rows.some(row => row.id === 'alarm:' + late.id && row.abnormal));
+  assert.equal(monitorEventPoint(order, parking), undefined);
+  assert.equal(monitorEventPoint(order, { ...parking, position: { lat: 91, lon: 33 } }), undefined);
+  assert.equal(monitorEventPoint(order, fence).lon, order.origin.lon);
+  assert.equal(monitorEventPoint(order, { ...fence, position: { lat: 31, lon: 120 } }).lon, 120);
   assert.equal(monitoringOrder(order, ['晚到'], true).risk, '高风险');
   assert.equal(monitoringOrder(order, [], true).risk, '低风险');
   assert.equal(monitoringOrder(order, []).risk, '无风险');
