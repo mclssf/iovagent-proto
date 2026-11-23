@@ -4,6 +4,7 @@ import { agentWorkData } from './agentWork';
 import { useAgentOpsStore, type AgentCallableSkill } from './agentOps';
 import { currentWechatEnterpriseId } from './dataEmployeeSkills';
 import type { SummonedSkill } from '@/views/AgentWork/interface';
+import { findGuide } from '@/views/AgentWork/guideScenarios';
 
 export const unavailableNotice = '该技能已不可用，输入内容已保留。请重新选择技能，或按普通对话发送。';
 interface Draft {
@@ -80,6 +81,6 @@ export const useSkillComposer = defineStore('skillComposer', () => {
 export function summonIcon(skill: Pick<AgentCallableSkill, 'id' | 'category'>) {
   const byId = { 'operations-logistics-sheet': 'fileSpreadsheet', 'operations-license-recognition': 'scanText',
     'gps-trace-expert': 'waypoints', 'delivery-sla-expert': 'alarmClock', 'vehicle-location-query': 'locate', 'vehicle-trace-query': 'route' } as const;
-  return byId[skill.id as keyof typeof byId] ?? ({ '在途专家': 'shield', '运营助手': 'panels', '数据员工': 'file',
+  return findGuide(skill.id)?.icon ?? byId[skill.id as keyof typeof byId] ?? ({ '在途专家': 'shield', '运营助手': 'panels', '数据员工': 'file',
     '经营分析参谋': 'list', '运力与货源': 'truck' } as const)[skill.category];
 }

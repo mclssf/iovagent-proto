@@ -2,6 +2,11 @@ import { projectOrderConversation } from '@/views/Phase1/orderConversation';
 import { useLingdongSync } from './lingdongSync';
 import { migrateCapacitySkillIds } from './capacitySkills';
 import { usePhase1 } from './phase1';
+import { useGuideLedger } from './guideLedger';
+import { extractRegionVisitRegion } from '@/views/AgentWork/taskInput';
+import { useAgentOpsStore } from './agentOps';
+import { guideExchange, guideFollowup } from '@/views/AgentWork/guideExchange';
+import { findGuide, guideDate, guideProjectId, guideProjectName, guideTrips, guideTimeline } from '@/views/AgentWork/guideScenarios';
 import { monitoringProject, monitoringOrder } from '@/views/Phase1/presentation';
 import { dateText, sessionNames, stateNames, eventNames } from '@/views/Phase1/catalog';
 import { restoreMonitoringProjects } from '@/views/Phase1/persistence';
@@ -44,6 +49,7 @@ import shipperMonitorSource from '@/views/AgentWork/shipperMonitorOrders.json';
 
 const predictionProjectId = 'PSC-PREDICTION';
 const shipperScenarioProjects: Project[] = [
+  { id: guideProjectId, name: guideProjectName, quickPrompts: [], total: 2, risk: 1, sync: '场站运输台账' },
   { id: predictionProjectId, name: '真实性装卸货地预测', quickPrompts: ['预测真实装货地和卸货地', '根据客户标签预测装卸货地点', '核对上传运单的装卸货地点'] },
   { id: 'PSC1', name: '运单真实性甄别', quickPrompts: ['核验上传历史运单的运单真实性，检查出厂与完成时车辆是否在对应地点', '根据上传订单明细核验运单真实性，汇总区域事件和位置证据并导出 Excel'] },
   { id: 'PSC2', name: '货主运单监控（司机付费）', quickPrompts: ['监控司机进场与离场时间', '核验车辆是否进入货主场站', '汇总司机进场监控结果'] },
@@ -566,13 +572,6 @@ function extractSpreadsheetRequest(raw: string) {
 interface RegionVisitRequest {
   region: string;
   sourceFileName: string;
-}
-
-const regionVisitQueryPattern =
-  /(?:是否|有没有|有无)(?:曾经)?(?:到过|到达过|去过|经过|途经|路过|驶入过|进入过)([\u4e00-\u9fa5]{2,12}(?:省|市|区|县|自治州|地区))/;
-
-function extractRegionVisitRegion(raw: string) {
-  return raw.match(regionVisitQueryPattern)?.[1] ?? '';
 }
 
 function extractRegionVisitRequest(raw: string): RegionVisitRequest | null {
@@ -1543,6 +1542,7 @@ export const agentWorkData = defineStore('agentWork', {
       return conversationBusy(state.agentMessages);
     },
     currentProjectOrders(state): Order[] {
+      if (state.currentProjectId === guideProjectId) return useGuideLedger().orders;
       const monitoring = usePhase1();
       const tracked = monitoring.orders.filter(order => order.projectId === state.currentProjectId);
       const records = tracked.map(order => monitoringOrder(order, monitoring.anomalies.filter(item => item.orderId === order.id && item.status === 'active').map(item => item.kind), monitoring.events.some(event => event.orderId === order.id && event.assessment?.verdict === 'reasonable')));
@@ -1590,6 +1590,8 @@ export const agentWorkData = defineStore('agentWork', {
       return ['overview', 'risk', 'orderEvent', 'externalH5', 'analysisReport'].includes(state.rightPanel) ? state.rightPanel : 'overview';
     },
     timelineEvents(state): TimelineEvent[] {
+      const trip = guideTrips.find(t => t.id === state.selectedOrder.id && state.currentProjectId === guideProjectId);
+      if (trip) return guideTimeline(trip).filter(e => !state.detailOnlyAbnormal || e.type !== 'normal');
       const monitoring = usePhase1();
       if (monitoring.orders.some(order => order.id === state.selectedOrder.id)) {
         const events: TimelineEvent[] = monitoring.events.filter(event => event.orderId === state.selectedOrder.id).flatMap((event, index): TimelineEvent[] => {
@@ -2060,6 +2062,7 @@ export const agentWorkData = defineStore('agentWork', {
         this.ordersStartDate = '2026-08-01';
         this.ordersEndDate = '2026-08-01';
       }
+      if (p.id === guideProjectId) { this.ordersStartDate = guideDate; this.ordersEndDate = guideDate; this.ordersKeyword = ''; }
       this.agentInput = '';
       this.rightPanel = 'overview';
       ElMessage.success(`已切换到：${p.name}`);
@@ -2224,6 +2227,28 @@ export const agentWorkData = defineStore('agentWork', {
       if (submission) {
         this.agentMessages = next;
         submission.accepted();
+      }
+      const promptText = raw.split('\n附件：')[0]!.replace(/^附件：.*$/s, '').trim();
+      const prior = previousContext.at(-1)?.guideContext;
+      const follow = !submission?.summonedSkill && guideFollowup(promptText, prior, sourceFiles) ? prior : undefined;
+      const called = submission?.summonedSkill ?? follow?.skill;
+      if (called && findGuide(called.id)) {
+        const ops = useAgentOpsStore();
+        ops.refreshSummonConfig();
+        if (!ops.summonSkills(called.customerId, called.agentId).some(s => s.id === called.id)) {
+          this.agentMessages = [...next, { role: 'agent', text: '该技能已不可用，请重新选择技能。' }]; return;
+        }
+        this.agentMessages = [...next, { role: 'agent', text: '正在匹配输入与运输记录…', status: '处理中' }];
+        const marker = this.agentMessages.at(-1);
+        const current = () => this.agentMessages.at(-1) === marker;
+        try {
+          const response = await guideExchange({ skill: called, text: promptText, files: sourceFiles, attachments, context: follow, current,
+            projectId: this.workspaceMode === 'project' ? this.currentProjectId : '', conversationId: this.workspaceMode === 'conversation' ? this.currentConversationId : undefined });
+          if (current()) this.agentMessages = [...next, response];
+        } catch (error) {
+          if (current()) this.agentMessages = [...next, { role: 'agent', text: '未完成处理：' + (error as Error).message }];
+        }
+        this.agentInput = ''; this.persistActiveConversationMessages(); return;
       }
       if(!attachments.length){
         const response=projectOrderConversation(raw,this.workspaceMode==='project'?this.currentProjectId:'',this.workspaceMode==='project'?this.currentProjectOrders:[],previousContext);

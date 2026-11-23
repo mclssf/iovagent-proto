@@ -4,6 +4,8 @@ import type { DailyTask, TaskAgentDecision, TaskAttachment, TaskResultFile, Task
 import { excelParsingSkill, hasHistoryTaskIntent, ordinaryTaskLimits, resolveOrdinarySkill } from './ordinaryTaskSkills';
 import { extractTaskPlates, parseWaybillTimestamp, recordValue } from './taskInput';
 import { evidenceInputError, hasWaybillEvidenceIntent, waybillEvidenceSteps } from './waybillEvidence';
+import { findGuide, inspectTrip, lookupGuide } from './guideScenarios';
+import { useGuideLedger } from '@/pinia/guideLedger';
 
 export { extractTaskPlates, parseWaybillTimestamp } from './taskInput';
 
@@ -90,6 +92,7 @@ export const exceedsTaskThreshold = (files: TaskAttachment[], prompt = '') => ta
 export const ordinaryStepDelay = () => 4000 + Math.round(Math.random() * 2000);
 
 export function taskRecords(task: DailyTask): Record<string, string>[] {
+  if (task.guideInputs?.length) return task.guideInputs;
   const records = (task.attachments ?? []).flatMap(file => file.records ?? []);
   return records.length ? records : extractTaskPlates(task.prompt).map(plate => ({ 车牌号: plate }));
 }
@@ -114,10 +117,15 @@ export function planWorkbenchExcelTask(files: TaskAttachment[], now = Date.now()
 }
 
 export const isTaskDetailFile = (file: TaskResultFile) => file.detail || /_记录\d+_轨迹\.csv$/i.test(file.name);
-export const visibleTaskFiles = (files: TaskResultFile[] = []) => files.filter(file => /\.zip$/i.test(file.name));
+export const visibleTaskFiles = (files: TaskResultFile[] = []) => files.filter(file => /\.zip$/i.test(file.name) || file.standalone && /\.xlsx$/i.test(file.name));
 
 export function taskRecordError(task: DailyTask, record: Record<string, string>, index: number) {
-  if (task.scenario === 'waybill-evidence') return evidenceInputError(record);
+  if (task.scenario === 'waybill-evidence') return evidenceInputError(record, !!task.guideSkillId);
+  if (task.guideSkillId) {
+    if (!lookupGuide(record).length) return '运单号或车牌缺失、不匹配或无运输记录';
+    if (task.guideSkillId === 'guide-photo' && !record['图片检查']) return record['图片信息'] || '缺少对应的图片';
+    return '';
+  }
   if (!hasHistoryTaskIntent(task.prompt) && !task.agentDecision?.historicalIndexes.includes(index)) return '';
   const plate = recordValue(record, ['车牌号', '车牌', '车辆号', '车辆牌照', 'plate']);
   return extractTaskPlates(plate).length ? '' : '缺少有效车牌号';
@@ -141,12 +149,18 @@ export function makeOrdinaryRun(task: DailyTask): TaskRun {
   const standardSkill = archive && task.agentDecision && task.agentDecision.historicalIndexes.length < rows ? resolveOrdinarySkill(task.prompt, files.some(isTaskExcel)) : null;
   const skills = [skill, standardSkill].filter((item): item is NonNullable<typeof skill> => Boolean(item));
   const jobId = `JOB-${crypto.randomUUID().slice(0, 8).toUpperCase()}`;
+  const guide = findGuide(task.guideSkillId);
   return {
     id: `run-${crypto.randomUUID()}`, startedAt: now, source: task.origin === 'workbench' ? 'workbench' : 'manual',
     status: 'ready', prompt: task.prompt, toolJobId: jobId, activeStep: 0, nextStepAt: now,
-    result: '', executionMode: skill ? 'skill' : 'prompt', skills: skills.map(item => ({ ...item, status: 'loading' })),
+    result: '', executionMode: guide || skill ? 'skill' : 'prompt', skills: guide ? [{ ...guide, version: '1.0', status: 'loading' }] : skills.map(item => ({ ...item, status: 'loading' })),
     progress: rows ? { total: rows, processed: 0, success: 0, failed: 0 } : undefined,
-    steps: task.scenario === 'waybill-evidence' ? waybillEvidenceSteps(rows, task.enterpriseName ?? '当前企业') : [
+    steps: task.scenario === 'waybill-evidence' ? waybillEvidenceSteps(rows, task.enterpriseName ?? '当前企业') : guide ? [
+      { title: '读取输入', text: `读取 ${rows} 条记录，保留原始行号及运输标识。` },
+      { title: '匹配运单与车辆', text: '分别核对运单号、车牌和场站作业记录。' },
+      { title: '逐行核查', text: guide.description, tool: guide.name },
+      { title: '归档结果', text: '按票保留结论、依据及跟进事项，将明细表同步至下载。' },
+    ] : [
       { title: '解析任务', text: `已保存原始需求${files.length ? `及附件 ${files.map(file => file.name).join('、')}` : ''}，识别一次性任务目标。` },
       { title: '校验执行输入', text: `${rows ? `读取已保存的 ${rows} 条记录，保留原始行号并校验所需字段。` : '校验提示词中的查询对象和输出要求。'}${task.agentDecision ? `沿用工作台 Agent 的处理方案：${task.agentDecision.historicalIndexes.length ? `${task.agentDecision.historicalIndexes.length} 条超过 180 天的运单调用历史业务质量分析接口，其他记录使用常规能力。` : '超过 100 条运单，按普通批量任务处理，不调用历史业务质量分析接口。'}` : ''}` },
       { title: skill ? '加载执行能力' : '规划提示词执行', text: skill ? `${skill.name} v${skill.version}：${skill.description}${archive ? '按已确定的处理方案调用历史业务质量分析接口（演示）。' : ''}${tool && !files.length ? `查询日期 ${tool.date}。` : ''}` : '依据原始需求整理可用信息，生成一次性的处理结果。', tool: archive ? '历史业务质量分析接口' : skill?.name },
@@ -186,6 +200,30 @@ export function createTaskResultPackage(name: string, files: TaskResultFile[]): 
 export function ordinaryTaskResult(task: DailyTask, run: TaskRun, stopped = false): { text: string; files: TaskResultFile[] } {
   const records = taskRecords(task);
   const processed = stopped ? run.progress?.processed ?? 0 : records.length;
+  if (task.guideSkillId && task.guideSkillId !== 'guide-evidence') {
+    const skill = task.guideSkillId;
+    const output: Record<string, string | number>[] = [];
+    const generated: string[] = [];
+    let failed = 0;
+    records.forEach((row, i) => {
+      const raw = Object.fromEntries(Object.entries(row).filter(([key]) => !key.startsWith('__source')));
+      const source = { ...raw, 源文件: row.__sourceFile ?? '', 原始行号: row.__sourceRow ?? String(i + 1) };
+      const error = taskRecordError(task, row, i);
+      if (i >= processed || error) {
+        if (i < processed) failed++;
+        output.push({ ...source, 执行状态: i >= processed ? '未执行' : '失败', 原因: i >= processed ? '任务已停止' : error });
+        return;
+      }
+      for (const t of lookupGuide(row)) {
+        const f = inspectTrip(skill, t, row, task.prompt);
+        if (skill === 'guide-shuttle' && t.shuttle) generated.push(t.id);
+        output.push({ ...source, 运单号: t.id, 车牌号: t.plate, 执行状态: '完成', 业务结论: f.conclusion, 依据: f.facts, 建议: f.action, ...f.columns });
+      }
+    });
+    if (generated.length) useGuideLedger().register(generated);
+    const file = excelResult(task.name + '_核查明细.xlsx', output);
+    return { text: `输入 ${records.length} 条，已处理 ${processed} 条，其中成功 ${processed - failed} 条、失败 ${failed} 条。结果表共 ${output.length} 行，保留原始行号，对同车多趟按票展开。`, files: [{ ...file, standalone: true }] };
+  }
   const files: TaskResultFile[] = [];
   const report: Record<string, string | number>[] = [];
   const filled: Record<string, string | number>[] = [];

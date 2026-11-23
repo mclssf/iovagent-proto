@@ -1,4 +1,5 @@
 import { migrateCapacitySkillIds } from './capacitySkills';
+import { guideSkills } from '@/views/AgentWork/guideScenarios';
 import { mailboxSkill } from './projectMailboxes';
 import { vehiclePredictionSkill } from '@/views/AgentWork/vehiclePredictionSkill';
 import { defineStore } from 'pinia';
@@ -158,6 +159,7 @@ const skillSeed: Array<{
   { id: 'capacity-private-fleet', name: '私有运力池', category: '运力与货源' },
   { id: mailboxSkill.id, name: mailboxSkill.name, category: '运营助手' },
   { id: vehiclePredictionSkill.id, name: vehiclePredictionSkill.name, category: '在途专家' },
+  ...guideSkills.map(s => ({ id: s.id, name: s.name, category: '在途专家' as const })),
 ];
 
 const skillDescriptions: Record<string, string> = {
@@ -195,9 +197,9 @@ function createSkills(): ManagedSkill[] {
   };
   return skillSeed.map((skill, index) => ({
     ...skill,
-    recommendedPrompt: prompts[skill.id] ?? '',
+    recommendedPrompt: guideSkills.find(s => s.id === skill.id)?.recommendedPrompt ?? prompts[skill.id] ?? '',
     content: skill.id === vehiclePredictionSkill.id ? vehiclePredictionSkill.instructions : `# ${skill.name}\n\n## 适用范围\n${skill.category}\n\n## 执行指引\n根据用户任务识别所需数据和业务约束，调用 ${skill.name} 完成处理，并返回结构化结果与必要的执行说明。`,
-    description: skillDescriptions[skill.id] ?? '',
+    description: guideSkills.find(s => s.id === skill.id)?.description ?? skillDescriptions[skill.id] ?? '',
     enabled: true,
     fileName: `${skill.id}.skill.md`,
     privateToolIds: [...(privateToolSeeds[skill.id] ?? [])],
@@ -361,8 +363,8 @@ export const useAgentOpsStore = defineStore('agentOps', () => {
   const configuredAgentIds = ref<string[]>([]);
   const agentDefaults = ref<Record<string, AgentCapabilities>>({
     'data-employee-agent': { skillIds: ['spreadsheet-waybill'], toolIds: [] },
-    'general-chat-agent': { skillIds: ['operations-logistics-sheet', 'operations-license-recognition'], toolIds: ['datetime-format'] },
-    'project-chat-agent': { skillIds: ['route-risk-expert', 'gps-trace-expert', 'delivery-sla-expert'], toolIds: [] },
+    'general-chat-agent': { skillIds: ['operations-logistics-sheet', 'operations-license-recognition', ...guideSkills.map(s => s.id)], toolIds: ['datetime-format'] },
+    'project-chat-agent': { skillIds: ['route-risk-expert', 'gps-trace-expert', 'delivery-sla-expert', ...guideSkills.map(s => s.id)], toolIds: [] },
   });
   const customers = ref(createActivatedCustomers().map(customer => ({ ...customer,
     agentConfigs: agents.value.map(agent => {

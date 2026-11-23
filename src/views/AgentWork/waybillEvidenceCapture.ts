@@ -1,6 +1,7 @@
 import { convertGpsCoordinates, loadAMap, searchDrivingRoute } from '@/utils/amap';
 import type { AMapCoordinate } from '@/utils/amap';
 import { evidenceTime, evidenceTimes } from './waybillEvidence';
+import { guideDate } from './guideScenarios';
 import type { EvidenceEndpoint, EvidenceInput, EvidenceTrip } from './waybillEvidence';
 import { captureTransportMap, mountTransportMapWatermark } from './transportMapWatermark';
 
@@ -77,12 +78,15 @@ export async function createEvidenceRenderer(signal: AbortSignal): Promise<Evide
       watermark = undefined;
       const knownLoading = await coordinate(input.loading, input.gps);
       const knownUnloading = await coordinate(input.unloading, input.gps);
-      const candidate = inferredSite((knownLoading ?? knownUnloading)!, index);
+      const t = input.guideTrip;
+      const site = t && (knownLoading ? t.destination : t.origin);
+      const candidate = site ? { poi: site.name, coordinate: [site.lon, site.lat] as AMapCoordinate } : inferredSite((knownLoading ?? knownUnloading)!, index);
       const loading = knownLoading ?? candidate.coordinate;
       const unloading = knownUnloading ?? candidate.coordinate;
       const route = await bounded(searchDrivingRoute(amap, [loading, unloading]), signal);
       if (route.distance <= 0 || route.duration <= 0) throw new Error('道路路线距离或耗时无效，未生成留证图片');
-      const times = evidenceTimes(input, route.duration, index);
+      const times = evidenceTimes(t ? { ...input, loading: { ...input.loading, time: input.loading.time ?? Date.parse(guideDate + 'T' + t.points[0]!.from + ':00+08:00') },
+        unloading: { ...input.unloading, time: input.unloading.time ?? Date.parse(guideDate + 'T' + (t.points.at(-1)!.to ?? t.points.at(-1)!.from) + ':00+08:00') } } : input, route.duration, index);
       const trip: EvidenceTrip = {
         order: input.order, plate: input.plate, distance: route.distance, duration: route.duration, path: route.path,
         loading: { poi: input.loading.poi || (knownLoading ? `已知装货坐标 ${loading.join(', ')}` : candidate.poi), coordinate: loading, time: times.loading, inferred: !knownLoading, timeInferred: input.loading.time === null },

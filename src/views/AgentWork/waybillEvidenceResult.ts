@@ -27,7 +27,7 @@ export async function createWaybillEvidenceResult(
   let setupError = '';
   let processed = 0;
   try {
-    if (!signal.aborted && records.some(record => !evidenceInputError(record))) {
+    if (!signal.aborted && records.some(record => !evidenceInputError(record, !!task.guideSkillId))) {
       try { renderer = await factory(signal); } catch (error) { setupError = (error as Error).message; }
     }
     for (const [index, record] of records.entries()) {
@@ -43,7 +43,7 @@ export async function createWaybillEvidenceResult(
       if (signal.aborted) continue;
       onProgress(`正在生成第 ${index + 1} / ${records.length} 条运单的水印轨迹截图；已生成 ${images.length} 张。`);
       try {
-        const input = parseEvidenceInput(record);
+        const input = parseEvidenceInput(record, !!task.guideSkillId);
         if (!renderer) throw new Error(setupError || '地图截图服务不可用');
         const { trip, bytes } = await renderer.render(input, index, enterprise, run.id);
         if (signal.aborted) { values.执行结果 = '未执行：任务已停止，当前截图未归档'; continue; }

@@ -18,6 +18,7 @@ import { badgeToneClass } from '../utils';
 import { detailEventConclusion, detailEventDuration, detailEventSupplement, detailRiskTone } from '../orderDetailPresentation';
 import { evidenceEnterpriseName } from '../waybillEvidence';
 import { mountTransportMapWatermark } from '../transportMapWatermark';
+import { guideDate, guideProjectId, guideTrips } from '../guideScenarios';
 
 const store = agentWorkData();
 const route = useRoute();
@@ -29,6 +30,7 @@ watch(() => [route.query.projectId, route.query.orderId], ([projectId, orderId])
   if (record) store.setSelectedOrder(record);
 }, { immediate: true });
 const monitoredOrder = monitoring.orders.find(item => item.id === store.selectedOrder.id && item.projectId === store.currentProjectId);
+const guideTrip = store.currentProjectId === guideProjectId ? guideTrips.find(t => t.id === store.selectedOrder.id) : undefined;
 const positionedEvents = monitoredOrder ? monitoring.events.flatMap(event => {
   if (event.projectId !== monitoredOrder.projectId || event.orderId !== monitoredOrder.id) return [];
   const point = monitorEventPoint(monitoredOrder, event);
@@ -57,7 +59,7 @@ const routeDistance = ref('--');
 const routeDuration = ref('--');
 const watermarkEnabled = ref(false);
 type EventKey = string | number;
-const selectedEventId = ref<EventKey | null>(null);
+const selectedEventId = ref<EventKey | null>(guideTrip?.points[Number(route.query.event) - 1] ? Number(route.query.event) : null);
 const expandedEvents = ref<EventKey[]>([]);
 const eventList = ref<HTMLElement>();
 const order = computed(() => store.currentDetailOrder);
@@ -89,7 +91,7 @@ let resizeFrame = 0;
 const mapMarkers: { content: HTMLElement; open: () => void; marker: AMap.Marker; layer?: MonitorLayer }[] = [];
 const eventMarkerIndexes = new Map<EventKey, number>(monitoredOrder
   ? positionedEvents.map(({ event }, index): [EventKey, number] => ['event:' + event.id, index + 1])
-  : [[1, 0], [2, 0], [3, 1], [4, 2], [5, 3], [6, 5]]);
+  : guideTrip ? guideTrip.points.map((_, i): [number, number] => [i + 1, i + 1]) : [[1, 0], [2, 0], [3, 1], [4, 2], [5, 3], [6, 5]]);
 
 function fitMap() {
   if (!disposed && mapInstance && (routeOverlay || fenceOverlays.length)) mapInstance.setFitView([...plannedOverlays, ...actualOverlays, ...fenceOverlays], true, watermark?.padding() ?? (monitoredOrder ? [90, 130, 90, 130] : [60, 60, 60, 60]));
@@ -104,7 +106,7 @@ function syncWatermark() {
     watermark = mountTransportMapWatermark(mapInstance, {
       enterprise: evidenceEnterpriseName(), plate: order.plate, order: order.id,
       loading: { poi: mapPoints[0]!.name.replace('装货地 · ', ''), coordinate: markerCoordinates[0], time: monitoredOrder ? dateText(monitoredOrder.enteredAt) : order.startTime },
-      unloading: { poi: mapPoints[mapPoints.length - 1]!.name.replace('卸货地 · ', ''), coordinate: markerCoordinates[mapPoints.length - 1], time: monitoredOrder ? dateText(monitoredOrder.completedAt ?? monitoredOrder.arrivedAt) : '待卸货' },
+      unloading: { poi: mapPoints[mapPoints.length - 1]!.name.replace('卸货地 · ', ''), coordinate: markerCoordinates[mapPoints.length - 1], time: monitoredOrder ? dateText(monitoredOrder.completedAt ?? monitoredOrder.arrivedAt) : guideTrip?.points.at(-1)?.kind === 'unload' ? order.updated : '待卸货' },
       distance: routeDistance.value, period: monitoredOrder ? `${dateText(monitoredOrder.enteredAt)} 至 ${monitoredOrder.completedAt ? dateText(monitoredOrder.completedAt) : '今'}` : `${order.startTime} 至今`,
     });
   }
@@ -202,7 +204,7 @@ const baseMapPoints: MapPoint[] = [
   },
 ];
 
-const routeWaypoints: GpsCoordinate[] = monitoredOrder ? [[monitoredOrder.origin.lat, monitoredOrder.origin.lon], [monitoredOrder.destination.lat, monitoredOrder.destination.lon]] : baseWaypoints;
+const routeWaypoints: GpsCoordinate[] = monitoredOrder ? [[monitoredOrder.origin.lat, monitoredOrder.origin.lon], [monitoredOrder.destination.lat, monitoredOrder.destination.lon]] : guideTrip ? [[guideTrip.origin.lat, guideTrip.origin.lon], [guideTrip.destination.lat, guideTrip.destination.lon]] : baseWaypoints;
 const actualTrack = monitoredOrder?.network?.status === 'unregistered' ? [] : (monitoredOrder?.actualTrack ?? [])
   .filter(point => point.at <= monitoring.now).sort((a, b) => a.at - b.at);
 const lastPoint = actualTrack[actualTrack.length - 1];
@@ -215,6 +217,10 @@ const mapPoints: MapPoint[] = monitoredOrder ? [
   })),
   ...(lastPoint ? [{ name: '当前位置', coord: [lastPoint.lat, lastPoint.lon] as GpsCoordinate, desc: `定位时间：${dateText(lastPoint.at)}`, tone: 'current' as const }] : []),
   { name: `卸货地 · ${monitoredOrder.destination.name}`, coord: routeWaypoints[routeWaypoints.length - 1]!, desc: '运单卸货地点', tone: 'end' },
+] : guideTrip ? [
+  { name: '装货地 · ' + guideTrip.origin.name, coord: routeWaypoints[0]!, desc: guideTrip.id, tone: 'start' },
+  ...guideTrip.points.map((p): MapPoint => ({ name: p.site.name, coord: [p.site.lat, p.site.lon], desc: guideDate + ' ' + p.from + ' ' + p.text, tone: ['jump','stop','offline'].includes(p.kind) ? 'warn' : 'current' })),
+  { name: '卸货地 · ' + guideTrip.destination.name, coord: routeWaypoints[1]!, desc: '计划收货地点', tone: 'end' },
 ] : baseMapPoints;
 
 function eventTone(event: Pick<TimelineEvent, 'agentVerdict' | 'agentTone'>) {
@@ -356,18 +362,18 @@ async function initMap() {
 
   try {
     const amap = await loadAMap(['AMap.Driving', 'AMap.ToolBar']);
-    const convert = (coordinates: AMapCoordinate[]) => monitoredOrder?.origin.coordinateSystem === 'gcj02' ? Promise.resolve(coordinates) : convertGpsCoordinates(amap, coordinates);
+    const convert = (coordinates: AMapCoordinate[]) => guideTrip || monitoredOrder?.origin.coordinateSystem === 'gcj02' ? Promise.resolve(coordinates) : convertGpsCoordinates(amap, coordinates);
     const convertedWaypoints = await convert([routeWaypoints[0]!, routeWaypoints[routeWaypoints.length - 1]!].map(([lat, lng]) => [lng, lat]));
     const actualCoordinates: AMapCoordinate[] = monitoredOrder
       ? actualTrack.map(point => [point.lon, point.lat])
-      : baseFallback.slice(0, -1).map(([lat, lng]) => [lng, lat]);
+      : guideTrip ? [] : baseFallback.slice(0, -1).map(([lat, lng]) => [lng, lat]);
     const convertedActual = actualCoordinates.length > 1 ? await convert(actualCoordinates) : [];
     const convertedMarkers = await convert(mapPoints.map(({ coord: [lat, lng] }) => [lng, lat]));
     if (disposed || !mapRef.value) return;
     markerCoordinates = convertedMarkers;
 
     mapInstance = new amap.Map(mapRef.value, {
-      center: monitoredOrder ? convertedWaypoints[0] : [117.15, 27.35],
+      center: monitoredOrder || guideTrip ? convertedWaypoints[0] : [117.15, 27.35],
       mapStyle: 'amap://styles/macaron',
       viewMode: '2D',
       zoom: 6,
@@ -393,8 +399,8 @@ async function initMap() {
       mapReady.value = true;
     } catch {
       if (disposed) return;
-      routeDistance.value = monitoredOrder ? '--' : '约 1,650 km';
-      routeDuration.value = monitoredOrder ? '--' : '约 22h';
+      routeDistance.value = monitoredOrder || guideTrip ? '--' : '约 1,650 km';
+      routeDuration.value = monitoredOrder || guideTrip ? '--' : '约 22h';
       mapError.value = '道路路线暂不可用，请刷新页面重试';
 
     }

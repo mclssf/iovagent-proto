@@ -24,6 +24,7 @@ import ProjectMonitors from '../component/projectMonitors.comp.vue';
 import ConversationBoundary from '../component/conversationBoundary.comp.vue';
 import PredictionReport from '../component/predictionReport.comp.vue';
 import { hasVehiclePredictionIntent } from '../vehiclePredictionSkill';
+import { findGuide, guideProjectId } from '../guideScenarios';
 import '../agentWorkspace.css';
 
 const store = agentWorkData();
@@ -48,6 +49,13 @@ const draftTip = computed(() => composer.draft.automatic ? '已为你填入推�
   : composer.draft.template ? '已保留你的输入，可继续修改，或使用该技能的推荐提示词。'
   : composer.draft.text ? '已保留你的输入，可继续修改后发送。' : '请描述希望该技能完成的任务，可补充车牌、时间、地点或上传文件。');
 const { goPage, createDownload, sendAgent } = useAgentWorkNav();
+function openGuideMap(order: string, event: number) {
+  const project = store.projects.find(p => p.id === guideProjectId);
+  if (!project) { ElMessage.warning('运单所属项目不存在'); return; }
+  if (store.workspaceMode !== 'project' || store.currentProjectId !== project.id) store.switchProject(project);
+  store.detailOnlyAbnormal = false;
+  goPage('detail', { projectId: project.id, orderId: order, event: String(event) });
+}
 const agentMessageListRef = ref<HTMLDivElement | null>(null);
 const agentMessageContentRef = ref<HTMLDivElement | null>(null);
 const chatColumnRef = ref<HTMLDivElement | null>(null);
@@ -384,7 +392,7 @@ async function sendComposerMessage() {
   isFollowingLatest.value = true;
   readingAttachments.value = true;
   try {
-    const deferred = text && !hasVehiclePredictionIntent(text) && isDeferredWaybillImportRequest(text, files);
+    const deferred = text && !findGuide(skillId) && !store.activeChatContext.at(-1)?.guideContext?.waiting && !hasVehiclePredictionIntent(text) && isDeferredWaybillImportRequest(text, files);
     const excel = !deferred && files.some(isTaskExcel) ? await readTaskAttachments(files.filter(isTaskExcel)) : [];
     if (generation !== attachmentReadGeneration || key !== composer.key) return;
     const submission: ComposerSubmission = {
@@ -987,6 +995,10 @@ onBeforeUnmount(() => {
               <span class="whitespace-pre-line">{{ m.role==='user' && /^(确认更新|取消更新) UPDATE-/.test(m.text) ? (m.text.startsWith('确认')?'确认更新运单状态':'取消本次状态更新') : m.text }}</span>
             </template>
               <div v-if="m.orderAction" class="mt-3 flex items-center gap-3 border-t border-slate-200 pt-3"><template v-if="m.orderAction.status==='pending'"><button class="rounded-md bg-slate-900 px-3 py-1.5 text-xs text-white" @click="sendAgent('确认更新 '+m.orderAction.id)">确认更新</button><button class="rounded-md border border-slate-300 px-3 py-1.5 text-xs" @click="sendAgent('取消更新 '+m.orderAction.id)">取消</button></template><span v-else class="text-xs text-slate-500">{{ {done:'已保存',canceled:'已取消',failed:'未保存'}[m.orderAction.status] }}</span></div>
+            <img v-if="m.guidePhoto" :src="m.guidePhoto.url" :alt="m.guidePhoto.name" class="mt-2 max-h-32 max-w-full rounded object-contain" />
+            <button v-for="map in m.guideMaps" :key="map.order" type="button" class="agent-ordinary-task" @click="openGuideMap(map.order, map.event)">
+              <Icon :svg="strokeIconPaths.map" :size="18" /><span><strong>在运单地图查看</strong><small>{{ map.label }}</small></span><Icon :svg="strokeIconPaths.chevron" :size="15" />
+            </button>
             <button v-if="m.dailyTaskId" type="button" class="agent-ordinary-task" :disabled="!ordinaryTask(m.dailyTaskId)" :aria-label="`查看普通任务 ${ordinaryTask(m.dailyTaskId)?.name ?? '已删除'}`" @click="openOrdinaryTask(m.dailyTaskId)">
               <Icon :svg="strokeIconPaths.file" :size="18" />
               <span><strong>{{ ordinaryTask(m.dailyTaskId)?.name ?? '任务已删除' }}</strong><small>普通任务 · {{ ordinaryTask(m.dailyTaskId)?.runs[0] ? taskRunLabels[ordinaryTask(m.dailyTaskId)!.runs[0]!.status] : '不可用' }}</small></span>
@@ -1067,6 +1079,8 @@ onBeforeUnmount(() => {
             />
             <p v-if="composer.selected || composer.draft.notice" class="skill-input-tip" role="status">
               {{ composer.draft.notice || draftTip }}
+              <a v-if="composer.selected?.id === 'guide-photo'" class="text-blue-700 underline" href="/demo/loading-photo-register.xlsx" download="装卸图片关联表.xlsx">下载图片关联表</a>
+              <a v-else-if="findGuide(composer.selected?.id)" class="text-blue-700 underline" href="/demo/east-dispatch-input.xlsx" download="运输核查输入表.xlsx">下载输入样表</a>
               <button v-if="composer.selected && !composer.draft.automatic && composer.draft.template" type="button" @click="previewPrompt = true">查看推荐提示词</button>
             </p>
             <div class="mt-1 flex items-center justify-between gap-2">

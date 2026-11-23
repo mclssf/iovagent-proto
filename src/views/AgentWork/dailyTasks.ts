@@ -68,6 +68,8 @@ export interface WaybillEvent {
 }
 
 export interface DailyTaskDraft {
+  guideInputs?: Record<string, string>[];
+  guideSkillId?: import('./guideScenarios').GuideId;
   name: string;
   trigger: 'once';
   prompt: string;
@@ -85,6 +87,7 @@ export interface TaskAttachment {
 }
 
 export interface TaskResultFile {
+  standalone?: boolean;
   name: string;
   mimeType: string;
   content: string;

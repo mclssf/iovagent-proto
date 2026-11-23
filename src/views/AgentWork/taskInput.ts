@@ -1,5 +1,8 @@
 const DAY = 86400000;
 
+export const extractRegionVisitRegion = (text: string) =>
+  text.match(/(?:是否|有没有|有无)(?:曾经)?(?:到过|到达过|去过|经过|途经|路过|驶入过|进入过)([\u4e00-\u9fa5]{2,12}?(?:省|市|区|县|自治州|地区))/)?.[1] ?? '';
+
 export function recordValue(record: Record<string, string>, fields: string[]) {
   for (const field of fields) {
     const value = Object.entries(record).find(([key]) => key.replace(/\s/g, '').toLowerCase() === field.toLowerCase())?.[1];

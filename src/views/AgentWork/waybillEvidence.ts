@@ -1,5 +1,6 @@
 import type { AMapCoordinate } from '@/utils/amap';
 import { extractTaskPlates, parseWaybillTimestamp, recordValue } from './taskInput';
+import { guideDate, lookupGuide, type GuideTrip } from './guideScenarios';
 
 export const evidenceDemoLimit = 50;
 export const evidenceExamplePrompt = '请根据表格中已知的真实卸货地或装货地，推测并完善每条运单缺失的装卸货地点和时间，保留已知信息，逐单生成带企业水印的轨迹截图留证，并打包为 ZIP。';
@@ -26,6 +27,7 @@ export interface EvidenceEndpoint {
   time: number | null;
 }
 export interface EvidenceInput {
+  guideTrip?: GuideTrip;
   order: string;
   plate: string;
   loading: EvidenceEndpoint;
@@ -62,7 +64,19 @@ function endpoint(record: Record<string, string>, side: '装货' | '卸货'): Ev
   return { poi, coordinate, time };
 }
 
-export function parseEvidenceInput(record: Record<string, string>): EvidenceInput {
+export function parseEvidenceInput(record: Record<string, string>, guided = false): EvidenceInput {
+  if (guided) {
+    const matches = lookupGuide(record);
+    if (matches.length !== 1) throw new Error(matches.length ? '同车多趟，请指定运单号留证' : '未找到与输入匹配的运输记录');
+    const t = matches[0]!, last = t.points.at(-1)!;
+    if (last.kind !== 'unload' || last.site !== t.destination) throw new Error('末站尚无卸货记录，不能出具完整区间截图');
+    const hasAnchor = ['装货','卸货'].some(side => {
+      const p = endpoint(record, side as '装货' | '卸货'); return !!(p.poi || p.coordinate);
+    });
+    const parsed = parseEvidenceInput({ ...(!hasAnchor ? { 卸货地点: t.destination.name, 卸货地经纬度: t.destination.lon + ',' + t.destination.lat } : {}),
+      ...record, 运单号: t.id, 车牌号: t.plate, 运单开始时间: record['运单开始时间'] || guideDate + ' ' + t.points[0]!.from });
+    return { ...parsed, guideTrip: t };
+  }
   const plate = recordValue(record, evidenceFieldAliases.车牌号).toUpperCase();
   if (extractTaskPlates(plate)[0] !== plate) throw new Error('缺少有效车牌号');
   const loading = endpoint(record, '装货');
@@ -76,8 +90,8 @@ export function parseEvidenceInput(record: Record<string, string>): EvidenceInpu
   return { plate, loading, unloading, windowStart, order: recordValue(record, evidenceFieldAliases.运单号) || '未提供运单号', gps: /wgs.?84|gps/i.test(recordValue(record, ['坐标系', '坐标类型'])) };
 }
 
-export function evidenceInputError(record: Record<string, string>) {
-  try { parseEvidenceInput(record); return ''; } catch (error) { return (error as Error).message; }
+export function evidenceInputError(record: Record<string, string>, guided = false) {
+  try { parseEvidenceInput(record, guided); return ''; } catch (error) { return (error as Error).message; }
 }
 
 export function evidenceTime(value: number) {

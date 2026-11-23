@@ -4,6 +4,8 @@ import { useRoute } from 'vue-router';
 import { agentWorkData } from '@/pinia/agentWork';
 import { useAgentDailyTasks } from '@/pinia/agentDailyTasks';
 import { usePhase1 } from '@/pinia/phase1';
+import { useGuideLedger } from '@/pinia/guideLedger';
+import { guideProjectId } from './guideScenarios';
 
 import MenuComp from './component/menu.comp.vue';
 import SkillSummonDialog from './component/skillSummon.dialog.vue';
@@ -22,8 +24,13 @@ const isFullBleedRoute = computed(() => ['agent-work-agent', 'agent-work-long-ta
 const work = agentWorkData();
 const tasks = useAgentDailyTasks();
 const monitoring = usePhase1();
-const monitorDetailKey = computed(() => route.name === 'agent-work-detail' && monitoring.orders.some(order =>
-  order.id === route.query.orderId && order.projectId === route.query.projectId)
+const guideLedger = useGuideLedger();
+watch(() => guideLedger.orders.length, total => {
+  const project = work.projects.find(p => p.id === guideProjectId);
+  if (project) project.total = total;
+}, { immediate: true });
+const monitorDetailKey = computed(() => route.name === 'agent-work-detail' && (route.query.projectId === guideProjectId || monitoring.orders.some(order =>
+  order.id === route.query.orderId && order.projectId === route.query.projectId))
   ? `${route.query.projectId}:${route.query.orderId}` : undefined);
 watch(() => [monitoring.orders.map(order=>`${order.id}:${order.network?.status}`).join('|'), monitoring.anomalies.filter(item => item.status === 'active').length], () => {
   const project = work.projects.find(item => item.id === 'MONITOR-EAST');

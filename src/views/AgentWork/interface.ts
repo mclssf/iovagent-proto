@@ -273,6 +273,9 @@ export interface ComposerSubmission {
   accepted: () => void;
 }
 export interface ChatMessage {
+  guideContext?: { skill: SummonedSkill; rows: Record<string, string>[]; waiting?: boolean; batch?: boolean };
+  guideMaps?: { order: string; event: number; label: string }[];
+  guidePhoto?: { url: string; name: string };
   summonedSkill?: SummonedSkill;
   inputFiles?: ComposerSubmission['files'];
   orderQueryId?: string;

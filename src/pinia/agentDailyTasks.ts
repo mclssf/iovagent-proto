@@ -86,9 +86,9 @@ export const useAgentDailyTasks = defineStore('agentDailyTasks', {
       const invalid = attachments.find(file => file.parseError || !file.records?.length);
       if (invalid) throw new Error(`“${invalid.name}”：${invalid.parseError || '尚未读取有效数据，请重新上传'}`);
       if (hasHistoryTaskIntent(draft.prompt) && !extractTaskPlates(draft.prompt).length && !attachments.length) throw new Error('请补充车牌号，或上传包含车牌号的 Excel');
-      const evidence = hasWaybillEvidenceIntent(draft.prompt);
-      if (evidence && !attachments.length) throw new Error('运单补全留证需要上传包含车牌、已知装卸货地及时间范围的 Excel');
-      if (evidence && attachments.reduce((total, file) => total + (file.records?.length ?? 0), 0) > evidenceDemoLimit) throw new Error(`截图留证每个任务最多 ${evidenceDemoLimit} 条，请拆分 Excel 后提交；不会截断数据`);
+      const evidence = draft.guideSkillId ? draft.guideSkillId === 'guide-evidence' : hasWaybillEvidenceIntent(draft.prompt);
+      if (evidence && !attachments.length && !draft.guideInputs?.length) throw new Error('运单补全留证需要提供运单或上传 Excel');
+      if (evidence && (draft.guideInputs?.length ?? attachments.reduce((total, file) => total + (file.records?.length ?? 0), 0)) > evidenceDemoLimit) throw new Error(`截图留证每个任务最多 ${evidenceDemoLimit} 条，请拆分 Excel 后提交；不会截断数据`);
       if (taskId) throw new Error('原始输入已保存，请通过重新执行创建新的执行记录');
       const task: DailyTask = { ...draft, trigger: 'once', name: draft.name.trim() || ordinaryTaskName(draft.prompt), prompt: draft.prompt.trim(), attachments, id: newId('task'), projectId, projectContext: this.projects[projectId]?.projectContext, createdAt: Date.now(), runs: [], origin: source?.origin ?? 'manual', conversationId: source?.conversationId, agentDecision: source?.agentDecision ? { ...source.agentDecision, historicalIndexes: [...source.agentDecision.historicalIndexes] } : undefined, ...(evidence ? { scenario: 'waybill-evidence' as const, enterpriseName: evidenceEnterpriseName() } : {}) };
       task.runs.push(makeOrdinaryRun(task)); this.tasks.unshift(task); this.persistTasks(); this.tick(); return task.id;
