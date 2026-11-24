@@ -1,0 +1,28 @@
+{
+  "//": "专用类型检查配置。根 tsconfig.json 带 references 且把 vite.config.ts 放进了 include，导致 tsc 报 TS6305 后直接跳过全部语义检查——实测连 `const x: number = 'string'` 都抓不到。本配置去掉 references、排除 vite.config.ts，让 vue-tsc 真正跑语义检查。用法：pnpm exec vue-tsc --noEmit -p tsconfig.typecheck.json",
+  "compilerOptions": {
+    "target": "ES2020",
+    "useDefineForClassFields": true,
+    "module": "ESNext",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "allowJs": false,
+    "skipLibCheck": true,
+    "esModuleInterop": true,
+    "allowSyntheticDefaultImports": true,
+    "strict": false,
+    "forceConsistentCasingInFileNames": true,
+    "moduleResolution": "Bundler",
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "noEmit": true,
+    "jsx": "preserve",
+    "baseUrl": ".",
+    "paths": {
+      "@/*": ["./src/*"],
+      "@packages/icon": ["./src/packages/icon/index.ts"]
+    },
+    "types": ["vite/client"]
+  },
+  "include": ["src/**/*.ts", "src/**/*.tsx", "src/**/*.vue"],
+  "exclude": ["src/**/probe_*.ts", "src/**/probe-*.ts", "src/**/*.d.ts"]
+}

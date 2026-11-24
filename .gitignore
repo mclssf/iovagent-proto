@@ -1,0 +1,23 @@
+node_modules
+dist
+dist.zip
+.DS_Store
+*.tsbuildinfo
+.env.local
+.env.*.local
+docs
+inputs
+outputs
+
+# env 配置不入库
+.env
+.env.analyze
+.env.development
+.env.production
+
+# 中间产物
+*.bak
+PYEOF
+
+# 嵌套项目副本
+平台数据资产/
