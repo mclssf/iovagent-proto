@@ -9,6 +9,7 @@ import CustomerCapabilityPicker from './CustomerCapabilityPicker.vue';
 import { mergeCapabilitySelection } from './capabilitySelection';
 import type { CapabilityOption } from './capabilitySelection';
 import { strokeIconPaths } from '../AgentWork/strokeIconPaths';
+import { findGuide } from '../AgentWork/guideScenarios';
 const config = defineModel<AgentCapabilities>({ required: true });
 const props = defineProps<{ agentId: string; context: string; readOnly?: boolean }>();
 const store = useAgentOpsStore();
@@ -18,6 +19,9 @@ const catalog = computed(() => ({ skills: store.availableSkillsForAgent(props.ag
 const usages = computed(() => resolveAgentTools({ name: props.context, systemPrompt: '', ...config.value }, catalog.value));
 const overlaps = computed(() => usages.value.filter(usage => usage.paths.some(path => path.kind === 'direct') && usage.paths.some(path => path.kind === 'private')));
 const selectedSkills = computed(() => config.value.skillIds.map(id => ({ id, skill: catalog.value.skills.find(skill => skill.id === id) })));
+const scenarioSkills = computed(() => catalog.value.skills.filter(skill => findGuide(skill.id)));
+const otherSelectedSkills = computed(() => selectedSkills.value.filter(({ id, skill }) => !skill || !findGuide(id)));
+const canSummonCount = computed(() => scenarioSkills.value.filter(skill => skill.enabled && config.value.skillIds.includes(skill.id)).length);
 const selectedTools = computed(() => config.value.toolIds.map(id => ({ id, tool: store.tools.find(tool => tool.id === id) })));
 const toolName = (id: string) => store.tools.find(tool => tool.id === id)?.name ?? `已失效：${id}`;
 const privateNames = (ids: string[]) => ids.map(toolName).join('、');
@@ -45,6 +49,11 @@ function addCapabilities(ids: string[]) {
 function removeCapability(field: keyof AgentCapabilities, id: string) {
   if (!props.readOnly) config.value = { ...config.value, [field]: config.value[field].filter(item => item !== id) };
 }
+function toggleScenario(id: string) {
+  if (props.readOnly) return;
+  if (config.value.skillIds.includes(id)) removeCapability('skillIds', id);
+  else config.value = { ...config.value, skillIds: mergeCapabilitySelection(config.value.skillIds, [id], skillOptions.value) };
+}
 watch(() => [props.agentId, props.readOnly], () => { pickerOpen.value = false; });
 </script>
 <template>
@@ -53,8 +62,19 @@ watch(() => [props.agentId, props.readOnly], () => { pickerOpen.value = false; }
       <section class="agent-loading-section customer-config-block" aria-label="Skill 加载配置">
         <div class="customer-loading-header"><h3>Skill 加载 <span>当前已选 {{ selectedSkills.length }} 个</span></h3><button v-if="!readOnly" type="button" class="ops-secondary" @click="openPicker('skill')"><Icon :svg="strokeIconPaths.plus" :size="14" />添加 Skill</button></div>
         <p>{{ readOnly ? '当前遵循 Agent 默认配置，Skill 的增减随默认配置同步。' : '通过搜索或按组批量添加 Skill。私有 Tool 随所选 Skill 加载。' }}</p>
+        <fieldset v-if="scenarioSkills.length" class="scenario-grants" aria-label="运输场景技能">
+          <legend>运输场景技能 <span>{{ canSummonCount }} / {{ scenarioSkills.length }} 可召唤</span></legend>
+          <div class="scenario-grant-list">
+            <label v-for="skill in scenarioSkills" :key="skill.id" :title="skill.description">
+              <input type="checkbox" :aria-label="skill.name" :checked="config.skillIds.includes(skill.id)"
+                :disabled="readOnly || (!skill.enabled && !config.skillIds.includes(skill.id))" @change="toggleScenario(skill.id)" />
+              <span>{{ skill.name }}</span><small v-if="!skill.enabled">已停用</small>
+            </label>
+          </div>
+        </fieldset>
+        <h4 v-if="scenarioSkills.length && otherSelectedSkills.length" class="other-grants-title">其他已加载技能</h4>
         <ul class="customer-selected-tags" aria-label="已选 Skill 加载列表">
-          <li v-for="{ id, skill } in selectedSkills" :key="id" class="customer-capability-tag" :class="{ 'is-warning': !skill || !skill.enabled }">
+          <li v-for="{ id, skill } in otherSelectedSkills" :key="id" class="customer-capability-tag" :class="{ 'is-warning': !skill || !skill.enabled }">
             <ElTooltip placement="top" :show-after="250" :hide-after="0">
               <template #content><div class="customer-tag-details"><strong>{{ skill?.group ?? 'Skill 已失效' }}</strong><p>{{ skill?.description ?? '该 Skill 已失效或不适用于当前 Agent，请移除后保存。' }}</p><p v-if="skill?.privateToolIds.length">私有 Tool：{{ privateNames(skill.privateToolIds) }}</p><p v-if="skill && !skill.enabled">Skill 已停用，暂不可调用。</p></div></template>
               <span class="customer-tag-label" tabindex="0">{{ skill?.name ?? id }}<span v-if="!skill" class="customer-tag-state">已失效</span><span v-else-if="!skill.enabled" class="customer-tag-state">已停用</span></span>
@@ -95,6 +115,16 @@ watch(() => [props.agentId, props.readOnly], () => { pickerOpen.value = false; }
 .customer-loading-header button { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
 .customer-selected-tags { display: flex; flex-wrap: wrap; align-items: start; gap: 8px; margin-top: 18px; }
 .customer-selected-tags:empty { display: none; }
+.scenario-grants { min-width: 0; margin: 16px 0 0; border: 0; padding: 0; }
+.scenario-grants legend, .other-grants-title { padding: 0; color: #334155; font-size: 13px; font-weight: 600; }
+.scenario-grants legend span { margin-left: 6px; color: #526175; font-size: 12px; font-weight: 400; }
+.scenario-grant-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 170px), 1fr)); gap: 2px 12px; margin-top: 6px; }
+.scenario-grant-list label { display: flex; align-items: center; gap: 7px; min-height: 30px; color: #334155; font-size: 12px; cursor: pointer; }
+.scenario-grant-list label:has(:disabled) { cursor: default; }
+.scenario-grant-list input { flex-shrink: 0; width: 14px; height: 14px; accent-color: #334155; }
+.scenario-grant-list small { color: #92400e; white-space: nowrap; }
+.other-grants-title { margin-top: 12px; padding-top: 12px; border-top: 1px solid #e2e2dc; }
+.other-grants-title + .customer-selected-tags { margin-top: 8px; }
 .customer-capability-tag { display: inline-flex; align-items: center; max-width: 100%; border: 1px solid #dce1e7; border-radius: 4px; background: #f4f6f8; color: #334155; font-size: 12px; line-height: 1.7; }
 .customer-capability-tag.is-warning { color: #92400e; background: #fff7e5; border-color: #e8ce9f; }
 .customer-tag-label { min-width: 0; padding: 4px 2px 4px 10px; overflow-wrap: anywhere; cursor: help; }

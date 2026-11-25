@@ -176,6 +176,7 @@ const fileInputRef = ref<HTMLInputElement | null>(null);
 const composerTextareaRef = ref<HTMLTextAreaElement | null>(null);
 const uploadedFiles = computed({ get: () => composer.draft.files, set: (files: File[]) => composer.attach(files) });
 const readingAttachments = ref(false);
+const sendBusy = computed(() => readingAttachments.value || !!agentMessages.value.at(-1)?.streaming);
 let attachmentReadGeneration = 0;
 const isFileDragActive = ref(false);
 const isRightPanelVisible = ref(false);
@@ -383,7 +384,7 @@ function confirmWaybillImport(payload: { mode: 'create' | 'merge'; projectId: st
 }
 
 async function sendComposerMessage() {
-  if (readingAttachments.value || store.agentMessages.at(-1)?.streaming) return;
+  if (sendBusy.value) return;
   const text = agentInput.value.trim();
   const files = [...uploadedFiles.value];
   if (!text && !files.length) return;
@@ -1152,11 +1153,11 @@ onBeforeUnmount(() => {
                 type="button"
                 class="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-slate-900 text-white shadow-sm transition hover:bg-slate-800"
                 aria-label="发送"
-                :disabled="readingAttachments"
-                :aria-busy="readingAttachments"
+                :disabled="sendBusy"
+                :aria-busy="sendBusy"
                 @click="sendComposerMessage"
               >
-                <Icon :svg="readingAttachments ? strokeIconPaths.refresh : strokeIconPaths.arrowUp" :size="18" :svg-class="readingAttachments ? 'animate-spin' : ''" />
+                <Icon :svg="sendBusy ? strokeIconPaths.refresh : strokeIconPaths.arrowUp" :size="18" :svg-class="sendBusy ? 'animate-spin' : ''" />
               </button>
             </div>
           </div>

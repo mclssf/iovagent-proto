@@ -41,7 +41,7 @@ const agentName = (id: string) => store.agents.find(agent => agent.id === id)?.n
 function openCustomer(item: ActivatedCustomer, agentId?: string) {
   Object.keys(draft).forEach(id => delete draft[id]);
   store.customerAgentBindings(item.id).forEach(binding => { draft[binding.agentId] = binding; });
-  selectedAgentId.value = agentId || store.agents[0]?.id || '';
+  selectedAgentId.value = agentId ?? store.agents.find(agent => agent.role === 'project-chat')?.id ?? store.agents[0]?.id ?? '';
   savedDraft.value = fingerprint();
   formError.value = '';
   editingId.value = item.id;

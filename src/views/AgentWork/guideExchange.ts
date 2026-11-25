@@ -1,6 +1,6 @@
 import { useAgentDailyTasks } from '@/pinia/agentDailyTasks';
 import { useGuideLedger } from '@/pinia/guideLedger';
-import { findGuide, guideSubjects, inspectTrip, lookupGuide, type GuideRow } from './guideScenarios';
+import { findGuide, guideSubjects, inspectTrip, lookupGuide, type GuideId, type GuideRow } from './guideScenarios';
 import { inspectPhoto, isGuidePhoto } from './guidePhotos';
 import type { ChatMessage, SummonedSkill } from './interface';
 import type { TaskAttachment } from './dailyTasks';
@@ -9,14 +9,21 @@ import { recordValue } from './taskInput';
 
 interface Exchange {
   skill: SummonedSkill; text: string; files: File[]; attachments: TaskAttachment[]; context?: ChatMessage['guideContext'];
-  projectId: string; conversationId?: string; current: () => boolean;
+  projectId: string; conversationId?: string;
+  progress: (step: NonNullable<ChatMessage['steps']>[number]) => Promise<void>;
 }
+const checks: Record<GuideId, string> = {
+  'guide-evidence': '比对装卸围栏与停靠时段', 'guide-mileage': '比对申报里程与本票货程',
+  'guide-signin': '交叉核对签到与门禁', 'guide-offline': '核对定位中断与恢复时刻',
+  'guide-stop': '核对停靠点与授权场站', 'guide-shuttle': '配对装卸节点与往返趟次',
+  'guide-photo': '核验装卸照片', 'guide-gate': '核对进场条件与运输记录',
+};
 export const guideFollowup = (text: string, previous: ChatMessage['guideContext'], files: File[]) => previous &&
   (previous.waiting && (files.length > 0 || guideSubjects(text).length > 0) ||
     /^(?:请|帮我|那|再)?(?:看一下)?(?:依据|为什么|展开|详情|下一步|怎么办|需要哪些|如何处理|生成截图|截图留证|打包留证|整理提醒|提醒司机|提醒调度|查看地图|继续核查|是否到过|有没有去过)/.test(text.trim()));
 
 export async function guideExchange(input: Exchange): Promise<ChatMessage> {
-  const { skill, text, files, context, current } = input;
+  const { skill, text, files, context, progress } = input;
   const scene = findGuide(skill.id)!;
   const photo = scene.id === 'guide-photo';
   const excel = input.attachments.filter(isTaskExcel);
@@ -29,9 +36,12 @@ export async function guideExchange(input: Exchange): Promise<ChatMessage> {
   const rows = excel.length ? excel.flatMap(a => a.records!).map(r => ({ ...r })) : subjects.length ? subjects : context?.rows?.map(r => ({ ...r })) ?? [];
   if (!rows.length) return reply('请补充运单号或车牌号，例如 ' + (scene.id === 'guide-shuttle' ? '苏E76325' : 'YD261002') + '；也可以上传运单或车辆表格。', [], true);
   if (photo && !images.length && (excel.length || !context || !rows.every(r => r['图片检查']))) return reply('请上传这批运单的装卸照片（JPG、PNG 或 WebP）。多票照片请在表格「图片文件名」列逐行填写对应文件名，并一并上传。', rows.map(({ 图片检查, 图片信息, ...r }) => r), true);
+  if (images.length > 20 || new Set(images.map(i => i.name)).size < images.length) return reply('每次最多上传 20 张文件名唯一的图片，请拆分或重命名后重试。', rows, true);
+  await progress(excel.length ? { title: '核对表格输入', text: '核对 ' + excel.length + ' 份表格中的 ' + rows.length + ' 条输入，保留原表行号。' }
+    : { title: '匹配运输记录', text: '按运单号或车牌定位本次核查涉及的运输记录。' });
   let preview: ChatMessage['guidePhoto'];
   if (images.length) {
-    if (images.length > 20 || new Set(images.map(i => i.name)).size < images.length) return reply('每次最多上传 20 张文件名唯一的图片，请拆分或重命名后重试。', rows, true);
+    await progress({ title: checks['guide-photo'], text: '检查 ' + images.length + ' 张照片的可读性，并按文件名关联运单。', skill: skill.name });
     if (!excel.length && rows.length === 1 && images.length > 1) {
       const base = { ...rows[0] }; rows.splice(0, 1, ...images.map(im => ({ ...base, 图片文件名: im.name })));
     }
@@ -47,10 +57,10 @@ export async function guideExchange(input: Exchange): Promise<ChatMessage> {
       if (match?.url && rows.length === 1) preview = { name, url: match.url };
     }
   }
-  if (!current()) throw new Error('会话已切换');
   const explicitZip = scene.id === 'guide-evidence' && /^(?:请|帮我)?(?:生成截图|打包留证|截图留证)/.test(text);
   if (excel.length || context?.batch || rows.length > 1 || explicitZip) {
     const evidence = scene.id === 'guide-evidence';
+    await progress({ title: '编排普通任务', text: '按原始输入逐条安排「' + skill.name + '」，' + (evidence ? '汇总结果表和轨迹截图。' : '将各条记录的结果汇总到 Excel。'), skill: skill.name });
     // Preserve source sheet and row coordinates; never substitute example identifiers for uploads.
     let offset = 0;
     const attachments = excel.map(a => ({ ...a, records: rows.slice(offset, offset += a.records!.length) }));
@@ -61,6 +71,8 @@ export async function guideExchange(input: Exchange): Promise<ChatMessage> {
   }
   const matched = lookupGuide(rows[0]!);
   if (!matched.length) return reply('未找到与「' + Object.values(rows[0]!).slice(0, 2).join(' / ') + '」一致的运输记录。请核对编号或车牌后重试。', [], true);
+  if (!images.length) await progress({ title: checks[scene.id], text: '关联 ' + matched.length + ' 票运输记录。' + scene.description, skill: skill.name });
+  await progress({ title: '整理核查结果', text: photo ? '汇总照片检查结果和需人工核对的事项。' : '按运单整理事实依据、核查结论和待核事项。' });
   const ledger = useGuideLedger();
   if (scene.id === 'guide-shuttle') ledger.register(matched.map(t => t.id));
   const results = matched.map(t => ({ t, f: inspectTrip(scene.id, t, rows[0], text) }));
@@ -74,7 +86,5 @@ export async function guideExchange(input: Exchange): Promise<ChatMessage> {
       return lead + f.conclusion + '\n' + f.facts + '\n' + f.action;
     }).join('\n\n'),
     title: reminder ? '调度提醒草稿（未发送）' : scene.name, status: '已完成',
-    steps: [{ title: '匹配运输记录', text: '按输入标识关联 ' + matched.length + ' 票运输记录。' },
-      { title: '核对业务依据', text: scene.description, skill: scene.name }],
     guidePhoto: preview, guideMaps: photo ? [] : results.filter(({ t }) => ledger.orders.some(o => o.id === t.id)).map(({ t, f }) => ({ order: t.id, event: f.point, label: t.id + ' · ' + t.points[f.point - 1]!.site.name })) };
 }

@@ -18,6 +18,7 @@ import CustomerAgentManagement from './AgentOps/CustomerAgentManagement.vue';
 import type { CustomerAgentTarget } from '@/pinia/customerAgents';
 
 import { strokeIconPaths } from './AgentWork/strokeIconPaths';
+import { findGuide } from './AgentWork/guideScenarios';
 
 type ConfigTab = 'employees' | 'skills' | 'tmsCustomers' | 'tools' | 'agents' | 'customers';
 
@@ -112,7 +113,7 @@ const validationForm = reactive({
 });
 const validationResult = ref<ValidationResult | null>(null);
 const skillSearch = ref('');
-const skillGroupFilter = ref<'全部' | CommonSkillGroup>('全部');
+const skillGroupFilter = ref<'全部' | '运输场景技能' | CommonSkillGroup>('全部');
 const skillCategoryFilter = ref<'全部' | SkillCategory>('全部');
 const pendingPrivateToolId = ref('');
 const skillForm = reactive({
@@ -150,7 +151,8 @@ const filteredManagedSkills = computed(() => {
   return managedSkills.value.filter((skill) => {
     const matchesCategory = skillCategoryFilter.value === '全部' || skill.category === skillCategoryFilter.value;
     const matchesSearch = !search || `${skill.name} ${skill.description} ${skill.fileName} ${skill.category}`.toLowerCase().includes(search);
-    return matchesCategory && matchesSearch && (skillGroupFilter.value === '全部' || skill.group === skillGroupFilter.value);
+    const matchesGroup = skillGroupFilter.value === '运输场景技能' ? !!findGuide(skill.id) : skillGroupFilter.value === '全部' || skill.group === skillGroupFilter.value;
+    return matchesCategory && matchesSearch && matchesGroup;
   });
 });
 const skillListCount = computed(() => `${filteredManagedSkills.value.length} / ${managedSkills.value.length}`);
@@ -867,7 +869,7 @@ function markTmsCustomerProcessed(customerId: string) {
               </select>
               <span class="shrink-0 text-xs text-slate-500">{{ skillListCount }} 个</span>
             </div>
-            <select v-model="skillGroupFilter" class="ops-input !w-auto" aria-label="筛选 Skill 分组"><option value="全部">通用 Skill · 全部分组</option><option v-for="group in commonSkillGroups" :key="group">{{ group }}</option></select>
+            <select v-model="skillGroupFilter" class="ops-input !w-auto" aria-label="筛选 Skill 分组"><option value="全部">通用 Skill · 全部分组</option><option>运输场景技能</option><option v-for="group in commonSkillGroups" :key="group">{{ group }}</option></select>
             <button type="button" class="inline-flex h-9 shrink-0 items-center gap-1.5 rounded-md bg-slate-900 px-3 text-xs font-medium text-white hover:bg-slate-800" @click="openCreateSkillModal">
               <Icon :svg="strokeIconPaths.plus" :size="14" />
               添加 Skill

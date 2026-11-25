@@ -36,7 +36,7 @@ import { extractMcpPrompt, runMcpPrompt } from '@/views/AgentWork/mcpClient';
 import { getRiskOrders, summarizeOrders } from '@/views/AgentWork/utils';
 import { ensureRequiredMonitorSkills } from '@/views/AgentWork/dailyTasks';
 import type { TaskAttachment } from '@/views/AgentWork/dailyTasks';
-import { resolveAsyncTool, extractTaskPlates, planWorkbenchExcelTask } from '@/views/AgentWork/ordinaryTasks';
+import { resolveAsyncTool, extractTaskPlates, planWorkbenchExcelTask, ordinaryStepDelay } from '@/views/AgentWork/ordinaryTasks';
 import { excelParsingSkill } from '@/views/AgentWork/ordinaryTaskSkills';
 import { useAgentDailyTasks } from './agentDailyTasks';
 import { createProjectMailbox, mailboxSkill, persistMailboxProjects, restoreMailboxProjects } from './projectMailboxes';
@@ -211,6 +211,10 @@ function cloneChatMessages(messages: ChatMessage[]) {
     link: message.link ? { ...message.link } : undefined,
     steps: message.steps?.map((step) => ({ ...step })),
     sources: message.sources?.map(source => ({ ...source })),
+    ...(message.streaming && findGuide(message.summonedSkill?.id) ? {
+      streaming: false, progressMode: false, status: '已中断', text: '上次核查已中断，可重新提交。',
+      steps: message.steps?.slice(0, message.activeStepIndex ?? 0).map(step => ({ ...step })),
+    } : {}),
   }));
 }
 
@@ -2235,18 +2239,36 @@ export const agentWorkData = defineStore('agentWork', {
       if (called && findGuide(called.id)) {
         const ops = useAgentOpsStore();
         ops.refreshSummonConfig();
-        if (!ops.summonSkills(called.customerId, called.agentId).some(s => s.id === called.id)) {
+        const available = () => ops.summonSkills(called.customerId, called.agentId).some(s => s.id === called.id);
+        if (!available()) {
           this.agentMessages = [...next, { role: 'agent', text: '该技能已不可用，请重新选择技能。' }]; return;
         }
-        this.agentMessages = [...next, { role: 'agent', text: '正在匹配输入与运输记录…', status: '处理中' }];
-        const marker = this.agentMessages.at(-1);
+        this.agentMessages = [...next, { role: 'agent', summonedSkill: called, title: called.name, text: '', status: '处理中', streaming: true, progressMode: true, steps: [] }];
+        const marker = this.agentMessages.at(-1)!;
         const current = () => this.agentMessages.at(-1) === marker;
+        const assertActive = () => {
+          if (!current()) throw new Error('会话已切换');
+          if (!available()) throw new Error('该技能已不可用，请重新选择技能。');
+        };
         try {
-          const response = await guideExchange({ skill: called, text: promptText, files: sourceFiles, attachments, context: follow, current,
+          const response = await guideExchange({ skill: called, text: promptText, files: sourceFiles, attachments, context: follow,
+            progress: async step => {
+              assertActive();
+              marker.activeStepIndex = marker.steps!.length;
+              marker.steps!.push(step);
+              const delay = step.skill ? ordinaryStepDelay() : 1200 + Math.round(Math.random() * 1200);
+              await new Promise<void>(resolve => setTimeout(resolve, delay));
+              assertActive();
+            },
             projectId: this.workspaceMode === 'project' ? this.currentProjectId : '', conversationId: this.workspaceMode === 'conversation' ? this.currentConversationId : undefined });
-          if (current()) this.agentMessages = [...next, response];
+          if (!current()) return;
+          this.agentMessages = [...next, marker.steps!.length && !response.guideContext?.waiting ? {
+            ...response, title: response.title ?? called.name, status: '已完成', progressMode: true, steps: marker.steps,
+            text: response.text === response.title ? '' : response.text,
+          } : response];
         } catch (error) {
-          if (current()) this.agentMessages = [...next, { role: 'agent', text: '未完成处理：' + (error as Error).message }];
+          if (!current()) return;
+          this.agentMessages = [...next, { role: 'agent', text: '未完成处理：' + (error as Error).message }];
         }
         this.agentInput = ''; this.persistActiveConversationMessages(); return;
       }

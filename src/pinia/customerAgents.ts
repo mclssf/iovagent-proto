@@ -35,7 +35,7 @@ export function createActivatedCustomers(): ActivatedCustomer[] {
     ['ent-jinmailang', '今麦郎', 'CID00000203', '2026-06-01', '2027-05-31', '正式', [employee('jinmailang-logistics'), project()]],
     ['ent-anjie', '安捷物流', 'CID00000204', '2026-09-01', '2026-09-30', '试用', [general(), project()]],
     ['ent-zhilian', '智链顺达', 'CID00000205', '2026-03-01', '2027-02-28', '正式', [employee('zhilian-shunda-tms'), general(), project()]],
-    ['ent-east', '华东物流事业部', 'CID00000206', '2026-07-01', '2027-06-30', '正式', [employee(), project()]],
+    ['ent-east', '华东物流事业部', 'CID00000206', '2026-07-01', '2027-06-30', '正式', [employee()]],
     ['ent-southwest', '西南供应链中心', 'CID00000207', '2026-09-05', '2026-10-04', '试用', [general()]],
     ['ent-demo', '华通物流', 'CID00000208', '2026-09-01', '2026-09-30', '试用', []],
   ];

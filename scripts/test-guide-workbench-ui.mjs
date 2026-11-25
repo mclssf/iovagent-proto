@@ -28,6 +28,32 @@ try {
   }
   const select = files => p.locator('input[type=file]').setInputFiles(files);
   await p.goto(root + '/index/agent');
+  const projectGuides = ['装卸货地追溯留证', '运短骗长核查', '轨迹造假分析预警', '车机离线监控提醒', '异常停靠与偷串货预警', '同城倒短运单生成与监控', '装卸图片核验', '进场车辆核查'];
+  for (const [projectName, entry] of [
+    ['华东运输核查', p.locator('.summon-trigger')],
+    ['异常停靠点风险分析', p.locator('.project-navigation').getByRole('button', { name: '数字人技能', exact: true })],
+  ]) {
+    await p.getByRole('button', { name: new RegExp('^' + projectName) }).click();
+    for (const name of projectGuides) {
+      await entry.click();
+      const dialog = p.getByRole('dialog', { name: '数字人技能' });
+      await dialog.getByRole('button', { name: '召唤 ' + name, exact: true }).click();
+      await dialog.waitFor({ state: 'hidden' });
+      assert.equal(await p.locator('.summon-trigger').innerText(), name);
+      assert((await input.inputValue()).trim(), 'project summon must populate an editable prompt');
+    }
+    await send();
+    const pending = p.locator('.agent-message.is-agent').last();
+    await pending.getByText('处理中', { exact: true }).waitFor();
+    assert(await btn('发送').isDisabled());
+    await pending.locator('.agent-process-step').filter({ hasText: '核对进场条件与运输记录' }).waitFor();
+    assert.equal(await pending.locator('.animate-spin').count(), 1);
+    assert.equal(await pending.getByRole('button', { name: /在运单地图查看/ }).count(), 0);
+    await p.getByText('转现场复核', { exact: false }).last().waitFor();
+    assert.equal(await pending.locator('.animate-spin').count(), 0);
+    assert(await btn('发送').isEnabled());
+  }
+  console.log('PASS: all eight cards summoned via project composer and sidebar; both project submissions accepted.');
   for (const [name, expected] of [
     ['装卸货地追溯留证','候选装货点：'], ['轨迹造假分析预警','比电子签到晚 51 分钟'],
     ['车机离线监控提醒','离线 21 分钟'], ['异常停靠与偷串货预警','非计划停靠待复核'],
