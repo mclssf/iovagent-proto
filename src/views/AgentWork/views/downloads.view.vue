@@ -11,14 +11,14 @@ import { useAgentWorkNav } from '../useAgentWorkNav';
 const work = agentWorkData();
 const tasks = useAgentDailyTasks();
 const { goPage, createDownload } = useAgentWorkNav();
-const files = computed(() => tasks.resultDownloads);
+const files = computed(() => tasks.resultDownloads.filter(item=>!item.projectId || item.projectId===work.currentProjectId));
 function openTask(item: { taskId: string; projectId: string }) {
   if (item.projectId) { const project = work.projects.find(project => project.id === item.projectId); if (project) work.switchProject(project); }
   goPage('dailyTasks', { taskId: item.taskId, scope: item.projectId ? 'project' : 'personal' });
 }
 function downloadLegacy() {
   if (!work.downloadTask || work.downloadTask.status !== '已完成') return;
-  const orders = work.ordersSeed.filter(order => order.risk !== '无风险');
+  const orders = work.currentProjectOrders.filter(order => order.risk !== '无风险');
   const report = excelResult(`${work.downloadTask.scope}.xlsx`, orders.map(order => ({ 运单号: order.id, 车牌号: order.plate, 线路: order.route, 承运商: order.carrier, 风险等级: order.risk })), '异常运单');
   downloadTaskResult(createTaskResultPackage(`${work.downloadTask.scope}.zip`, [report]));
 }
@@ -27,7 +27,7 @@ function downloadLegacy() {
 <template>
   <div class="downloads-page">
     <header class="downloads-header"><div><Icon :svg="strokeIconPaths.download" :size="16" /><h1>下载</h1></div><button type="button" class="downloads-button" @click="createDownload('今日异常运单')"><Icon :svg="strokeIconPaths.plus" :size="14" />新建下载</button></header>
-    <div class="downloads-content">
+    <div data-view-scroll="downloads" class="downloads-content">
       <section v-if="work.downloadTask" class="downloads-legacy"><div><strong>{{ work.downloadTask.scope }}.zip</strong><p>{{ work.downloadTask.status }} · {{ work.downloadTask.progress }}%</p></div><button type="button" class="downloads-button" :disabled="work.downloadTask.status !== '已完成'" @click="downloadLegacy"><Icon :svg="strokeIconPaths.download" :size="14" />下载文件</button></section>
       <div v-if="files.length" class="downloads-table-wrapper"><table class="downloads-table"><thead><tr><th>文件名</th><th>任务标题</th><th>执行 / 生成时间</th><th>格式 / 大小</th><th><span class="downloads-sr-only">操作</span></th></tr></thead><tbody><tr v-for="item in files" :key="item.id"><td><div class="downloads-file-name"><Icon :svg="item.file.name.endsWith('.zip') ? strokeIconPaths.folder : strokeIconPaths.fileSpreadsheet" :size="18" /><strong>{{ item.file.name }}</strong></div></td><td><button type="button" class="downloads-task-link" @click="openTask(item)">{{ item.taskTitle }}</button><small>{{ item.projectId ? work.projects.find(project => project.id === item.projectId)?.name : '个人任务' }}</small></td><td>{{ formatTaskTime(item.finishedAt) }}<small>{{ item.runId.slice(-8) }}</small></td><td>{{ item.file.name.split('.').pop()?.toUpperCase() }}<small>{{ formatFileSize(item.file.size ?? 0) }}</small></td><td><button type="button" class="downloads-icon" :title="`下载 ${item.file.name}`" :aria-label="`下载 ${item.file.name}`" @click="downloadTaskResult(item.file)"><Icon :svg="strokeIconPaths.download" :size="17" /></button></td></tr></tbody></table></div>
       <div v-else-if="!work.downloadTask" class="downloads-empty"><Icon :svg="strokeIconPaths.download" :size="28" /><p>暂无下载文件</p></div>

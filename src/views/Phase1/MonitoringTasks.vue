@@ -10,6 +10,9 @@ import { monitoringHours } from './hourlyResults';
 import type { P1SkillId } from '@/views/AgentWork/interface';
 import { strokeIconPaths } from '@/views/AgentWork/strokeIconPaths';
 import { useAgentWorkNav } from '@/views/AgentWork/useAgentWorkNav';
+import { useBusinessFields } from '@/views/AgentWork/workspaceVisits';
+import { useWorkspaceChat } from '@/views/AgentWork/useWorkspaceChat';
+const handoff=useWorkspaceChat();
 import MonitoringConfigDialog from './MonitoringConfigDialog.vue';
 const props = defineProps<{ projectId: string }>();
 const store = usePhase1();
@@ -36,12 +39,13 @@ function toggle(id: P1SkillId) {
   if (id === 'p1-weather' && !next.pausedSkillIds.includes(id)) next.weather.enabled = true;
   if (!store.saveConfig(props.projectId, next, next.version)) ElMessage.error(store.error);
 }
+useBusinessFields('monitoring',{search,status,selectedId,orderFilter,showInfo});
 </script>
 <template>
   <div class="dt-page-body" :class="{ 'has-panel': selected }">
     <div class="dt-task-column">
       <div class="dt-list-toolbar"><div class="dt-list-heading"><span>{{ tasks.length }} 项监听 · {{ tasks.filter(skill => monitoringSkillEnabled(config, skill.id)).length }} 项运行中</span></div><div class="dt-filters"><div class="dt-search"><Icon :svg="strokeIconPaths.search" :size="14" /><input v-model="search" placeholder="搜索监听任务" aria-label="搜索监听任务" /></div><select v-model="status" aria-label="监听任务状态"><option value="all">全部状态</option><option value="running">运行中</option><option value="paused">已暂停</option></select></div></div>
-      <section class="dt-task-area" aria-label="系统监听任务"><div v-if="visible.length" class="dt-task-grid">
+      <section data-view-scroll="listeners" class="dt-task-area" aria-label="系统监听任务"><div v-if="visible.length" class="dt-task-grid">
         <article v-for="skill in visible" :key="skill.id" class="dt-task-card" :class="{ selected: selectedId === skill.id }">
           <button class="dt-task-main" :aria-label="`查看监听 ${skill.name}`" @click="selectedId = skill.id"><div class="dt-task-heading"><span class="dt-task-symbol"><Icon :svg="strokeIconPaths[skill.icon]" :size="17" /></span><h2>{{ skill.name }}</h2><span class="dt-badge" :class="{ blue: monitoringSkillEnabled(config, skill.id) }">{{ monitoringSkillEnabled(config, skill.id) ? '运行中' : '已暂停' }}</span></div><p class="dt-task-description">{{ monitoringRule(config, skill.id) }}</p></button>
           <footer class="dt-task-footer"><div class="dt-task-meta">{{ resultCount(skill.id) }} 条小时结果</div><div class="dt-task-actions"><button class="dt-icon" :aria-label="`编辑监听 ${skill.name}`" title="编辑" @click="editing = skill.id"><Icon :svg="strokeIconPaths.edit" :size="14" /></button><button class="dt-icon" :aria-label="`${monitoringSkillEnabled(config, skill.id) ? '暂停' : '启动'}监听 ${skill.name}`" :title="monitoringSkillEnabled(config, skill.id) ? '暂停' : '启动'" @click="toggle(skill.id)"><Icon :svg="monitoringSkillEnabled(config, skill.id) ? strokeIconPaths.pause : strokeIconPaths.play" :size="14" /></button></div></footer>
@@ -50,11 +54,12 @@ function toggle(id: P1SkillId) {
     </div>
     <aside v-if="selected" class="dt-run-panel" aria-label="监听任务运行面板">
       <header class="dt-run-header"><div class="dt-title"><h2>{{ selected.name }}</h2></div><div class="dt-actions"><button class="dt-background-toggle" :aria-expanded="showInfo" @click="showInfo = !showInfo">任务信息</button><button class="dt-icon" aria-label="关闭监听结果" title="关闭" @click="selectedId = ''"><Icon :svg="strokeIconPaths.x" :size="16" /></button></div></header>
-      <div class="dt-run-body"><div class="dt-run-main"><div class="dt-run-scroll"><div class="dt-run-section-heading"><h3>小时执行结果 <span>{{ results.length }}</span></h3><select v-model="orderFilter" aria-label="监听运单范围"><option value="">全部运单</option><option v-for="order in orders" :key="order.id" :value="order.id">{{ order.id }}</option></select></div>
+      <div class="dt-run-body"><div class="dt-run-main"><div data-view-scroll="monitorResults" class="dt-run-scroll"><div class="dt-run-section-heading"><h3>小时执行结果 <span>{{ results.length }}</span></h3><select v-model="orderFilter" aria-label="监听运单范围"><option value="">全部运单</option><option v-for="order in orders" :key="order.id" :value="order.id">{{ order.id }}</option></select></div>
         <section v-for="result in results" :key="result.start" class="dt-result-section">
           <div class="dt-run-section-heading"><strong>{{ dateText(result.start) }}—{{ dateText(result.end) }}</strong><span class="dt-badge">已结算</span></div>
           <p class="dt-run-result">监控运单 {{ result.monitoredOrders }} 单 · 事件 {{ result.eventCount }} 条 <template v-if="selectedId === 'p1-status'">· 状态更新 {{ result.statusUpdates }} 次</template><template v-else>· 高风险 {{ result.highRisk }} 条 · 低风险 {{ result.lowRisk }} 条</template></p>
           <div v-for="detail in result.details" :key="detail.id" class="mt-2 border-t pt-2 text-xs text-slate-700"><strong>{{ detail.orderId }}</strong><p>{{ detail.text }}</p><button class="dt-text-button" @click="goPage('detail', { orderId: detail.orderId, projectId })">运单详情</button></div>
+          <button class="dt-text-button" @click="handoff(projectId,[{kind:'任务结果',id:selected.id,monitor:true,runId:String(result.start),label:selected.name+' · '+dateText(result.start),detail:'监控 '+result.monitoredOrders+' 单，事件 '+result.eventCount+' 条。'+result.details.map(d=>d.text).join('；')}],'请分析这次监听结果。')">追问结果</button>
           <p v-if="!result.details.length" class="dt-progress-counts">本小时无事件</p>
         </section>
         <div v-if="!results.length" class="dt-empty compact"><h2>暂无已结算的小时结果</h2></div>

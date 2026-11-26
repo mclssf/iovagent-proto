@@ -10,6 +10,7 @@ import { storeToRefs } from 'pinia';
 
 import { agentWorkData } from '@/pinia/agentWork';
 
+import { useBusinessFields,useBusinessViewState } from '../workspaceVisits';
 import { strokeIconPaths } from '../strokeIconPaths';
 import { useAgentWorkNav } from '../useAgentWorkNav';
 
@@ -151,7 +152,7 @@ function saveImportedCargo() {
 
 watch([cargoKeyword, cargoStatusFilter, cargoSourceFilter, cargoStartDate, cargoEndDate, cargoPageSize], () => {
   cargoPage.value = 1;
-});
+},{flush:"sync"});
 
 watch(
   () => store.cargoTotalPages,
@@ -162,6 +163,12 @@ watch(
 
 onMounted(() => {
   store.ensureCargoDateRange();
+});
+useBusinessFields('cargo',{cargoStartDate,cargoEndDate,cargoKeyword,cargoSourceFilter,cargoStatusFilter,cargoPageSize,cargoPage});
+useBusinessViewState('cargo-detail',()=>({selected:selectedCargo.value?.id,editing:editingCargo.value?.id,form:editingCargo.value?{...editCargoForm}:null}),v=>{
+  selectedCargo.value=currentProjectCargos.value.find(c=>c.id===v.selected)??null;
+  editingCargo.value=currentProjectCargos.value.find(c=>c.id===v.editing)??null;
+  if(editingCargo.value && v.form) Object.assign(editCargoForm,v.form);
 });
 </script>
 
@@ -243,7 +250,7 @@ onMounted(() => {
         <span class="mt-5 text-xs text-slate-400">共 {{ store.cargoSourcesFiltered.length }} 条 · 按创建时间倒序</span>
       </div>
 
-      <div class="min-h-0 flex-1 overflow-auto">
+      <div data-view-scroll="cargo" class="min-h-0 flex-1 overflow-auto">
         <table class="w-full min-w-[1180px] border-collapse text-left text-sm">
           <thead class="sticky top-0 z-10 bg-[#f7f7f5] text-xs font-semibold text-slate-500">
             <tr>

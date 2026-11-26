@@ -95,6 +95,7 @@ const validatingEmployee = ref<DataEmployee | null>(null);
 const visibleCustomerPasswordIds = ref<string[]>([]);
 const loginTypes: LoginType[] = ['无验证', '图形验证码', '短信验证码', '手机扫码'];
 const newEmployeeForm = reactive({
+  recommendedPrompt: '',
   description: '',
   loginType: '无验证' as LoginType,
   loginUrl: '',
@@ -115,6 +116,7 @@ const skillGroupFilter = ref<'全部' | CommonSkillGroup>('全部');
 const skillCategoryFilter = ref<'全部' | SkillCategory>('全部');
 const pendingPrivateToolId = ref('');
 const skillForm = reactive({
+  recommendedPrompt: '',
   category: '在途专家' as SkillCategory,
   description: '',
   privateToolIds: [] as string[],
@@ -227,6 +229,7 @@ function resetNewEmployeeForm() {
   editingEmployeeId.value = '';
   newEmployeeForm.name = '';
   newEmployeeForm.description = '';
+  newEmployeeForm.recommendedPrompt = '';
   newEmployeeForm.loginUrl = '';
   newEmployeeForm.loginType = '无验证';
   newEmployeeForm.privateToolIds = [];
@@ -248,6 +251,7 @@ function openEditEmployeeModal(employee: DataEmployee) {
   editingEmployeeId.value = employee.id;
   newEmployeeForm.name = employee.name;
   newEmployeeForm.description = employee.description;
+  newEmployeeForm.recommendedPrompt = employee.recommendedPrompt ?? '';
   newEmployeeForm.loginUrl = employee.loginUrl;
   newEmployeeForm.loginType = employee.loginType;
   newEmployeeForm.privateToolIds = [...employee.privateToolIds];
@@ -301,6 +305,7 @@ function confirmCreateEmployee() {
     const isSkillChanged = newEmployeeForm.skillFileName !== employee.skillFileName || newEmployeeForm.skillContent !== employee.skillContent;
     opsStore.saveDataEmployeeSkill({
       ...employee, name, description, loginUrl,
+      recommendedPrompt: newEmployeeForm.recommendedPrompt,
       loginType: newEmployeeForm.loginType, group: dataEmployeeSkillGroup, privateToolIds: [...newEmployeeForm.privateToolIds],
       skillContent: newEmployeeForm.skillContent, skillFileName: newEmployeeForm.skillFileName,
       skillUpdated: '刚刚', skillVersion: isSkillChanged ? bumpVersion(employee.skillVersion) : employee.skillVersion,
@@ -314,6 +319,7 @@ function confirmCreateEmployee() {
 
   const employee: DataEmployee = {
     id: `custom-tms-${Date.now()}`,
+    recommendedPrompt: newEmployeeForm.recommendedPrompt,
     name,
     description,
     loginUrl,
@@ -410,6 +416,7 @@ function resetSkillForm() {
   pendingPrivateToolId.value = '';
   skillForm.name = '';
   skillForm.description = '';
+  skillForm.recommendedPrompt = '';
   skillForm.category = '在途专家';
   skillForm.group = '基础 Skill 组';
   skillForm.privateToolIds = [];
@@ -427,6 +434,7 @@ function openEditSkillModal(skill: ManagedSkill) {
   pendingPrivateToolId.value = '';
   skillForm.name = skill.name;
   skillForm.description = skill.description;
+  skillForm.recommendedPrompt = skill.recommendedPrompt ?? '';
   skillForm.category = skill.category;
   skillForm.group = skill.group;
   skillForm.privateToolIds = [...skill.privateToolIds];
@@ -472,6 +480,7 @@ function confirmSkillForm() {
             name,
             description,
             category: skillForm.category,
+            recommendedPrompt: skillForm.recommendedPrompt,
             group: skillForm.group,
 
             privateToolIds: [...skillForm.privateToolIds],
@@ -490,6 +499,7 @@ function confirmSkillForm() {
         name,
         description,
         category: skillForm.category,
+        recommendedPrompt: skillForm.recommendedPrompt,
         group: skillForm.group,
 
         privateToolIds: [...skillForm.privateToolIds],
@@ -937,6 +947,7 @@ function markTmsCustomerProcessed(customerId: string) {
             <label class="ops-field">Skill 分类<select v-model="skillForm.category" class="ops-input"><option v-for="category in skillCategoryOptions.slice(1)" :key="category" :value="category">{{ category }}</option></select></label>
             <label class="ops-field">Skill 分组<select v-model="skillForm.group" class="ops-input"><option v-for="group in commonSkillGroups" :key="group" :value="group">{{ group }}</option></select><span class="text-xs font-normal text-slate-500">用于客户按组批量选择；修改分组不改变已保存的客户授权。</span></label>
             <label class="ops-field">Skill 描述<textarea v-model.trim="skillForm.description" class="ops-input !h-auto py-2" rows="4" placeholder="描述 Skill 的用途与适用场景" /></label>
+            <label class="ops-field">默认推荐提示词<textarea v-model="skillForm.recommendedPrompt" aria-label="默认推荐提示词" class="ops-input !h-auto py-2" rows="3" /><span class="text-xs font-normal text-slate-500">用户召唤技能时自动填入输入框，用户可修改后发送。</span></label>
             <div>
               <h4 class="mb-2 text-xs font-medium text-slate-700">Skill 文件</h4>
               <div class="flex items-start gap-2 rounded-md border border-[#deded9] bg-[#fbfbfa] p-3"><Icon :svg="strokeIconPaths.file" :size="18" svg-class="shrink-0 text-slate-500" /><div class="min-w-0"><p class="break-all font-mono text-xs leading-5 text-slate-700">{{ skillForm.fileName || '尚未上传文件' }}</p><p class="mt-1 text-xs text-slate-500">支持 .md、.txt、.yaml、.yml</p></div></div>
@@ -1123,6 +1134,11 @@ function markTmsCustomerProcessed(customerId: string) {
             />
           </label>
 
+          <label class="block">
+            <span class="mb-1.5 block text-xs font-medium text-slate-600">默认推荐提示词</span>
+            <textarea v-model="newEmployeeForm.recommendedPrompt" aria-label="默认推荐提示词" rows="3" class="ops-input !h-auto py-2" />
+            <span class="text-xs text-slate-500">用户召唤技能时自动填入输入框，用户可修改后发送。</span>
+          </label>
           <label class="block">
             <span class="mb-1.5 block text-xs font-medium text-slate-600">接入地址</span>
             <input

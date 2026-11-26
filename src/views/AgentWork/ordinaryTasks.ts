@@ -90,7 +90,7 @@ export const exceedsTaskThreshold = (files: TaskAttachment[], prompt = '') => ta
 export const ordinaryStepDelay = () => 4000 + Math.round(Math.random() * 2000);
 
 export function taskRecords(task: DailyTask): Record<string, string>[] {
-  const records = (task.attachments ?? []).flatMap(file => file.records ?? []);
+  const records = [...(task.scopeRecords ?? []), ...(task.attachments ?? []).flatMap(file => file.records ?? [])];
   return records.length ? records : extractTaskPlates(task.prompt).map(plate => ({ 车牌号: plate }));
 }
 
@@ -149,7 +149,7 @@ export function makeOrdinaryRun(task: DailyTask): TaskRun {
     steps: task.scenario === 'waybill-evidence' ? waybillEvidenceSteps(rows, task.enterpriseName ?? '当前企业') : [
       { title: '解析任务', text: `已保存原始需求${files.length ? `及附件 ${files.map(file => file.name).join('、')}` : ''}，识别一次性任务目标。` },
       { title: '校验执行输入', text: `${rows ? `读取已保存的 ${rows} 条记录，保留原始行号并校验所需字段。` : '校验提示词中的查询对象和输出要求。'}${task.agentDecision ? `沿用工作台 Agent 的处理方案：${task.agentDecision.historicalIndexes.length ? `${task.agentDecision.historicalIndexes.length} 条超过 180 天的运单调用历史业务质量分析接口，其他记录使用常规能力。` : '超过 100 条运单，按普通批量任务处理，不调用历史业务质量分析接口。'}` : ''}` },
-      { title: skill ? '加载执行能力' : '规划提示词执行', text: skill ? `${skill.name} v${skill.version}：${skill.description}${archive ? '按已确定的处理方案调用历史业务质量分析接口（演示）。' : ''}${tool && !files.length ? `查询日期 ${tool.date}。` : ''}` : '依据原始需求整理可用信息，生成一次性的处理结果。', tool: archive ? '历史业务质量分析接口' : skill?.name },
+      { title: skill ? '加载执行能力' : '规划提示词执行', text: skill ? `${skill.name} v${skill.version}：${skill.description}${archive ? '按已确定的处理方案调用历史业务质量分析接口。' : ''}${tool && !files.length ? `查询日期 ${tool.date}。` : ''}` : '依据原始需求整理可用信息，生成一次性的处理结果。', tool: archive ? '历史业务质量分析接口' : skill?.name },
       { title: rows ? '批量处理' : '执行处理', text: rows ? `按每批 ${ordinaryTaskLimits.batchSize} 条处理，记录成功和失败，单条失败不影响后续记录。${standardSkill ? '仅历史记录调用历史业务质量分析接口，其他记录执行常规能力。' : ''}` : '围绕任务目标组织分析和结论。', tool: standardSkill ? `历史业务质量分析接口 / ${standardSkill.name}` : skill?.id },
       { title: '生成结果文件', text: rows ? '生成执行报告，将有效产物打包为 ZIP。' : '整理文字结论，按需求生成执行报告并打包为 ZIP。' },
       { title: '校验与归档', text: '核对输入、处理数量和文件清单，将产物保存至任务结果和下载页面。' },
@@ -208,23 +208,28 @@ export function ordinaryTaskResult(task: DailyTask, run: TaskRun, stopped = fals
       for (let point = 0; point < 37; point++) {
         const timestamp = startedAt + point * 600000;
         const time = chinaTimeFormat.format(timestamp);
-        rows.push([order, plate, `${chinaDate(timestamp)} ${time}`, (121.3 - point * .032).toFixed(6), (31.1 - point * .025).toFixed(6), point === 18 || point === 36 ? 0 : 50 + point % 16, '西南', point === 0 ? '上海装货点' : point === 36 ? '杭州卸货点' : point === 18 ? '沿线服务区' : '沪杭运输线路', '演示仿真数据']);
+        rows.push([order, plate, `${chinaDate(timestamp)} ${time}`, (121.3 - point * .032).toFixed(6), (31.1 - point * .025).toFixed(6), point === 18 || point === 36 ? 0 : 50 + point % 16, '西南', point === 0 ? '上海装货点' : point === 36 ? '杭州卸货点' : point === 18 ? '沿线服务区' : '沪杭运输线路', '轨迹样本']);
       }
       const content = '\uFEFF' + rows.map(row => row.map(csvCell).join(',')).join('\r\n');
       files.push({ name: outputName, mimeType: 'text/csv;charset=utf-8', content, size: strToU8(content).length, detail: true });
     }
     const input = Object.fromEntries(Object.entries(record).filter(([key]) => !key.startsWith('__source')));
-    filled.push(spreadsheet ? { ...input, 当前车辆位置: 'G60 沪昆高速·嘉兴服务区', 在途状态: '行程在途', 预计到达时间: new Date(run.startedAt + (120 + index % 120) * 60000).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', hour12: false }), 在途异常: index % 17 === 0 ? '停车待核验' : '无', 数据性质: '演示仿真数据' } : { ...input, 校验结果: '字段读取完成', 数据性质: '演示处理结果' });
+    if(task.listAction==='risk') {
+      filled.push({...input, 核验结果: record.风险等级==='无风险' && !record.风险标签 ? '未标记风险' : '有风险标记，需复核',
+        核验依据:[record.风险等级,record.风险标签,record.异常说明,record.判断来源].filter(Boolean).join(' · ')});
+      continue;
+    }
+    filled.push(spreadsheet ? { ...input, 当前车辆位置: 'G60 沪昆高速·嘉兴服务区', 在途状态: '行程在途', 预计到达时间: new Date(run.startedAt + (120 + index % 120) * 60000).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', hour12: false }), 在途异常: index % 17 === 0 ? '停车待核验' : '无', 数据性质: '运单补全' } : { ...input, 校验结果: '字段读取完成', 数据性质: '字段校验' });
   }
   const success = report.filter(row => row.执行状态 === '成功').length;
   const failed = report.filter(row => row.执行状态 === '失败').length;
   const text = records.length
-    ? `${stopped ? '任务已停止' : failed ? success ? '任务部分完成' : '任务执行失败' : '任务已完成'}（演示结果）。\n共 ${records.length} 条记录，已处理 ${processed} 条，成功 ${success} 条，失败 ${failed} 条，未执行 ${records.length - processed} 条。\n${history ? `结果包内包含 ${files.filter(file => file.detail).length} 份车辆轨迹数据，每份 37 个轨迹点。` : spreadsheet ? `已补全 ${success} 行车辆位置、在途状态、预计到达和异常字段。` : `已读取并校验 ${success} 行业务数据。`}\n${task.agentDecision ? `沿用工作台处理方案：${task.agentDecision.historicalIndexes.length} 条历史运单使用历史业务质量分析接口，其他记录使用常规能力（演示）。\n` : ''}${failed ? '失败原因：缺少有效车牌号；原始行号及失败原因见执行报告。\n' : ''}${success ? '产物已归档至任务结果和下载页面。' : '没有可用业务产物，请补充输入后重新执行。'}`
-    : stopped ? '任务已停止，尚未生成有效结果。可重新执行。' : `任务已完成（演示结果）。\n执行目标：${run.prompt}\n已整理任务要求、处理范围和结论。${/风险|异常/.test(run.prompt) ? '\n建议先核验非计划停靠与轨迹缺失，再按时效影响确定处理顺序。' : '\n未附带业务数据，结果仅围绕输入要求整理，不读取其他项目数据。'}`;
+    ? `${stopped ? '任务已停止' : failed ? success ? '任务部分完成' : '任务执行失败' : '任务已完成'}。\n共 ${records.length} 条记录，已处理 ${processed} 条，成功 ${success} 条，失败 ${failed} 条，未执行 ${records.length - processed} 条。\n${history ? `结果包内包含 ${files.filter(file => file.detail).length} 份车辆轨迹数据，每份 37 个轨迹点。` : task.listAction==='risk' ? `已按记录的风险等级与异常依据核验 ${success} 条运单，详见结果清单。` : spreadsheet ? `已补全 ${success} 行车辆位置、在途状态、预计到达和异常字段。` : `已读取并校验 ${success} 行业务数据。`}\n${task.agentDecision ? `沿用工作台处理方案：${task.agentDecision.historicalIndexes.length} 条历史运单使用历史业务质量分析接口，其他记录使用常规能力。\n` : ''}${failed ? '失败原因：缺少有效车牌号；原始行号及失败原因见执行报告。\n' : ''}${success ? '产物已归档至任务结果和下载页面。' : '没有可用业务产物，请补充输入后重新执行。'}`
+    : stopped ? '任务已停止，尚未生成有效结果。可重新执行。' : `任务已完成。\n执行目标：${run.prompt}\n已整理任务要求、处理范围和结论。${/风险|异常/.test(run.prompt) ? '\n建议先核验非计划停靠与轨迹缺失，再按时效影响确定处理顺序。' : '\n未附带业务数据，结果仅围绕输入要求整理，不读取其他项目数据。'}`;
   if (records.length && processed) {
     if (!history && filled.length) files.push(excelResult(`${safeName(task.name)}_处理结果.xlsx`, filled));
     files.push(excelResult('执行报告.xlsx', report));
-  } else if (!records.length && !stopped && /文件|下载|导出|报告|表格/.test(run.prompt)) files.push(excelResult('执行报告.xlsx', [{ 任务标题: task.name, 执行需求: run.prompt, 执行结果: text, 数据性质: '演示结果' }]));
+  } else if (!records.length && !stopped && /文件|下载|导出|报告|表格/.test(run.prompt)) files.push(excelResult('执行报告.xlsx', [{ 任务标题: task.name, 执行需求: run.prompt, 执行结果: text, 数据性质: '任务记录' }]));
   if (files.length) {
     files.unshift(createTaskResultPackage(`${task.name}_${run.id.slice(-8)}_结果包.zip`, files));
   }

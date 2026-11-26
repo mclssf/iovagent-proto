@@ -41,7 +41,7 @@ export function handleRouter(_routerList: any) {
           {
             path: 'tasks',
             name: 'agent-work-long-tasks',
-            component: () => import('@/views/AgentWork/views/longTasks.view.vue'),
+            redirect: to => ({ name:'agent-work-daily-tasks', query:{...to.query,scope:'personal'} }),
           },
           {
             path: 'orders',

@@ -1,50 +1,21 @@
 <script lang="ts" setup>
 import type { ChatMessage, PageId, Project } from '../interface';
-
-import { computed, nextTick, ref, watch } from 'vue';
-import { useRoute, useRouter } from 'vue-router';
-
+import { computed, ref } from 'vue';
+import { useRoute,useRouter } from 'vue-router';
 import { Icon } from '@packages/icon';
-import { ElMessage, ElMessageBox } from 'element-plus';
-import { storeToRefs } from 'pinia';
-
+import { ElMessage,ElMessageBox } from 'element-plus';
+import AppDialog from '@/components/AppDialog.vue';
 import { agentWorkData } from '@/pinia/agentWork';
-import { usePhase1 } from '@/pinia/phase1';
-import { dateText } from '@/views/Phase1/catalog';
+import { useWorkspace,type Thread } from '@/pinia/workspace';
+import { useSkillComposer } from '@/pinia/skillComposer';
 import { removeToken } from '@/utils/auth';
-
 import { strokeIconPaths } from '../strokeIconPaths';
-import { agentWorkRouteName } from '../useAgentWorkNav';
-import { badgeToneClass, projectStatusTone } from '../utils';
-
-const store = agentWorkData();
-const monitoring = usePhase1();
-function todayCounts(project: Project) {
-  if (project.id !== 'MONITOR-EAST') return { total: project.total, risk: project.risk };
-  const orders = monitoring.orders.filter(order => order.projectId === project.id && dateText(order.createdAt).slice(0, 10) === dateText(monitoring.now).slice(0, 10));
-  return { total: orders.length, risk: orders.filter(order => order.network?.status==='unregistered' || monitoring.anomalies.some(item => item.orderId === order.id && item.status === 'active')).length };
-}
-const { projects, recentConversations } = storeToRefs(store);
-const route = useRoute();
-const router = useRouter();
-const isUserMenuOpen = ref(false);
-const expandedProjectId = ref(store.currentProjectId);
-watch(()=>store.currentProjectId,id=>{if(store.workspaceMode==='project')expandedProjectId.value=id;});
-const editingConversationId = ref('');
-const editingConversationTitle = ref('');
-const dismissedConversationCaseIds = ref<string[]>([]);
-const conversationTitleInputRef = ref<HTMLInputElement | HTMLInputElement[] | null>(null);
-
-const currentUserName = computed(
-  () => localStorage.getItem('iovagent_login_user') || import.meta.env.VITE_APP_DEFAULT_LOGIN_USERNAME || '物流运营员',
-);
-
-const publicNavs: { icon: string; id: PageId; label: string }[] = [
-  { id: 'dailyTasks', label: '做任务', icon: strokeIconPaths.file },
-  { id: 'knowledgeBase', label: '我的知识库', icon: strokeIconPaths.book },
-  { id: 'downloads', label: '下载', icon: strokeIconPaths.download },
-];
-
+import { useFullWorkspace,viewLabel } from '../workspaceVisits';
+import { agentWorkRouteName,projectHasPage } from '../useAgentWorkNav';
+const store=agentWorkData(), ws=useWorkspace(), composer=useSkillComposer(), router=useRouter(), route=useRoute();
+const isUserMenuOpen=ref(false), search=ref(''), historySearch=ref(''), scope=ref(''), collapsed=ref(false);
+const full=useFullWorkspace();
+const currentUserName=computed(()=>localStorage.getItem('iovagent_login_user') || '物流运营员');
 interface KnowledgeBaseConversationCase {
   icon: string;
   id: string;
@@ -300,350 +271,109 @@ const featuredConversationCaseIds = new Set([
   'PDA-CASE-003',
 ]);
 const featuredConversationCases = kbConversationCases.filter((item) => featuredConversationCaseIds.has(item.id));
-const sidebarConversations = computed(() => [
-  ...recentConversations.value.filter((conversation) => !featuredConversationCaseIds.has(conversation.id)),
-  ...featuredConversationCases
-    .filter((item) => !dismissedConversationCaseIds.value.includes(item.id))
-    .map((item) => recentConversations.value.find((conversation) => conversation.id === item.id) ?? item),
-]);
-
-const projectNavs: { icon: string; id: PageId; label: string }[] = [
-  { id: 'agent', label: '智能体工作台', icon: strokeIconPaths.bot },
-  { id: 'dailyTasks', label: '做任务', icon: strokeIconPaths.file },
-  { id: 'orders', label: '运单列表', icon: strokeIconPaths.list },
-  { id: 'risk', label: '异常运单列表', icon: strokeIconPaths.shield },
-];
-
-const capacityProjectNavs: Array<{ icon: string; id: PageId; label: string; skillIds: string[] }> = [
+const capacityProjectNavs: Array<{ icon: string; id: PageId; label: string }> = [
   {
     id: 'cargoSources',
     label: '我发布的货源',
     icon: strokeIconPaths.packageSearch,
-    skillIds: ['huadong-cargo-connector', 'capacity-cargo-normalization', 'capacity-cargo-publish'],
   },
   {
     id: 'cargoQuotes',
     label: '报价抢单',
     icon: strokeIconPaths.receipt,
-    skillIds: ['capacity-quote-collection'],
   },
   {
     id: 'privateCapacity',
     label: '私有运力池',
     icon: strokeIconPaths.usersRound,
-    skillIds: ['capacity-private-fleet'],
   },
 ];
 
-function projectNavsFor(project: Project) {
-  const enabledSkillIds = project.skillIds ?? [];
-  return [
-    ...projectNavs,
-    ...capacityProjectNavs.filter((item) => item.skillIds.some((skillId) => enabledSkillIds.includes(skillId))),
-  ];
-}
 
-function goNav(page: PageId) {
-  if (page === 'projectCreate') {
-    router.push({ name: agentWorkRouteName[page], query: { from: route.fullPath } });
-    return;
-  }
-  router.push({ name: agentWorkRouteName[page] });
+ws.migrate(store.projectChats,[...store.recentConversations,...featuredConversationCases.map(c=>({...c,updatedAt:''}))],store.projects.map(p=>p.id));
+const visibleProjects=computed(()=>store.projects.filter(p=>p.name.includes(search.value.trim())).sort((a,b)=>{
+  const rank=(id:string)=>ws.data.favorites.includes(id)?-2:ws.data.recent.includes(id)?-1+ws.data.recent.indexOf(id)/10:1;
+  return rank(a.id)-rank(b.id);
+}));
+const matches=computed(()=>ws.data.threads.filter(t=>t.messages.length && (!t.projectId || store.projects.some(p=>p.id===t.projectId)) && (scope.value==='*' || scope.value===t.projectId) && (t.title+' '+t.messages.map(m=>m.text).join(' ')).includes(historySearch.value.trim())).sort((a,b)=>b.updated-a.updated));
+const sections=computed(()=>[
+ {label:'业务页面',items:[{id:'orders',label:'运单列表',icon:strokeIconPaths.list},{id:'risk',label:'异常运单',icon:strokeIconPaths.shield},{id:'detail',label:'地图与轨迹',icon:strokeIconPaths.locate},{id:'analytics',label:'项目看板',icon:strokeIconPaths.gauge},...capacityProjectNavs.filter(n=>projectHasPage(agentWorkRouteName[n.id],store.currentProject?.skillIds))]},
+ {label:'资源与配置',items:[{id:'skills',label:'数字人技能',icon:strokeIconPaths.zap},{id:'knowledgeBase',label:'项目知识库',icon:strokeIconPaths.book},{id:'projects',label:'项目配置',icon:strokeIconPaths.settings},{id:'downloads',label:'下载',icon:strokeIconPaths.download}]}
+]);
+function nav(id:string){
+  ws.menu=false;
+  if(id==='skills'){composer.panel='composer';return;}
+  if(id==='agent'){full.enter();return;}
+  router.push({name:agentWorkRouteName[id as PageId],query:ws.data.projectId?{projectId:ws.data.projectId}:{}});
 }
-
-function goPublicNav(page: PageId) {
-  if (page === 'dailyTasks') {
-    router.push({ name: agentWorkRouteName.dailyTasks, query: { scope: 'personal' } });
-    return;
-  }
-  goNav(page);
+function switchTo(p:Project) {
+  ws.picker=false;ws.menu=false;
+  if(ws.data.projectId===p.id)return;
+  if(route.name===agentWorkRouteName.agent){full.enter(p.id,undefined,'切换项目');return;}
+  const allowed=projectHasPage(String(route.name),p.skillIds) && sections.value.some(s=>s.items.some(n=>agentWorkRouteName[n.id as PageId]===route.name));
+  let name=route.name;
+  if(name===agentWorkRouteName.detail)name=agentWorkRouteName.orders;
+  else if(!allowed && name!==agentWorkRouteName.dailyTasks){full.enter(p.id,undefined,'切换项目');ElMessage.info('已切换到目标项目工作台');return;}
+  store.switchProject(p);
+  router.push({name,query:{projectId:p.id}});
 }
-
-function isNavActive(page: PageId) {
-  if (page === 'projects' && route.name === agentWorkRouteName.projectCreate) return true;
-  return route.name === agentWorkRouteName[page];
+function newChat(){full.enter(ws.data.projectId,()=>ws.create(),'新对话');}
+function showHistory(){scope.value=ws.data.projectId;historySearch.value='';ws.history=true;}
+const orphan=ref<Thread|null>(null), target=ref('');
+function restore(t:Thread,entryType='最近对话'){
+  if(!t.projectId){orphan.value=t;target.value='';return;}
+  const project=store.projects.find(p=>p.id===t.projectId);
+  if(!project)return;
+  ws.history=false;full.enter(project.id,()=>ws.open(t),entryType);
 }
-
-function isPublicNavActive(page: PageId) {
-  if (page === 'dailyTasks') return route.name === agentWorkRouteName.dailyTasks && route.query.scope === 'personal';
-  return isNavActive(page);
+function continueLegacy(){
+  const p=store.projects.find(p=>p.id===target.value);if(!p||!orphan.value)return;
+  full.enter(p.id,()=>{const t=ws.create(); t.messages=JSON.parse(JSON.stringify(orphan.value.messages));t.title=orphan.value.title;t.updated=Date.now();
+  orphan.value=null;ws.history=false;});
 }
-
-function isProjectNavActive(page: PageId) {
-  if (page === 'dailyTasks') return route.name === agentWorkRouteName.dailyTasks && route.query.scope !== 'personal';
-  return isNavActive(page);
-}
-
-function startNewConversation() {
-  store.startNewConversation();
-  expandedProjectId.value = '';
-  goNav('agent');
-}
-
-function openConversation(conversationId: string) {
-  ensureExampleConversation(conversationId);
-  store.openConversation(conversationId);
-  expandedProjectId.value = '';
-  goNav('agent');
-}
-
-function ensureExampleConversation(conversationId: string) {
-  const item = featuredConversationCases.find((conversation) => conversation.id === conversationId);
-  if (item) store.ensureExampleConversation(item.id, item.title, item.messages);
-}
-
-function toggleProject(project: Project) {
-  if (expandedProjectId.value === project.id) {
-    expandedProjectId.value = '';
-    return;
-  }
-  expandedProjectId.value = project.id;
-  store.switchProject(project);
-  goNav('agent');
-}
-
-function openProjectPage(page: PageId) {
-  goNav(page);
-}
-
-function startConversationTitleEdit(conversationId: string, title: string) {
-  ensureExampleConversation(conversationId);
-  editingConversationId.value = conversationId;
-  editingConversationTitle.value = title;
-  nextTick(() => {
-    const inputRef = Array.isArray(conversationTitleInputRef.value)
-      ? conversationTitleInputRef.value[0]
-      : conversationTitleInputRef.value;
-    inputRef?.focus();
-    inputRef?.select();
-  });
-}
-
-function commitConversationTitleEdit() {
-  if (!editingConversationId.value) return;
-  store.renameConversation(editingConversationId.value, editingConversationTitle.value);
-  editingConversationId.value = '';
-  editingConversationTitle.value = '';
-}
-
-function cancelConversationTitleEdit() {
-  editingConversationId.value = '';
-  editingConversationTitle.value = '';
-}
-
-async function deleteConversation(conversationId: string, title: string) {
-  try {
-    await ElMessageBox.confirm(`确定删除对话「${title}」吗？删除后无法继续打开该会话。`, '删除对话', {
-      confirmButtonText: '删除',
-      cancelButtonText: '取消',
-      confirmButtonClass: 'dialog-danger',
-      type: 'warning',
-    });
-  } catch {
-    return;
-  }
-  const isCurrentConversation = store.workspaceMode === 'conversation' && store.currentConversationId === conversationId;
-  const isExampleConversation = featuredConversationCaseIds.has(conversationId);
-  const hasSavedConversation = recentConversations.value.some((conversation) => conversation.id === conversationId);
-  if (hasSavedConversation) {
-    if (!store.deleteConversation(conversationId)) return;
-  } else if (!isExampleConversation) return;
-  if (isExampleConversation) dismissedConversationCaseIds.value.push(conversationId);
-  ElMessage.success('对话已删除');
-  if (isCurrentConversation) {
-    expandedProjectId.value = '';
-    goNav('agent');
-  }
-}
-
+async function rename(t:Thread){try{const r=await ElMessageBox.prompt('对话标题','修改对话标题',{inputValue:t.title,inputValidator:v=>!!v.trim()&&v.trim().length<=40||'请输入 1–40 字'});t.title=r.value.trim();}catch{}}
+async function remove(t:Thread){try{await ElMessageBox.confirm('删除对话不会删除已创建的任务。','删除对话',{confirmButtonText:'删除',cancelButtonText:'取消'});ws.remove(t.id);}catch{}}
 function logout() {
+  ws.persist();
   removeToken();
   localStorage.removeItem('token');
   localStorage.removeItem('iovagent_login_user');
   isUserMenuOpen.value = false;
-  router.replace('/login');
+  window.location.replace('/login');
 }
 </script>
-
 <template>
   <aside class="flex h-full min-h-0 flex-col overflow-hidden border-r border-[#e7e7e4] bg-[#f5f5f3]">
-    <div class="shrink-0 px-4 pt-4 pb-3">
-      <div class="flex h-9 items-center gap-2.5">
-        <span class="flex h-8 w-8 shrink-0 items-center justify-center rounded-md border border-[#deded9] bg-white text-slate-700">
-          <Icon :svg="strokeIconPaths.truck" :size="18" />
-        </span>
-        <span class="truncate text-sm font-semibold text-slate-950">物流通用智能体</span>
+    <div class="shrink-0 border-b border-[#e3e3df] px-4 py-3">
+      <div class="flex min-h-9 items-center gap-2 text-sm font-semibold">
+        <span class="flex shrink-0 items-center gap-1.5"><Icon :svg="strokeIconPaths.truck" :size="18"/>大卡数字人</span>
+        <button class="nav-row min-w-0 flex-1 bg-white font-normal" aria-label="切换项目" :title="ws.data.projectId?store.currentProject.name:'选择项目'" @click="ws.picker=true;search=''"><span class="truncate">{{ws.data.projectId?store.currentProject.name:'选择项目'}}</span><Icon :svg="strokeIconPaths.chevron" :size="13" svg-class="ml-auto shrink-0 rotate-90"/></button>
+        <button class="nav-action hidden lg:block" title="收起导航" aria-label="收起导航" @click="ws.data.navCollapsed=true;ws.menu=false"><Icon :svg="strokeIconPaths.chevron" :size="14" svg-class="rotate-180"/></button>
+        <button class="nav-action lg:hidden" @click="ws.menu=false" aria-label="关闭导航"><Icon :svg="strokeIconPaths.x" :size="14"/></button>
       </div>
+      <p v-if="ws.data.projectId" class="mt-1 px-2 text-[11px] text-slate-500">{{store.currentProject.status}} · {{store.currentProject.sync}}</p>
     </div>
-
-    <div class="shrink-0 px-3 pb-3">
-      <button
-        type="button"
-        class="flex h-9 w-full items-center gap-2.5 rounded-md px-3 text-sm font-medium transition"
-        :class="
-          store.workspaceMode === 'conversation' && !store.currentConversationId && isNavActive('agent')
-            ? 'bg-white text-slate-950 shadow-[0_1px_2px_rgba(15,23,42,0.05)]'
-            : 'text-slate-700 hover:bg-white/80 hover:text-slate-950'
-        "
-        @click="startNewConversation"
-      >
-        <Icon :svg="strokeIconPaths.plus" :size="17" />
-        新对话
-      </button>
-    </div>
-
     <div class="sidebar-scroll min-h-0 flex-1 overflow-y-auto px-3 pb-4">
-      <nav class="space-y-1 border-b border-[#e3e3df] pb-4">
-        <button
-          v-for="item in publicNavs"
-          :key="item.id"
-          type="button"
-          class="flex h-9 w-full items-center gap-2.5 rounded-md px-3 text-sm transition"
-          :class="isPublicNavActive(item.id) ? 'bg-white font-medium text-slate-950' : 'text-slate-600 hover:bg-white/75 hover:text-slate-900'"
-          @click="goPublicNav(item.id)"
-        >
-          <Icon :svg="item.icon" :size="16" />
-          {{ item.label }}
-        </button>
-      </nav>
-
-      <section class="pt-4">
-        <div class="mb-1 flex h-7 items-center px-2">
-          <h2 class="text-xs font-medium text-slate-500">最近对话</h2>
-        </div>
-        <div class="space-y-0.5">
-          <div
-            v-for="conversation in sidebarConversations"
-            :key="conversation.id"
-            class="group flex min-h-9 items-center rounded-md transition"
-            :class="
-              store.workspaceMode === 'conversation' && store.currentConversationId === conversation.id && isNavActive('agent')
-                ? 'bg-white'
-                : 'hover:bg-white/75'
-            "
-          >
-            <template v-if="editingConversationId === conversation.id">
-              <input
-                ref="conversationTitleInputRef"
-                v-model="editingConversationTitle"
-                type="text"
-                maxlength="40"
-                class="mx-1 h-8 min-w-0 flex-1 rounded-md border border-blue-400 bg-white px-2 text-xs text-slate-900 outline-none ring-2 ring-blue-100"
-                aria-label="编辑对话标题"
-                @blur="commitConversationTitleEdit"
-                @keydown.enter.prevent="commitConversationTitleEdit"
-                @keydown.esc.prevent="cancelConversationTitleEdit"
-              />
-            </template>
-            <template v-else>
-              <button
-                type="button"
-                class="flex h-9 min-w-0 flex-1 items-center gap-2 px-2.5 text-left text-xs text-slate-700"
-                @click="openConversation(conversation.id)"
-              >
-                <Icon :svg="strokeIconPaths.msg" :size="14" svg-class="shrink-0 text-slate-400" />
-                <span class="min-w-0 flex-1 truncate">{{ conversation.title }}</span>
-              </button>
-              <button
-                type="button"
-                class="conversation-action flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-slate-400 opacity-0 transition hover:bg-[#eeeeeb] hover:text-slate-800 focus:opacity-100 group-hover:opacity-100 group-focus-within:opacity-100"
-                :aria-label="`修改对话标题：${conversation.title}`"
-                title="修改标题"
-                @click="startConversationTitleEdit(conversation.id, conversation.title)"
-              >
-                <Icon :svg="strokeIconPaths.edit" :size="13" />
-              </button>
-              <button
-                type="button"
-                class="conversation-action mr-1 flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-slate-400 opacity-0 transition hover:bg-[#eeeeeb] hover:text-red-600 focus:opacity-100 group-hover:opacity-100 group-focus-within:opacity-100"
-                :aria-label="`删除对话：${conversation.title}`"
-                title="删除对话"
-                @click="deleteConversation(conversation.id, conversation.title)"
-              >
-                <Icon :svg="strokeIconPaths.trash" :size="13" />
-              </button>
-            </template>
-          </div>
-
-        </div>
-      </section>
-
-      <section class="pt-5">
-        <div class="mb-1 flex h-8 items-center justify-between gap-2 px-2">
-          <h2 class="text-xs font-medium text-slate-500">项目</h2>
-          <div class="flex items-center gap-0.5">
-            <button
-              type="button"
-              class="inline-flex h-7 items-center gap-1 rounded-md px-2 text-xs text-slate-500 transition hover:bg-white hover:text-slate-900"
-              :class="isNavActive('projectCreate') ? 'bg-white font-medium text-slate-950' : ''"
-              @click="goNav('projectCreate')"
-            >
-              <Icon :svg="strokeIconPaths.plus" :size="13" />
-              新建
-            </button>
-            <button
-              type="button"
-              class="inline-flex h-7 items-center gap-1 rounded-md px-2 text-xs text-slate-500 transition hover:bg-white hover:text-slate-900"
-              :class="isNavActive('projects') ? 'bg-white font-medium text-slate-950' : ''"
-              @click="goNav('projects')"
-            >
-              <Icon :svg="strokeIconPaths.settings" :size="13" />
-              管理
-            </button>
-          </div>
-        </div>
-
-        <div class="space-y-1">
-          <div v-for="project in projects" :key="project.id">
-            <button
-              type="button"
-              class="w-full rounded-md px-2.5 py-2 text-left transition hover:bg-white/75"
-              :class="expandedProjectId === project.id ? 'bg-white' : ''"
-              :aria-expanded="expandedProjectId === project.id"
-              @click="toggleProject(project)"
-            >
-              <div class="flex items-center justify-between gap-2">
-                <span class="min-w-0 truncate text-xs font-medium text-slate-800">{{ project.name }}</span>
-                <Icon
-                  :svg="strokeIconPaths.chevron"
-                  :size="13"
-                  :svg-class="expandedProjectId === project.id ? 'shrink-0 rotate-90 text-slate-500' : 'shrink-0 text-slate-400'"
-                />
-              </div>
-              <div class="mt-1 flex items-center justify-between gap-2">
-                <span class="truncate text-[11px] leading-4 text-slate-400">今日 {{ todayCounts(project).total }} 单 · {{ todayCounts(project).risk }} 异常</span>
-                <span
-                  class="shrink-0 rounded border px-1.5 py-0.5 text-[10px] font-medium leading-3.5"
-                  :class="badgeToneClass(projectStatusTone(project.status))"
-                >
-                  {{ project.status }}
-                </span>
-              </div>
-            </button>
-
-            <div v-if="expandedProjectId === project.id" class="relative ml-3 mt-1 space-y-0.5 pl-3 before:absolute before:top-1 before:bottom-1 before:left-0 before:w-px before:bg-[#d9d9d4]">
-              <button
-                v-for="item in projectNavsFor(project)"
-                :key="item.id"
-                type="button"
-                :aria-label="item.label"
-                class="flex h-8 w-full items-center gap-2 rounded-md px-2 text-xs transition"
-                :class="
-                  store.workspaceMode === 'project' && store.currentProjectId === project.id && isProjectNavActive(item.id)
-                    ? 'bg-white font-medium text-slate-950'
-                    : 'text-slate-500 hover:bg-white/75 hover:text-slate-900'
-                "
-                @click="openProjectPage(item.id)"
-              >
-                <Icon :svg="item.icon" :size="14" />
-                {{ item.label }}
-              </button>
-            </div>
-          </div>
-        </div>
-      </section>
+      <h2 class="section-title">工作空间</h2>
+      <div class="flex items-center"><button class="nav-row flex-1" :class="{active:route.name===agentWorkRouteName.agent}" @click="nav('agent')"><Icon :svg="strokeIconPaths.bot" :size="16"/>AI 工作台</button><button class="nav-action" title="新对话" aria-label="新对话" :disabled="!ws.data.projectId" @click="newChat"><Icon :svg="strokeIconPaths.plus" :size="16"/></button></div>
+      <button class="nav-row" :aria-expanded="!collapsed" @click="collapsed=!collapsed"><Icon :svg="strokeIconPaths.chevron" :size="13" :svg-class="collapsed?'':'rotate-90'"/>最近对话</button>
+      <div v-if="!collapsed" class="ml-3 border-l border-[#deded9] pl-2">
+        <div v-for="t in ws.recent.slice(0,5)" :key="t.id" class="group flex items-center rounded-md" :class="{active:ws.active?.id===t.id}">
+          <button class="min-w-0 flex-1 truncate px-2 py-2 text-left text-xs" :title="t.title" @click="restore(t)">{{t.title}}</button>
+          <button class="nav-action" aria-label="修改对话标题" @click="rename(t)"><Icon :svg="strokeIconPaths.edit" :size="12"/></button>
+          <button class="nav-action" aria-label="删除对话" @click="remove(t)"><Icon :svg="strokeIconPaths.trash" :size="12"/></button>
+        </div><button class="px-2 py-2 text-xs text-slate-500" @click="showHistory">查看全部</button>
+      </div>
+      <button class="nav-row" :class="{active:route.name===agentWorkRouteName.dailyTasks}" @click="nav('dailyTasks')"><Icon :svg="strokeIconPaths.file" :size="16"/>任务</button>
+      <section v-for="section in sections" :key="section.label"><h2 class="section-title">{{section.label}}</h2>
+        <button v-for="item in section.items" :key="item.id" class="nav-row" :class="{active:route.name===agentWorkRouteName[item.id as PageId]}" :disabled="!ws.data.projectId && item.id!=='projects'" @click="nav(item.id)"><Icon :svg="item.icon" :size="15"/>{{item.label}}</button></section>
     </div>
-
+    <AppDialog v-model="ws.picker" title="切换项目"><input v-model="search" class="field" placeholder="搜索项目" aria-label="搜索项目"/><div class="max-h-[48vh] overflow-auto">
+      <div v-for="p in visibleProjects" :key="p.id" class="flex items-center border-b border-[#eeeeec]"><button class="nav-row flex-1" @click="switchTo(p)">{{p.name}}<small v-if="ws.data.recent.includes(p.id)">最近使用</small></button><button class="nav-action" :aria-label="'收藏 '+p.name" :aria-pressed="ws.data.favorites.includes(p.id)" @click="ws.data.favorites=ws.data.favorites.includes(p.id)?ws.data.favorites.filter(id=>id!==p.id):[p.id,...ws.data.favorites]">{{ws.data.favorites.includes(p.id)?'★':'☆'}}</button></div><p v-if="!visibleProjects.length" class="section-title">无匹配项目</p></div>
+      <template #footer><button class="nav-action" @click="ws.picker=false;nav('projectCreate')">新建项目</button></template></AppDialog>
+    <AppDialog v-model="ws.history" title="对话历史"><div class="flex gap-2"><input v-model="historySearch" class="field" placeholder="搜索对话"/><select v-model="scope" aria-label="历史项目范围" class="field"><option value="*">全部项目</option><option value="">未关联项目</option><option v-for="p in store.projects" :key="p.id" :value="p.id">{{p.name}}</option></select></div>
+      <div class="max-h-[48vh] overflow-auto"><div v-for="t in matches" :key="t.id" class="flex items-center border-b border-[#eeeeec]"><button class="nav-row min-w-0 flex-1" :title="t.createdFrom?'创建来源：'+(t.createdFrom.page===agentWorkRouteName.agent?'AI 工作台':viewLabel(t.createdFrom.page))+' · '+t.createdFrom.entryType:t.title" @click="restore(t,'历史对话')"><span class="truncate">{{t.title}}</span><small>{{store.projects.find(p=>p.id===t.projectId)?.name || '未关联项目'}}</small></button><button class="nav-action" @click="rename(t)">改名</button><button class="nav-action" @click="remove(t)">删除</button></div><p v-if="!matches.length" class="section-title">暂无匹配对话</p></div></AppDialog>
+    <AppDialog :model-value="!!orphan" title="未关联项目的历史对话" @update:model-value="orphan=null"><div class="max-h-52 overflow-auto text-sm"><p v-for="(m,i) in orphan?.messages" :key="i" class="mb-2">{{m.text}}</p></div><select v-model="target" class="field" aria-label="继续对话的项目"><option value="">选择继续讨论的项目</option><option v-for="p in store.projects" :key="p.id" :value="p.id">{{p.name}}</option></select><template #footer><button :disabled="!target" @click="continueLegacy">在所选项目中继续</button></template></AppDialog>
     <div class="relative shrink-0 border-t border-[#e3e3df] bg-[#f5f5f3] p-3">
       <div
         v-if="isUserMenuOpen"
@@ -674,6 +404,9 @@ function logout() {
   </aside>
 </template>
 
+<style scoped>
+.nav-row{display:flex;align-items:center;gap:8px;width:100%;min-height:34px;text-align:left;padding:6px 9px;border-radius:6px;font-size:13px;color:#334155}.nav-row:hover,.nav-action:hover,.active{background:white;color:#0f172a}.nav-action{padding:5px 6px;border-radius:4px;font-size:12px;color:#475569}.section-title{font-size:12px;color:#64748b;padding:14px 8px 5px}.field{min-width:0;width:100%;border:1px solid #deded9;border-radius:6px;font-size:13px;padding:6px 9px}.nav-row small{font-size:11px;color:#64748b}button:disabled{opacity:.5}
+</style>
 <style lang="scss">
 @media (hover: none) {
   .conversation-action {

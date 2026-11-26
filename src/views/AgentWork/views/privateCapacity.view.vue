@@ -7,6 +7,7 @@ import { storeToRefs } from 'pinia';
 
 import { agentWorkData } from '@/pinia/agentWork';
 
+import { useBusinessFields } from '../workspaceVisits';
 import { strokeIconPaths } from '../strokeIconPaths';
 
 const store = agentWorkData();
@@ -61,6 +62,7 @@ function recommendCapacity() {
 function inviteDriver(driverName: string) {
   ElMessage.success(`已向 ${driverName} 发出定向询价，结果将同步到报价抢单列表`);
 }
+useBusinessFields('capacity',{privateCapacityKeyword,privateCapacityLoadStateFilter,selectedCargoId,showRecommendedOnly});
 </script>
 
 <template>
@@ -124,7 +126,7 @@ function inviteDriver(driverName: string) {
         </select>
         <span class="text-xs text-slate-400">{{ showRecommendedOnly ? '推荐' : '筛选' }}结果 {{ displayedCapacity.length }} 条</span>
       </div>
-      <div class="min-h-0 flex-1 overflow-auto">
+      <div data-view-scroll="capacity" class="min-h-0 flex-1 overflow-auto">
         <table class="w-full min-w-[1240px] border-collapse text-left text-sm">
           <thead class="sticky top-0 z-10 bg-[#f7f7f5] text-xs font-semibold text-slate-500">
             <tr>

@@ -76,6 +76,7 @@ export interface ProjectMailbox {
 }
 
 export interface AgentConversation {
+  agentId?: string;
   id: string;
   messages: ChatMessage[];
   title: string;
@@ -265,7 +266,16 @@ export interface TimelineEvent {
   agentTone?: Tone;
 }
 
+export interface SummonedSkill { id: string; name: string; customerId: string; agentId: string }
+export interface ComposerSubmission {
+  summonedSkill?: SummonedSkill;
+  files: { name: string; size: number; type: string }[];
+  accepted: () => void;
+}
 export interface ChatMessage {
+  references?: import('@/pinia/workspace').BusinessRef[];
+  summonedSkill?: SummonedSkill;
+  inputFiles?: ComposerSubmission['files'];
   orderQueryId?: string;
   orderAction?: { id: string; projectId: string; orderId: string; plate: string; before: P1State; target: P1State; at: number; fingerprint: string; expiresAt: number; status: 'pending' | 'done' | 'canceled' | 'failed' };
   verificationRows?: { row: string; sourceIndex?: number; order: string; plate: string; color: string; start: string; end: string; startPosition: string; endPosition: string; conclusion: string; hint: string }[];

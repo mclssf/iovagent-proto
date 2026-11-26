@@ -28,6 +28,19 @@ export const useAgentDailyTasks = defineStore('agentDailyTasks', {
     })))).sort((a, b) => b.finishedAt - a.finishedAt),
   },
   actions: {
+    syncStoredTasks(){
+      const incoming=restoreOrdinaryTasks();
+      this.tasks=incoming.map(item=>{
+        const local=this.tasks.find(t=>t.id===item.id);
+        if(!local)return item;
+        if(JSON.stringify(local)===JSON.stringify(item))return local;
+        const runs=item.runs.map(r=>{
+          const existing=local.runs.find(run=>run.id===r.id);
+          return existing?Object.assign(existing,r):r;
+        });
+        return Object.assign(local,{...item,runs});
+      });
+    },
     persistTasks() {
       if (typeof window === 'undefined') return;
       try { window.localStorage.setItem(storageKey, JSON.stringify(this.tasks)); this.storageError = ''; }
@@ -54,7 +67,10 @@ export const useAgentDailyTasks = defineStore('agentDailyTasks', {
       const ids = new Set(projects.map(project => project.id));
       for (const task of this.tasks) if (task.projectId && this.projects[task.projectId]) task.projectContext = this.projects[task.projectId].projectContext;
       for (const id of Object.keys(this.projects)) if (!ids.has(id)) delete this.projects[id];
-      this.tasks = this.tasks.filter(task => (task.trigger === 'once' || task.trigger === 'email' && projects.some(project => project.id === task.projectId && project.mailbox?.status === 'bound')) && (!task.projectId || ids.has(task.projectId)));
+      this.tasks = this.tasks.filter(task=>task.trigger!=='email' || !task.projectId || ids.has(task.projectId));
+      // Losing a mailbox connection stops future polling, not access to previous results.
+      for (const task of this.tasks) if (task.trigger === 'email' &&
+        !projects.some(project => project.id === task.projectId && project.mailbox?.status === 'bound')) task.enabled = false;
       if (typeof window !== 'undefined' && !window.localStorage.getItem(storageKey)) {
         this.seedTasks('');
         if (ids.has('P001')) this.seedTasks('P001');
@@ -62,7 +78,7 @@ export const useAgentDailyTasks = defineStore('agentDailyTasks', {
       this.persistTasks();
     },
     seedTasks(projectId: string) {
-      if (this.tasks.some(task => task.projectId === projectId && task.trigger === 'once')) return;
+      if (this.tasks.some(task => task.projectId === projectId && task.trigger === 'once' && !task.archive)) return;
       const drafts = [
         { name: '运单历史轨迹核验', prompt: '查询表格中所有运单的历史轨迹，生成执行报告及结果包。', records: Array.from({ length: 6 }, (_, index) => ({ 运单号: `YD-DEMO-${index + 1}`, 车牌号: index === 5 ? '' : `沪A${12345 + index}` })) },
         { name: '运输数据质量复盘', prompt: '分析运输数据的质量问题，生成复盘报告。', records: [] },
@@ -85,13 +101,15 @@ export const useAgentDailyTasks = defineStore('agentDailyTasks', {
       const attachments = mergeTaskAttachments([], draft.attachments ?? []);
       const invalid = attachments.find(file => file.parseError || !file.records?.length);
       if (invalid) throw new Error(`“${invalid.name}”：${invalid.parseError || '尚未读取有效数据，请重新上传'}`);
-      if (hasHistoryTaskIntent(draft.prompt) && !extractTaskPlates(draft.prompt).length && !attachments.length) throw new Error('请补充车牌号，或上传包含车牌号的 Excel');
+      if (hasHistoryTaskIntent(draft.prompt) && !extractTaskPlates(draft.prompt).length && !attachments.length && !draft.scopeRecords?.length) throw new Error('请补充车牌号，或上传包含车牌号的 Excel');
       const evidence = hasWaybillEvidenceIntent(draft.prompt);
       if (evidence && !attachments.length) throw new Error('运单补全留证需要上传包含车牌、已知装卸货地及时间范围的 Excel');
       if (evidence && attachments.reduce((total, file) => total + (file.records?.length ?? 0), 0) > evidenceDemoLimit) throw new Error(`截图留证每个任务最多 ${evidenceDemoLimit} 条，请拆分 Excel 后提交；不会截断数据`);
       if (taskId) throw new Error('原始输入已保存，请通过重新执行创建新的执行记录');
       const task: DailyTask = { ...draft, trigger: 'once', name: draft.name.trim() || ordinaryTaskName(draft.prompt), prompt: draft.prompt.trim(), attachments, id: newId('task'), projectId, projectContext: this.projects[projectId]?.projectContext, createdAt: Date.now(), runs: [], origin: source?.origin ?? 'manual', conversationId: source?.conversationId, agentDecision: source?.agentDecision ? { ...source.agentDecision, historicalIndexes: [...source.agentDecision.historicalIndexes] } : undefined, ...(evidence ? { scenario: 'waybill-evidence' as const, enterpriseName: evidenceEnterpriseName() } : {}) };
-      task.runs.push(makeOrdinaryRun(task)); this.tasks.unshift(task); this.persistTasks(); this.tick(); return task.id;
+      if (task.schedule) task.enabled=true;
+      else task.runs.push(makeOrdinaryRun(task));
+      this.tasks.unshift(task); this.persistTasks(); this.tick(); return task.id;
     },
     renameTask(taskId: string, name: string) {
       if (!name.trim() || name.trim().length > 40) throw new Error('任务标题需为 1–40 字');
@@ -100,13 +118,13 @@ export const useAgentDailyTasks = defineStore('agentDailyTasks', {
     },
     deleteTask(taskId: string) {
       const task = this.tasks.find(task => task.id === taskId);
-      if (task?.trigger === 'email') return;
+      if (task?.trigger === 'email' || task?.archive) return;
       task?.runs.forEach(run => evidenceJobs.get(run.id)?.abort());
       this.tasks = this.tasks.filter(task => task.id !== taskId); this.persistTasks();
     },
     toggleTask(taskId: string) {
       const task = this.tasks.find(item => item.id === taskId);
-      if (!task || task.trigger !== 'email') throw new Error('普通任务不支持暂停或启动');
+      if (!task || task.trigger !== 'email' && !task.schedule) throw new Error('普通任务不支持暂停或启动');
       task.enabled = !task.enabled; this.persistTasks();
     },
     receiveDemoEmail(taskId: string, scenario: EmailOrderScenario) {
@@ -215,7 +233,11 @@ export const useAgentDailyTasks = defineStore('agentDailyTasks', {
           }
           continue;
         }
-        const run = task.runs[0]; if (!run) continue;
+        if (task.schedule && task.enabled && now>=task.schedule.nextAt && !task.runs.some(active)) {
+          while(task.schedule.nextAt<=now) task.schedule.nextAt+=86400000;
+          task.runs.unshift(makeOrdinaryRun(task)); changed=true;
+        }
+        const run = task.runs[0]; if (!run || task.archive) continue;
         if (run.status === 'ready' && running < ordinaryTaskLimits.maxConcurrentRuns) { run.status = 'running'; run.startedAt = now; run.nextStepAt = now + ordinaryStepDelay(); running++; changed = true; }
         if (run.status === 'stopping' && now >= run.nextStepAt) {
           if (task.scenario === 'waybill-evidence') { void this.finishEvidenceRun(task.id, run.id, true); continue; }

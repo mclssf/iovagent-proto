@@ -1,4 +1,4 @@
-import type { Order, PageId } from '@/views/AgentWork/interface';
+import type { ComposerSubmission, Order, PageId } from '@/views/AgentWork/interface';
 import type { TaskAttachment } from './dailyTasks';
 
 import { useRoute, useRouter } from 'vue-router';
@@ -26,6 +26,15 @@ export const agentWorkRouteName: Record<PageId, string> = {
   knowledgeBaseEmpty: 'agent-work-knowledge-base-empty',
 };
 
+export const pageSkillGrants:Record<string,string[]>={
+  [agentWorkRouteName.cargoSources]:['huadong-cargo-connector','capacity-cargo-normalization','capacity-cargo-publish'],
+  [agentWorkRouteName.cargoQuotes]:['capacity-quote-collection'],
+  [agentWorkRouteName.privateCapacity]:['capacity-private-fleet'],
+};
+export function projectHasPage(name:string,skillIds:string[]=[]){
+  return !pageSkillGrants[name] || pageSkillGrants[name].some(id=>skillIds.includes(id));
+}
+
 export function useAgentWorkNav() {
   const route = useRoute();
   const router = useRouter();
@@ -36,7 +45,7 @@ export function useAgentWorkNav() {
       if (route.name === agentWorkRouteName.projectCreate) return Promise.resolve();
       return router.push({ name: agentWorkRouteName[page], query: { from: route.fullPath, ...query } });
     }
-    return router.push({ name: agentWorkRouteName[page], query });
+    return router.push({ name: agentWorkRouteName[page], query: {...(store.currentProjectId?{projectId:store.currentProjectId}:{}),...query} });
   }
 
   function openOrderDetail(order: Order) {
@@ -50,8 +59,8 @@ export function useAgentWorkNav() {
     return goPage('downloads');
   }
 
-  function sendAgent(text?: string, attachments?: TaskAttachment[], sourceFiles?: File[]) {
-    return store.appendAgentExchange(text, goPage, attachments, sourceFiles);
+  function sendAgent(text?: string, attachments?: TaskAttachment[], sourceFiles?: File[], submission?: ComposerSubmission) {
+    return store.appendAgentExchange(text, goPage, attachments, sourceFiles, submission);
   }
 
   return { goPage, openOrderDetail, createDownload, sendAgent };

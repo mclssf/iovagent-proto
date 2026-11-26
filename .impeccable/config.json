@@ -29,6 +29,15 @@
         ],
         "createdAt": "2026-10-21T08:57:37.569Z",
         "reason": "Agent: existing mutually exclusive Vue branches pair red with white and slate with slate; detector combines colors from incompatible states."
+      },
+      {
+        "rule": "layout-transition",
+        "value": "*",
+        "files": [
+          "src/views/AgentWork/views/knowledgeBase.view.vue"
+        ],
+        "createdAt": "2026-11-26T04:37:31.214Z",
+        "reason": "Codex review: the detector matches width inside stroke-width on the map canvas; AMap Polyline.setOptions changes painted line weight on hover, not the canvas layout dimensions."
       }
     ]
   }

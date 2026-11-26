@@ -1,15 +1,20 @@
 <script lang="ts" setup>
-import type { AgentResultLink, ChatMessage, TimelineEvent } from '../interface';
+import type { AgentResultLink, ChatMessage, ComposerSubmission, TimelineEvent } from '../interface';
 
+import { useRouter } from 'vue-router';
+import { useFullWorkspace } from '../workspaceVisits';
+import { useWorkspace,type BusinessRef } from '@/pinia/workspace';
 import { storeToRefs } from 'pinia';
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 
 import { Icon } from '@packages/icon';
 
 import { agentWorkData, quickPrompts, rightPanelTabs } from '@/pinia/agentWork';
+import { summonIcon, useSkillComposer } from '@/pinia/skillComposer';
+import AppDialog from '@/components/AppDialog.vue';
 import { useAgentDailyTasks } from '@/pinia/agentDailyTasks';
 import { convertGpsCoordinates, loadAMap, searchDrivingRoute, type AMapCoordinate } from '@/utils/amap';
-import { taskRunLabels } from '../dailyTasks';
+import { getTaskStatus, taskRunLabels } from '../dailyTasks';
 import { readTaskAttachments, isTaskExcel } from '../ordinaryTasks';
 import { ElMessage } from 'element-plus';
 
@@ -24,9 +29,15 @@ import PredictionReport from '../component/predictionReport.comp.vue';
 import { hasVehiclePredictionIntent } from '../vehiclePredictionSkill';
 import '../agentWorkspace.css';
 
+const {target:returnTarget,back:returnToBusiness}=useFullWorkspace();
+const ws=useWorkspace(), router=useRouter();
+function openRef(r:BusinessRef,projectId:string) {
+  if(r.kind==='任务结果'){router.push({name:'agent-work-daily-tasks',query:{projectId,taskId:r.id,runId:r.runId,...(r.monitor?{monitor:"1"}:{}),...(dailyTasks.tasks.find(t=>t.id===r.id)?.projectId===''?{scope:"personal"}:{})}});return;}
+  router.push({name:'agent-work-detail',query:{projectId,orderId:r.orderId || r.id,...(r.kind==='运输事件'?{eventId:r.id}:{})}});
+}
 const store = agentWorkData();
 const dailyTasks = useAgentDailyTasks();
-const hasTaskRail = computed(() => store.workspaceMode === 'project' || dailyTasks.tasks.some(task => !task.projectId && ['ready', 'running', 'stopping'].includes(task.runs[0]?.status ?? '')));
+const hasTaskRail = computed(() => (store.workspaceMode === 'project' || dailyTasks.tasks.some(task => !task.projectId && ['ready', 'running', 'stopping'].includes(task.runs[0]?.status ?? ''))));
 const ordinaryTask = (id: string) => dailyTasks.tasks.find((task) => task.id === id);
 function openOrdinaryTask(id: string) {
   const task = ordinaryTask(id);
@@ -38,7 +49,13 @@ function openOrdinaryTask(id: string) {
   }
   goPage('dailyTasks', { taskId: id, scope: task.projectId ? 'project' : 'personal' });
 }
-const { agentMessages, agentInput } = storeToRefs(store);
+const { agentMessages } = storeToRefs(store);
+const composer = useSkillComposer();
+const agentInput = computed({ get: () => composer.draft.text, set: (text: string) => composer.edit(text) });
+const previewPrompt = ref(false);
+const draftTip = computed(() => composer.draft.automatic ? '已为你填入推荐提示词，可修改车牌、时间、地点或任务要求后再发送。'
+  : composer.draft.template ? '已保留你的输入，可继续修改，或使用该技能的推荐提示词。'
+  : composer.draft.text ? '已保留你的输入，可继续修改后发送。' : '请描述希望该技能完成的任务，可补充车牌、时间、地点或上传文件。');
 const { goPage, createDownload, sendAgent } = useAgentWorkNav();
 const agentMessageListRef = ref<HTMLDivElement | null>(null);
 const agentMessageContentRef = ref<HTMLDivElement | null>(null);
@@ -158,7 +175,7 @@ const isModelSelectOpen = ref(false);
 const modelSelectRef = ref<HTMLDivElement | null>(null);
 const fileInputRef = ref<HTMLInputElement | null>(null);
 const composerTextareaRef = ref<HTMLTextAreaElement | null>(null);
-const uploadedFiles = ref<File[]>([]);
+const uploadedFiles = computed({ get: () => composer.draft.files, set: (files: File[]) => composer.attach(files) });
 const readingAttachments = ref(false);
 let attachmentReadGeneration = 0;
 const isFileDragActive = ref(false);
@@ -264,7 +281,7 @@ function isDeferredWaybillImportRequest(text: string, files: File[]) {
   return hasImportAction && hasMergeDestination;
 }
 
-function startDeferredWaybillImport(text: string, files: File[]) {
+function startDeferredWaybillImport(text: string, files: File[], submission: ComposerSubmission) {
   const excelFiles = files.filter(isExcelFile);
   const sourceFileNames = excelFiles.map((file) => file.name);
   const attachmentText = `附件：${sourceFileNames.join('、')}`;
@@ -273,7 +290,8 @@ function startDeferredWaybillImport(text: string, files: File[]) {
     (project) => text.includes(project.name) || text.includes(project.name.replace(/项目$/, '')),
   );
   store.ensureConversationStarted();
-  const next: ChatMessage[] = [...store.agentMessages, { role: 'user', text: raw }];
+  if(ws.active){ws.active.title ||= text.slice(0,40); ws.active.updated = Date.now();}
+  const next: ChatMessage[] = [...store.agentMessages, { role: 'user', text: raw, inputFiles: submission.files, summonedSkill: submission.summonedSkill }];
   store.startDelayedAgentProcess(
     next,
     {
@@ -300,6 +318,7 @@ function startDeferredWaybillImport(text: string, files: File[]) {
       };
     },
   );
+  submission.accepted();
 }
 
 function selectNewConversationGuide(guide: NewConversationGuide) {
@@ -350,6 +369,7 @@ function cancelWaybillImport() {
 function confirmWaybillImport(payload: { mode: 'create' | 'merge'; projectId: string; projectName: string }) {
   const pendingImport = pendingWaybillImport.value;
   if (!pendingImport) return;
+  const importDraft = composer.draft;
   const sourceFileNames = pendingImport.files.map((file) => file.name);
   if (payload.mode === 'create') {
     store.createImportedWaybillProject(payload.projectName, pendingImport.importedCount, sourceFileNames);
@@ -358,42 +378,38 @@ function confirmWaybillImport(payload: { mode: 'create' | 'merge'; projectId: st
   }
 
   const importedFileKeys = new Set(pendingImport.files.map((file) => `${file.name}-${file.size}-${file.lastModified}`));
-  uploadedFiles.value = uploadedFiles.value.filter((file) => !importedFileKeys.has(`${file.name}-${file.size}-${file.lastModified}`));
-  if (pendingImport.source === 'waybill' && agentInput.value === waybillImportPrompt) agentInput.value = '';
+  importDraft.files = importDraft.files.filter((file) => !importedFileKeys.has(`${file.name}-${file.size}-${file.lastModified}`));
+  if (pendingImport.source === 'waybill' && importDraft.text === waybillImportPrompt) importDraft.text = '';
+  importDraft.revision++;
   pendingWaybillImport.value = null;
 }
 
 async function sendComposerMessage() {
-  if (readingAttachments.value) return;
+  if (!ws.data.projectId || readingAttachments.value || store.isChatOutputBusy) return;
   const text = agentInput.value.trim();
-  if (!text && uploadedFiles.value.length === 0) return;
+  const files = [...uploadedFiles.value];
+  if (!text && !files.length) return;
+  const key = composer.key, revision = composer.draft.revision, skillId = composer.draft.skillId;
+  const generation = ++attachmentReadGeneration;
   isFollowingLatest.value = true;
-
-  if (uploadedFiles.value.length > 0) {
-    if (text && !hasVehiclePredictionIntent(text) && isDeferredWaybillImportRequest(text, uploadedFiles.value)) {
-      startDeferredWaybillImport(text, uploadedFiles.value);
-      uploadedFiles.value = [];
-      agentInput.value = '';
-      return;
-    }
-    const attachmentText = `附件：${uploadedFiles.value.map((file) => file.name).join('、')}`;
-    const readGeneration = ++attachmentReadGeneration;
-    const context = `${store.workspaceMode}:${store.currentProjectId}:${store.currentConversationId}`;
-    readingAttachments.value = true;
-    try {
-      const files = [...uploadedFiles.value];
-      const excel = await readTaskAttachments(files.filter(isTaskExcel));
-      if (readGeneration !== attachmentReadGeneration || context !== `${store.workspaceMode}:${store.currentProjectId}:${store.currentConversationId}`) return;
-      const attachments = files.map(file => excel.find(item => item.name === file.name && item.size === file.size && item.lastModified === file.lastModified) ?? { name: file.name, size: file.size, type: file.type, lastModified: file.lastModified });
-      await sendAgent(text ? `${text}\n${attachmentText}` : attachmentText, attachments, files);
-    } catch (error) { ElMessage.warning((error as Error).message); return; }
-    finally { readingAttachments.value = false; }
-    uploadedFiles.value = [];
-    agentInput.value = '';
-    return;
-  }
-
-  sendAgent();
+  readingAttachments.value = true;
+  try {
+    const deferred = text && !hasVehiclePredictionIntent(text) && isDeferredWaybillImportRequest(text, files);
+    const excel = !deferred && files.some(isTaskExcel) ? await readTaskAttachments(files.filter(isTaskExcel)) : [];
+    if (generation !== attachmentReadGeneration || key !== composer.key) return;
+    const submission: ComposerSubmission = {
+      summonedSkill: composer.validate(skillId),
+      files: files.map(({ name, size, type }) => ({ name, size, type })),
+      accepted: () => { composer.accepted(key, revision); readingAttachments.value = false; },
+    };
+    if (deferred) { startDeferredWaybillImport(text, files, submission); return; }
+    const attachments = files.map(file => excel.find(item => item.name === file.name && item.size === file.size && item.lastModified === file.lastModified)
+      ?? { name: file.name, size: file.size, type: file.type, lastModified: file.lastModified });
+    const raw = [text, files.length ? '附件：' + files.map(f => f.name).join('、') : ''].filter(Boolean).join('\n');
+    await sendAgent(raw, attachments, files, submission);
+  } catch (e) {
+    ElMessage.warning(e instanceof Error ? e.message : '消息未提交，请重试。');
+  } finally { if (generation === attachmentReadGeneration) readingAttachments.value = false; }
 }
 
 function sendQuickPrompt(text: string) {
@@ -402,6 +418,7 @@ function sendQuickPrompt(text: string) {
     nextTick(() => composerTextareaRef.value?.focus());
     return;
   }
+  if (store.isChatOutputBusy) return;
   isFollowingLatest.value = true;
   sendAgent(text);
 }
@@ -459,15 +476,12 @@ const rightPanelTitle = computed(() => {
   if (isDefaultOverview.value) return '今日在途情况';
   return '今日在途预警处理结果';
 });
-const workspaceTitle = computed(() => {
-  if (store.workspaceMode === 'conversation') return store.currentConversation?.title || '新对话';
-  return '智能体工作台';
-});
+const workspaceTitle=computed(()=>ws.active?.title || '新对话');
 const isDynamicRightPanel = computed(() => isExternalH5Panel.value || isAnalysisReportPanel.value);
 const isRightPanelRendered = computed(
   () => isRightPanelVisible.value && isDynamicRightPanel.value,
 );
-const visibleQuickPrompts = computed(() => (store.workspaceMode === 'project' ? store.currentProject.quickPrompts : undefined)?.slice(0, 3) ?? quickPrompts.slice(0, 3));
+const visibleQuickPrompts = computed(() => ((store.workspaceMode === 'project' ? store.currentProject.quickPrompts : undefined)?.slice(0, 3) ?? quickPrompts).filter(p=>agentMessages.value.length || !/上面|上次|上述/.test(p)).slice(0,3));
 
 const trendData = [
   { date: '05-09', count: 8 },
@@ -762,6 +776,12 @@ onMounted(() => {
 });
 
 watch(agentInput, () => nextTick(resizeComposer));
+watch(() => [composer.key, composer.draft.skillId, composer.selected?.id], () => {
+  composer.invalidate();
+  previewPrompt.value = false;
+}, { immediate: true });
+watch(() => composer.key, () => { attachmentReadGeneration++; readingAttachments.value = false; });
+watch(() => composer.focusRequest, () => nextTick(() => composerTextareaRef.value?.focus()));
 watch(isRightPanelRendered, () => { isTaskCardOpen.value = false; scrollAgentMessagesToBottom(); });
 
 watch(
@@ -828,7 +848,7 @@ onBeforeUnmount(() => {
           </div>
         </div>
         <div class="flex shrink-0 items-center gap-2">
-        <button v-if="store.workspaceMode === 'project'" type="button" class="inline-flex items-center gap-1.5 rounded-md border border-[#deded9] bg-[#f7f7f5] px-2.5 py-1.5 text-xs text-slate-700 hover:bg-white disabled:cursor-not-allowed disabled:opacity-40" :disabled="store.isChatOutputBusy || !store.activeChatContext.length" aria-label="开始新对话" title="保留历史消息，后续提问不带入此前聊天记录" @click="store.splitProjectConversation()"><Icon :svg="strokeIconPaths.edit" :size="15" /><span class="hidden md:inline">开始新对话</span></button>
+        <button v-if="returnTarget" class="flex min-w-0 items-center gap-1 text-xs text-slate-700" type="button" :title="returnTarget.label" @click="returnToBusiness"><Icon :svg="strokeIconPaths.chevron" :size="13" svg-class="shrink-0 rotate-180"/><span class="truncate">{{returnTarget.label}}</span></button>
         <button v-if="hasTaskRail" ref="taskToggleRef" type="button" class="agent-task-toggle" aria-label="任务执行" title="任务执行" :aria-expanded="isTaskCardOpen" aria-controls="project-task-card" @click="isTaskCardOpen = !isTaskCardOpen">
           <Icon :svg="strokeIconPaths.file" :size="15" /><span>任务执行</span>
         </button>
@@ -882,6 +902,9 @@ onBeforeUnmount(() => {
                 m.role === 'user' ? 'is-user bg-slate-900 px-4 py-3 text-white' : m.title ? 'is-agent border border-[#deded9] bg-white px-4 py-3 text-slate-700' : 'is-agent text-slate-700',
               ]"
             >
+            <div v-if="m.references?.length" class="mb-1 flex flex-wrap gap-2 text-xs"><button v-for="r in m.references" :key="r.id" class="underline" @click="openRef(r,ws.data.projectId)">{{r.label}}</button></div>
+            <button v-if="m.orderQueryId && m.role==='agent'" class="block text-xs underline" @click="goPage('detail',{projectId:ws.data.projectId,orderId:m.orderQueryId})">查看运单 {{m.orderQueryId}}</button>
+            <small v-if="m.role === 'user' && m.summonedSkill" class="block text-xs leading-5">本次召唤：{{ m.summonedSkill.name }}</small>
             <template v-if="m.role === 'agent' && m.title">
               <div class="mb-3 flex items-center justify-between gap-3 border-b border-[#ededea] pb-2">
                 <div>
@@ -976,11 +999,11 @@ onBeforeUnmount(() => {
               <div v-if="m.orderAction" class="mt-3 flex items-center gap-3 border-t border-slate-200 pt-3"><template v-if="m.orderAction.status==='pending'"><button class="rounded-md bg-slate-900 px-3 py-1.5 text-xs text-white" @click="sendAgent('确认更新 '+m.orderAction.id)">确认更新</button><button class="rounded-md border border-slate-300 px-3 py-1.5 text-xs" @click="sendAgent('取消更新 '+m.orderAction.id)">取消</button></template><span v-else class="text-xs text-slate-500">{{ {done:'已保存',canceled:'已取消',failed:'未保存'}[m.orderAction.status] }}</span></div>
             <button v-if="m.dailyTaskId" type="button" class="agent-ordinary-task" :disabled="!ordinaryTask(m.dailyTaskId)" :aria-label="`查看普通任务 ${ordinaryTask(m.dailyTaskId)?.name ?? '已删除'}`" @click="openOrdinaryTask(m.dailyTaskId)">
               <Icon :svg="strokeIconPaths.file" :size="18" />
-              <span><strong>{{ ordinaryTask(m.dailyTaskId)?.name ?? '任务已删除' }}</strong><small>普通任务 · {{ ordinaryTask(m.dailyTaskId)?.runs[0] ? taskRunLabels[ordinaryTask(m.dailyTaskId)!.runs[0]!.status] : '不可用' }}</small></span>
+              <span><strong>{{ ordinaryTask(m.dailyTaskId)?.name ?? '任务已删除' }}</strong><small>{{ ordinaryTask(m.dailyTaskId)?.schedule?'定时任务':'普通任务' }} · {{ ordinaryTask(m.dailyTaskId) ? taskRunLabels[getTaskStatus(ordinaryTask(m.dailyTaskId)!)] : '不可用' }}</small></span>
               <Icon :svg="strokeIconPaths.chevron" :size="15" />
             </button>
             <section v-if="m.role === 'agent' && m.sources?.length && m.status !== '处理中'" class="mt-3 border-t border-[#deded9] pt-3" aria-label="引用来源">
-              <h3 class="mb-2 text-xs font-semibold text-slate-700">引用来源（演示）</h3>
+              <h3 class="mb-2 text-xs font-semibold text-slate-700">引用来源</h3>
               <ol class="space-y-2 text-xs leading-5 text-slate-500">
                 <li v-for="(source, sourceIndex) in m.sources" :key="`${sourceIndex}-${source.name}`">
                   <p class="break-words font-medium text-slate-700">[{{ sourceIndex + 1 }}] {{ source.name }}</p>
@@ -992,7 +1015,7 @@ onBeforeUnmount(() => {
           </div>
         </div>
       </div>
-      <div class="agent-composer-dock">
+      <div class="agent-composer-dock"><div v-if="ws.active?.refs.length" class="agent-conversation-rail mb-2 rounded-md border border-[#deded9] bg-white px-3 py-2 text-xs"><details><summary>已引用 {{ws.active.refs.length}} 条{{ws.active.refs[0].kind}}</summary><div v-for="r in ws.active.refs" :key="r.id" class="mt-2 flex items-center justify-between"><span>{{r.label}}</span><button aria-label="取消引用" @click="ws.active.refs=ws.active.refs.filter(i=>i!==r)">移除</button></div></details></div>
         <button v-if="!isFollowingLatest" type="button" class="agent-jump-latest" aria-label="回到最新消息" title="回到最新消息" @click="scrollAgentMessagesToBottom(true)"><Icon :svg="strokeIconPaths.arrowUp" :size="16" svg-class="rotate-180" /></button>
         <div class="agent-conversation-rail space-y-2.5">
           <div
@@ -1047,13 +1070,17 @@ onBeforeUnmount(() => {
               ref="composerTextareaRef"
               v-model="agentInput"
               class="min-h-[40px] w-full resize-none bg-transparent px-1 text-sm leading-6 text-slate-800 outline-none placeholder:text-slate-400"
-              placeholder="发消息..."
+              :placeholder="ws.active?.arranging ? '描述要安排的任务，可添加附件…' : '发消息...'"
               rows="1"
               @input="resizeComposer"
               @keydown.enter.exact="handleComposerEnter"
             />
-            <div class="mt-1 flex items-center justify-between gap-3">
-              <div class="flex min-w-0 items-center gap-1.5">
+            <p v-if="composer.selected || composer.draft.notice" class="skill-input-tip" role="status">
+              {{ composer.draft.notice || draftTip }}
+              <button v-if="composer.selected && !composer.draft.automatic && composer.draft.template" type="button" @click="previewPrompt = true">查看推荐提示词</button>
+            </p>
+            <div class="mt-1 flex items-center justify-between gap-2">
+              <div class="flex min-w-0 flex-wrap items-center gap-1.5">
                 <input ref="fileInputRef" type="file" class="hidden" multiple :accept="filePickerAccept" @change="handleFileSelect" />
                 <button
                   type="button"
@@ -1068,6 +1095,7 @@ onBeforeUnmount(() => {
                   <button
                     type="button"
                     role="combobox"
+                    aria-label="内置模型"
                     aria-haspopup="listbox"
                     :aria-expanded="isModelSelectOpen"
                     class="flex h-8 max-w-[190px] items-center justify-between gap-2 rounded-full px-3 text-sm text-slate-800 transition hover:bg-[#f3f3f1]"
@@ -1108,12 +1136,19 @@ onBeforeUnmount(() => {
                     </button>
                   </div>
                 </div>
+                <div class="summon-tool" :class="{ bound: composer.selected }">
+                  <button type="button" class="summon-trigger" :title="composer.selected?.name || '数字人技能'" @click="composer.panel = 'composer'">
+                    <Icon :svg="composer.selected ? strokeIconPaths[summonIcon(composer.selected)] : strokeIconPaths.zap" :size="14" />
+                    <span>{{ composer.selected?.name || '数字人技能' }}</span>
+                  </button>
+                  <button v-if="composer.selected" type="button" class="summon-remove" aria-label="取消召唤" title="取消召唤" @click.stop="composer.cancel(); composerTextareaRef?.focus()"><Icon :svg="strokeIconPaths.x" :size="10" /></button>
+                </div>
               </div>
               <button
                 type="button"
                 class="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-slate-900 text-white shadow-sm transition hover:bg-slate-800"
                 aria-label="发送"
-                :disabled="readingAttachments"
+                :disabled="readingAttachments || store.isChatOutputBusy"
                 :aria-busy="readingAttachments"
                 @click="sendComposerMessage"
               >
@@ -1414,6 +1449,11 @@ onBeforeUnmount(() => {
       </template>
     </div>
   </div>
+  <AppDialog v-model="previewPrompt" title="推荐提示词" @closed="composerTextareaRef?.focus()">
+    <p class="whitespace-pre-wrap break-words text-sm leading-6 text-slate-700">{{ composer.draft.template }}</p>
+    <template #footer><div class="dialog-actions"><button type="button" class="dialog-button" @click="previewPrompt = false">取消</button>
+      <button type="button" class="dialog-button dialog-primary" @click="composer.useTemplate(); previewPrompt = false">替换当前输入</button></div></template>
+  </AppDialog>
   <WaybillImportDialog
     :file-names="pendingWaybillImport?.files.map((file) => file.name) ?? []"
     :imported-count="pendingWaybillImport?.importedCount ?? 0"
@@ -1427,6 +1467,16 @@ onBeforeUnmount(() => {
 </template>
 
 <style lang="scss" scoped>
+.summon-tool { position:relative; min-width:0; max-width:100%; border-radius:5px; }
+.summon-trigger { display:flex; align-items:center; gap:5px; max-width:150px; min-height:28px; padding:3px 8px; color:#475569; font-size:12px; }
+.summon-trigger span { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.summon-trigger :deep(svg) { flex-shrink:0; }
+.summon-tool:hover { background:#f4f5f5; }
+.summon-tool.bound { background:#eff5ff; border:1px solid #d4e2fa; }
+.bound .summon-trigger { color:#305e9e; padding-right:14px; }
+.summon-remove { position:absolute; top:-5px; right:-5px; display:grid; place-items:center; width:18px; height:18px; border:1px solid #cfdae8; border-radius:50%; color:#405675; background:#fff; }
+.skill-input-tip { padding:2px 4px 5px; margin:0; font-size:12px; line-height:18px; color:#52647b; }
+.skill-input-tip button { margin-left:4px; color:#245ca5; text-decoration:underline; text-underline-offset:2px; }
 :deep(.amap-container) {
   background: #e2e8f0;
   color: #0f172a;

@@ -7,7 +7,7 @@ import { Icon } from '@packages/icon';
 import { agentWorkData } from '@/pinia/agentWork';
 import { convertGpsCoordinates, loadAMap, type AMapCoordinate } from '@/utils/amap';
 
-import { agentWorkRouteName } from '../useAgentWorkNav';
+import { useFullWorkspace, useBusinessFields } from '../workspaceVisits';
 import { strokeIconPaths } from '../strokeIconPaths';
 
 
@@ -518,9 +518,9 @@ function clearHighlightAsset() {
   if (window.AMap) drawPlatformMapLayers(window.AMap);
 }
 
+const full=useFullWorkspace();
 function goToAgentConversation() {
-  store.startNewConversation();
-  router.push({ name: agentWorkRouteName.agent });
+  full.enter(store.currentProjectId,()=>store.startNewConversation(),'知识库对话');
 }
 
 
@@ -536,6 +536,7 @@ onMounted(() => {
 onBeforeUnmount(() => {
   clearPlatformMap();
 });
+useBusinessFields('knowledge',{activeFolderId,assetDetailTab});
 </script>
 
 <template>
@@ -547,14 +548,19 @@ onBeforeUnmount(() => {
         <div class="flex h-7 w-7 items-center justify-center rounded-md bg-[#f2f2ef] text-slate-700">
           <Icon :svg="strokeIconPaths.book" :size="16" />
         </div>
-        <h1 class="text-sm font-semibold leading-5 text-slate-950">我的知识库</h1>
+        <h1 class="text-sm font-semibold leading-5 text-slate-950">项目知识库</h1>
       </div>
     </div>
 
     <div class="flex min-h-0 flex-1">
 
       <main class="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-[#fcfcfc]">
-        <div class="flex min-h-0 flex-1 flex-col overflow-y-auto p-4">
+        <div data-view-scroll="knowledge" class="flex min-h-0 flex-1 flex-col overflow-y-auto p-4">
+          <details class="mb-4 border-b border-[#eeeeec] pb-3 text-sm text-slate-700">
+            <summary class="cursor-pointer font-medium">{{store.currentProject.name}} · 项目资料</summary>
+            <p class="mt-2 text-xs">运单 {{store.currentProjectOrders.length}} 条 · 运输路线 {{new Set(store.currentProjectOrders.map(o=>o.route)).size}} 条</p>
+            <p v-for="r in [...new Set(store.currentProjectOrders.map(o=>o.route))]" :key="r" class="mt-1 text-xs">{{r}}</p>
+          </details>
           <!-- 平台数据资产 -->
           <template v-if="activeFolderId === 'platformAssets'">
             <!-- 标题区 -->
@@ -566,7 +572,7 @@ onBeforeUnmount(() => {
                 <h2 class="text-base font-semibold text-slate-900">平台数据资产</h2>
               </div>
               <p class="mt-1 pl-9 text-xs text-slate-500">
-                演示数据：展示业务调用沉淀的车辆、路线与起终点企业
+                企业共享的车辆、路线与起终点企业资料
               </p>
             </div>
 

@@ -1,4 +1,5 @@
 <script lang="ts" setup>
+import { useBusinessFields } from '../workspaceVisits';
 import { migrateCapacitySkillIds } from '@/pinia/capacitySkills';
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
@@ -613,6 +614,7 @@ onMounted(async () => {
 onBeforeUnmount(() => {
   clearLoginAgentTimers();
 });
+useBusinessFields('project-form',{projectName,activeTab,monitoringDraft});
 </script>
 
 <template>
@@ -675,7 +677,7 @@ onBeforeUnmount(() => {
         </div>
       </div>
 
-      <div class="min-h-0 flex-1 overflow-y-auto p-5 pt-4">
+      <div data-view-scroll="skills" class="min-h-0 flex-1 overflow-y-auto p-5 pt-4">
         <div v-if="filteredSkills.length" class="grid grid-cols-1 gap-3 lg:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
           <template v-for="skill in filteredSkills" :key="skill.id">
           <article

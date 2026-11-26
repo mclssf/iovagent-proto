@@ -1,5 +1,7 @@
 <script lang="ts" setup>
 import { Icon } from '@packages/icon';
+import { computed } from 'vue';
+import { useWorkspace } from '@/pinia/workspace';
 import { storeToRefs } from 'pinia';
 
 import { ElMessage } from 'element-plus';
@@ -18,11 +20,13 @@ function sync() { if(inbound.syncLatest(store.projects))ElMessage.success(inboun
 function viewInbound() { const project=store.projects.find(item=>item.id===inbound.defaultProjectId);if(!project)return;store.switchProject(project);const dates=store.currentProjectOrders.map(order=>order.startTime.slice(0,10)).filter(Boolean).sort();store.ordersStartDate=dates[0]||'';store.ordersEndDate=dates.at(-1)||'';store.ordersKeyword='LD260';goPage('orders'); }
 
 const { projects } = storeToRefs(store);
+const ws=useWorkspace();
+const visibleProjects=computed(()=>ws.data.projectId?projects.value.filter(p=>p.id===ws.data.projectId):projects.value);
 const { goPage } = useAgentWorkNav();
 </script>
 
 <template>
-  <div class="flex h-full flex-col space-y-3 overflow-y-auto">
+  <div data-view-scroll="projects" class="flex h-full flex-col space-y-3 overflow-y-auto">
     <div class="overflow-hidden rounded-md border border-[#deded9] bg-white">
       <div class="flex h-12 items-center justify-between gap-4 border-b border-[#e2e2dc] px-4">
         <div class="flex items-center gap-2.5">
@@ -30,7 +34,7 @@ const { goPage } = useAgentWorkNav();
             <Icon :svg="strokeIconPaths.settings" :size="16" />
           </div>
           <div>
-            <h1 class="text-sm font-semibold leading-5 text-slate-950">项目管理</h1>
+            <h1 class="text-sm font-semibold leading-5 text-slate-950">项目配置</h1>
           </div>
         </div>
         <button type="button" class="rounded-md bg-slate-900 px-4 py-2 text-sm text-white" @click="goPage('projectCreate')">
@@ -50,7 +54,7 @@ const { goPage } = useAgentWorkNav();
             </tr>
           </thead>
           <tbody class="divide-y divide-[#ededea] bg-white">
-            <tr v-for="(p, i) in projects" :key="p.id" class="hover:bg-[#f7f7f5]">
+            <tr v-for="p in visibleProjects" :key="p.id" class="hover:bg-[#f7f7f5]">
               <td class="px-4 py-4 align-middle">
                 <div class="font-medium text-slate-900">{{ p.name }}<span v-if="inbound.defaultProjectId===p.id" class="ml-2 rounded border border-blue-200 bg-blue-50 px-1.5 py-0.5 text-[11px] text-blue-700">默认项目</span></div>
                 <div class="mt-1 text-xs text-slate-500">{{ p.tmsUrl }} · {{ p.tmsUser }}</div>
@@ -78,7 +82,7 @@ const { goPage } = useAgentWorkNav();
                   <button type="button" class="rounded-md border border-[#deded9] px-3 py-1.5 text-xs hover:bg-[#f7f7f5]" @click="goPage('projectCreate', { projectId: p.id })">
                     编辑
                   </button>
-                  <button type="button" class="rounded-md border border-red-200 px-3 py-1.5 text-xs text-red-600 hover:bg-red-50" @click="store.removeProjectAt(i)">
+                  <button type="button" class="rounded-md border border-red-200 px-3 py-1.5 text-xs text-red-600 hover:bg-red-50" @click="store.removeProjectAt(projects.findIndex(item=>item.id===p.id))">
                     删除
                   </button>
                 </div>

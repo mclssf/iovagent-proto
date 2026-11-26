@@ -68,6 +68,9 @@ export interface WaybillEvent {
 }
 
 export interface DailyTaskDraft {
+  listAction?: 'risk' | 'trace';
+  scopeRecords?: Record<string,string>[];
+  schedule?: { time:string; nextAt:number };
   name: string;
   trigger: 'once';
   prompt: string;
@@ -106,6 +109,7 @@ export interface TaskAgentDecision {
 
 export interface DailyTask extends Omit<DailyTaskDraft, 'trigger'> {
   trigger: 'once' | 'email';
+  archive?: {kind:'scheduled'|'listener';executions:number;triggerLabel:string};
   scenario?: 'waybill-evidence';
   enterpriseName?: string;
   taskTemplate?: 'email-order';
@@ -175,11 +179,26 @@ export type DailyTaskStatus = TaskRun['status'] | 'paused';
 export const taskStatusLabels: Record<DailyTaskStatus, string> = { ready: '待开始', running: '运行中', stopping: '停止中', stopped: '已停止', complete: '已完成', partial: '部分完成', failed: '执行失败', paused: '已暂停' };
 export const taskRunLabels = taskStatusLabels;
 
+export function dailySchedule(prompt: string, now = Date.now()): DailyTaskDraft['schedule'] | undefined {
+  if (!/每天|每日/.test(prompt)) return;
+  const match = prompt.match(/(?:每天|每日)\s*(上午|下午|晚上|中午)?\s*(\d{1,2})(?:[:：]([0-5]\d)|点(?:([0-5]?\d)分?)?)/);
+  if (!match) throw new Error('请指定每日执行时间，例如“每天 18:00”。');
+  let hour = Number(match[2]);
+  if (hour > 23 || match[1] && (hour < 1 || hour > 12)) throw new Error('每日执行时间无效。');
+  if (match[1]) hour = hour % 12 + (match[1] === '上午' ? 0 : 12);
+  const time = String(hour).padStart(2,'0') + ':' + String(Number(match[3] || match[4] || 0)).padStart(2,'0');
+  const day = new Date(now + 8 * 3600000).toISOString().slice(0,10);
+  const today = Date.parse(day + 'T' + time + ':00+08:00');
+  return { time, nextAt: today > now ? today : today + 86400000 };
+}
+
 export function hasTaskResult(run: TaskRun) {
   return ['stopped', 'complete', 'partial', 'failed'].includes(run.status) && Boolean(run.result.trim() || run.files?.length);
 }
 
 export function getTaskStatus(task: DailyTask): DailyTaskStatus {
+  if (task.archive) return 'paused';
+  if (task.schedule) return task.enabled ? 'running' : 'paused';
   if (task.trigger === 'email') return task.enabled ? 'running' : 'paused';
   return task.runs[0]?.status ?? 'ready';
 }

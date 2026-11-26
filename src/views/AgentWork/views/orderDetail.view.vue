@@ -2,7 +2,7 @@
 import type { TimelineEvent } from '../interface';
 
 import { Icon } from '@packages/icon';
-import { ElSwitch } from 'element-plus';
+import { ElSwitch,ElMessage } from 'element-plus';
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { useRoute } from 'vue-router';
 import { usePhase1 } from '@/pinia/phase1';
@@ -16,16 +16,25 @@ import { strokeIconPaths } from '../strokeIconPaths';
 import { badgeToneClass } from '../utils';
 import { detailEventConclusion, detailEventDuration, detailEventSupplement, detailRiskTone } from '../orderDetailPresentation';
 import { evidenceEnterpriseName } from '../waybillEvidence';
+import { useBusinessViewState,useWorkspaceVisits } from '../workspaceVisits';
+import { useWorkspaceChat } from '../useWorkspaceChat';
 import { mountTransportMapWatermark } from '../transportMapWatermark';
 
+const handoff=useWorkspaceChat();
+function discuss(event?:TimelineEvent) {
+  const id=order.value.id;
+  handoff(store.currentProjectId,[event ? {kind:'运输事件',id:String(event.id),orderId:id,label:id+' · '+event.title,detail:[event.time,event.place,detailEventConclusion(event)].filter(Boolean).join(' · ')}
+    : {kind:'运单',id,label:id}],event?'请核对该运输事件的时间、地点和判断依据。':'请分析这票运单的运输情况。');
+}
 const store = agentWorkData();
 const route = useRoute();
 const monitoring = usePhase1();
-watch(() => [route.query.projectId, route.query.orderId], ([projectId, orderId]) => {
-  const project = store.projects.find(item => item.id === projectId);
-  if (project && store.currentProjectId !== project.id) store.switchProject(project);
+const detailEntry=useWorkspaceVisits().entry(route);
+watch(() => route.query.orderId, (orderId) => {
+  if(!orderId && detailEntry?.projectId===store.currentProjectId)orderId=(detailEntry.fields.detail as {orderId?:string})?.orderId;
   const record = store.currentProjectOrders.find(item => item.id === orderId);
   if (record) store.setSelectedOrder(record);
+  else if (!orderId && store.currentProjectOrders.length) store.setSelectedOrder(store.currentProjectOrders[0]!);
 }, { immediate: true });
 const monitoredOrder = monitoring.orders.find(item => item.id === store.selectedOrder.id);
 const monitoredEvents = monitoring.events.filter(item => item.orderId === monitoredOrder?.id);
@@ -34,7 +43,7 @@ const mapRef = ref<HTMLDivElement | null>(null);
 const routeDistance = ref('--');
 const routeDuration = ref('--');
 const watermarkEnabled = ref(false);
-const selectedEventId = ref<number | null>(null);
+const selectedEventId = ref<number | null>(Number(route.query.eventId) || null);
 const expandedEvents = ref<number[]>([]);
 const order = computed(() => store.currentDetailOrder);
 const summaryFields = computed(() => [
@@ -369,6 +378,13 @@ onBeforeUnmount(() => {
   mapMarkers.length = 0;
   mapInstance = null;
 });
+useBusinessViewState('detail',()=>({orderId:order.value.id,selected:selectedEventId.value,expanded:expandedEvents.value,watermark:watermarkEnabled.value,abnormal:store.detailOnlyAbnormal}),v=>{
+  store.detailOnlyAbnormal=v.abnormal;
+  selectedEventId.value=store.timelineEvents.some(e=>e.id===v.selected)?v.selected:null;
+  expandedEvents.value=v.expanded.filter(id=>store.timelineEvents.some(e=>e.id===id));
+  if((v.selected && !selectedEventId.value) || v.expanded.length!==expandedEvents.value.length)ElMessage.info('部分运输事件已不可用，已恢复运单和仍可查看的事件。');
+  watermarkEnabled.value=v.watermark;
+});
 </script>
 
 <template>
@@ -392,7 +408,7 @@ onBeforeUnmount(() => {
     </section>
 
     <aside class="detail-sidebar" aria-label="运单详情与运输事件">
-      <header class="detail-panel-header detail-summary-header"><h2><Icon :svg="strokeIconPaths.fileText" :size="16" />运单详情</h2></header>
+      <header class="detail-panel-header detail-summary-header"><h2><Icon :svg="strokeIconPaths.fileText" :size="16" />运单详情</h2><button class="ml-auto rounded-md border px-2 py-1 text-xs" @click="discuss()">交给数字人</button></header>
       <section class="detail-order-summary" aria-label="运单摘要">
         <h3 class="detail-order-route">{{ order.route || '—' }}</h3>
         <p class="detail-order-number"><span>运单号</span><span>{{ order.id || '—' }}</span></p>
@@ -416,7 +432,7 @@ onBeforeUnmount(() => {
           <h2>运输事件<span>{{ store.timelineEvents.length }}</span></h2>
           <button type="button" class="detail-filter" :class="{ 'is-active': store.detailOnlyAbnormal }" :aria-pressed="store.detailOnlyAbnormal" title="只看异常事件" @click="store.detailOnlyAbnormal = !store.detailOnlyAbnormal"><Icon :svg="strokeIconPaths.filter" :size="13" />只看异常</button>
         </header>
-        <div class="detail-event-list">
+        <div data-view-scroll="events" class="detail-event-list">
           <MonitoringOrderPanel v-if="monitoredOrder" :order-id="monitoredOrder.id" />
           <article v-for="event in store.timelineEvents" :key="event.id" class="detail-event" :class="[eventTone(event), { 'is-abnormal': event.type !== 'normal', 'is-selected': selectedEventId === event.id }]" :data-event-id="event.id">
             <div class="detail-event-track" aria-hidden="true"><span><Icon :svg="eventIcon(event)" :size="13" /></span></div>
@@ -427,7 +443,7 @@ onBeforeUnmount(() => {
                 <span class="detail-event-place"><Icon :svg="strokeIconPaths.locate" :size="12" /><span>{{ event.place || event.stopPlace || '—' }}</span></span>
                 <span class="detail-event-conclusion">{{ detailEventConclusion(event) }}</span>
               </button>
-              <template v-if="detailEventSupplement(event)">
+              <button class="detail-event-expand" @click="discuss(event)">分析此事件</button><template v-if="detailEventSupplement(event)">
                 <button type="button" class="detail-event-expand" :aria-expanded="expandedEvents.includes(event.id)" :aria-controls="`event-details-${event.id}`" @click="toggleEventDetails(event)">
                   <span v-if="event.agent" class="detail-ai-label"><Icon :svg="strokeIconPaths.zap" :size="11" />AI 分析</span>
                   {{ expandedEvents.includes(event.id) ? '收起说明' : '查看说明' }}<Icon :svg="strokeIconPaths.chevron" :size="12" :class="{ 'is-expanded': expandedEvents.includes(event.id) }" />

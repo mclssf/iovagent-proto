@@ -1,3 +1,4 @@
+import { archivedLongTasks } from '@/views/AgentWork/legacyLongTasks';
 import type { DailyTask } from '@/views/AgentWork/dailyTasks';
 import type { Project } from '@/views/AgentWork/interface';
 
@@ -16,6 +17,7 @@ export function restoreOrdinaryTasks(): DailyTask[] {
         }
       }
     } catch { /* A corrupt legacy mailbox snapshot must not discard current tasks. */ }
+    for(const archive of archivedLongTasks()) if(!tasks.some(t=>t.id===archive.id)) tasks.push(archive);
     return tasks;
   } catch { return []; }
 }

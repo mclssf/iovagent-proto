@@ -8,6 +8,7 @@ import { storeToRefs } from 'pinia';
 
 import { agentWorkData } from '@/pinia/agentWork';
 
+import { useBusinessFields } from '../workspaceVisits';
 import { strokeIconPaths } from '../strokeIconPaths';
 
 const store = agentWorkData();
@@ -46,7 +47,7 @@ function quoteStatusClass(status: CargoQuote['status']) {
 
 watch([quoteStartDate, quoteEndDate, quoteTypeFilter, quotePlatformFilter, quoteStatusFilter, quoteKeyword, quotePageSize], () => {
   quotePage.value = 1;
-});
+},{flush:"sync"});
 
 watch(
   () => store.quoteTotalPages,
@@ -54,6 +55,7 @@ watch(
     if (quotePage.value > totalPages) quotePage.value = totalPages;
   },
 );
+useBusinessFields('quotes',{quoteStartDate,quoteEndDate,quoteTypeFilter,quoteStatusFilter,quoteKeyword,quotePlatformFilter,quotePageSize,quotePage});
 </script>
 
 <template>
@@ -102,7 +104,7 @@ watch(
         <button type="button" class="h-9 rounded-md border border-[#deded9] px-3 text-xs text-slate-600 hover:bg-[#f7f7f5]" @click="store.resetQuoteFilters">重置</button>
       </div>
 
-      <div class="min-h-0 flex-1 overflow-auto">
+      <div data-view-scroll="quotes" class="min-h-0 flex-1 overflow-auto">
         <table class="w-full min-w-[1120px] border-collapse text-left text-sm">
           <thead class="sticky top-0 z-10 bg-[#f7f7f5] text-xs font-semibold text-slate-500">
             <tr>

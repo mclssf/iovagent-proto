@@ -1,9 +1,11 @@
+import { computed, ref } from 'vue';
+import { useWorkspace, type Thread } from './workspace';
 import { projectOrderConversation } from '@/views/Phase1/orderConversation';
 import { useLingdongSync } from './lingdongSync';
 import { migrateCapacitySkillIds } from './capacitySkills';
-import { usePhase1 } from './phase1';
-import { monitoringProject, monitoringOrder } from '@/views/Phase1/presentation';
-import { dateText, sessionNames, stateNames, eventNames } from '@/views/Phase1/catalog';
+import { monitoringSkillEnabled, usePhase1 } from './phase1';
+import { monitoringProject, monitoringOrder, monitoringRule } from '@/views/Phase1/presentation';
+import { phaseSkills, dateText, sessionNames, stateNames, eventNames } from '@/views/Phase1/catalog';
 import { restoreMonitoringProjects } from '@/views/Phase1/persistence';
 import type {
   AgentConversation,
@@ -11,6 +13,7 @@ import type {
   AgentWorkspaceMode,
   CargoQuote,
   ChatMessage,
+  ComposerSubmission,
   DownloadTask,
   Order,
   PageId,
@@ -27,6 +30,7 @@ import { defineStore } from 'pinia';
 
 import { cargoQuoteSeedData, cargoSeedData, privateCapacitySeedData } from '@/views/AgentWork/capacityData';
 import { extractMcpPrompt, runMcpPrompt } from '@/views/AgentWork/mcpClient';
+import { dailySchedule } from '@/views/AgentWork/dailyTasks';
 import { getRiskOrders, summarizeOrders } from '@/views/AgentWork/utils';
 import { ensureRequiredMonitorSkills } from '@/views/AgentWork/dailyTasks';
 import type { TaskAttachment } from '@/views/AgentWork/dailyTasks';
@@ -351,6 +355,13 @@ const ordersSeedData: Order[] = [
     eta: '已完成',
   },
 ];
+
+// Explicit membership for the shared sample waybills. A new project never inherits these rows.
+const seedOrderScopes: Record<string, string[]> = {
+  P001: ordersSeedData.map(order=>order.id),
+  P002:['WB20260509002','WB20260509003'], P003:['WB20260509004'], P004:['WB20260509006'],
+  P005:['WB20260509002'], P006:['WB20260509005'], P007:['WB20260509003'],
+};
 
 const timelineSeed: TimelineEvent[] = [
   { id: 1, type: 'normal', title: '运单开始-车辆进入装货地', time: '09:10', place: '上海一厂', desc: '车辆进入装货地围栏，开始执行运输任务。' },
@@ -1403,14 +1414,14 @@ function createKnowledgeBaseProcessMessage(raw: string): ChatMessage {
     role: 'agent',
     title: '知识库检索',
     status: '已完成',
-    text: `演示知识库示例：正在${scope === '全部知识库' ? '检索全部知识库' : `检索“${scope}”`}，并基于检索结果生成引用回答。`,
+    text: `正在${scope === '全部知识库' ? '检索全部知识库' : `检索“${scope}”`}，并基于检索结果生成引用回答。`,
     progressMode: true,
     steps: [
       { title: '解析检索范围', text: scope === '全部知识库' ? '未限定文件夹，默认检索全部知识库。' : `识别到限定范围：${scope}。` },
       { title: '查找相关内容', text: '查找与当前问题相关的制度和案例，筛选可引用的内容。', skill: '知识库检索' },
       { title: '生成引用回答', text: '结合召回片段生成回答，并标注来源文件名与 80 字摘要。' },
     ],
-    result: `以下为演示知识库内容。\n\n${matched.answer}`,
+    result: matched.answer,
     sources: matched.sources,
   };
 }
@@ -1426,6 +1437,15 @@ function createSpreadsheetResultFile(sourceFileName: string): AgentResultFile {
     name: `${sourceBaseName}_智能补全_${formatFileTimestamp(new Date())}.xlsx`,
     url: '/demo/waybill-fill-result.xlsx',
   };
+}
+
+function scheduleChatStep(callback:()=>void, ms:number) {
+  const legacy = !useWorkspace().data.migrated;
+  const timer = setTimeout(()=>{
+    if(legacy) agentProcessTimers=agentProcessTimers.filter(item=>item!==timer);
+    callback();
+  }, ms);
+  if(legacy) agentProcessTimers.push(timer);
 }
 
 function clearAgentProcessTimers() {
@@ -1460,6 +1480,8 @@ export const agentWorkData = defineStore('agentWork', {
   state: () => {
     const defaultCargoDateRange = createDefaultRecentWeekDateRange();
     const projectChats = restoreProjectChats();
+    const workspace = useWorkspace();
+    const legacy = ref<ChatMessage[]>(cloneChatMessages(projectChats[projectsSeed[0]!.id] ?? projectWelcomeMessages));
     return {
       ordersStartDate: defaultOrdersDateRange.start,
       ordersEndDate: defaultOrdersDateRange.end,
@@ -1474,12 +1496,14 @@ export const agentWorkData = defineStore('agentWork', {
       tmsSyncCustomers: loadTmsSyncCustomers(),
       currentProjectId: projectsSeed[0]!.id,
       currentConversationId: '',
+      conversationAgentId: 'general-chat-agent',
       workspaceMode: 'project' as AgentWorkspaceMode,
       showProjectModal: false,
       downloadTask: null as DownloadTask | null,
       selectedOrder: { ...ordersSeedData[0]! } as Order,
       agentInput: '',
-      agentMessages: cloneChatMessages(projectChats[projectsSeed[0]!.id] ?? projectWelcomeMessages),
+      agentMessages: computed<ChatMessage[]>({ get: () => workspace.active?.messages ?? legacy.value,
+        set: messages => { if (workspace.active) workspace.active.messages = messages; else legacy.value = messages; } }),
       rightPanel: 'overview',
       externalH5Title: '',
       externalH5Url: '',
@@ -1540,15 +1564,18 @@ export const agentWorkData = defineStore('agentWork', {
     isChatOutputBusy(state): boolean {
       return conversationBusy(state.agentMessages);
     },
-    currentProjectOrders(state): Order[] {
+    projectOrders(state): (projectId:string)=>Order[] {
       const monitoring = usePhase1();
-      const tracked = monitoring.orders.filter(order => order.projectId === state.currentProjectId);
+      return projectId=>{
+      const tracked = monitoring.orders.filter(order => order.projectId === projectId);
       const records = tracked.map(order => monitoringOrder(order, monitoring.anomalies.filter(item => item.orderId === order.id && item.status === 'active').map(item => item.kind), monitoring.events.some(event => event.orderId === order.id && event.assessment?.verdict === 'reasonable')));
-      if (state.currentProjectId === monitoringProject.id) return records;
-      return shipperScenarioProjects.some(project => project.id === state.currentProjectId)
-        ? [...(state.scenarioOrders[state.currentProjectId] ?? []), ...records]
-        : [...state.ordersSeed, ...records];
+      if (projectId === monitoringProject.id) return records;
+      return shipperScenarioProjects.some(project => project.id === projectId)
+        ? [...(state.scenarioOrders[projectId] ?? []), ...records]
+        : [...state.ordersSeed.filter(o=>seedOrderScopes[projectId]?.includes(o.id)), ...records];
+      };
     },
+    currentProjectOrders():Order[]{return this.projectOrders(this.currentProjectId);},
     unprocessedTmsSyncCustomerCount(state): number {
       return state.tmsSyncCustomers.filter((customer) => customer.status === '未处理').length;
     },
@@ -1892,6 +1919,7 @@ export const agentWorkData = defineStore('agentWork', {
       ElMessage.success(`演示：已从 ${fileName} 导入 1 条熟车运力`);
     },
     persistActiveConversationMessages() {
+      if (useWorkspace().data.migrated) return;
       if (this.workspaceMode === 'project') {
         const saved = cloneChatMessages(this.agentMessages).map(message =>
           message.streaming || message.status === '处理中'
@@ -1913,11 +1941,13 @@ export const agentWorkData = defineStore('agentWork', {
           : conversation,
       );
     },
-    startNewConversation() {
+    startNewConversation(agentId = 'general-chat-agent') {
+      if (useWorkspace().data.migrated) { useWorkspace().create(); this.rightPanel='overview'; return; }
       clearAgentProcessTimers();
       this.persistActiveConversationMessages();
       this.workspaceMode = 'conversation';
       this.currentConversationId = '';
+      this.conversationAgentId = agentId;
       this.agentMessages = [];
       this.agentInput = '';
       this.rightPanel = 'overview';
@@ -1929,6 +1959,7 @@ export const agentWorkData = defineStore('agentWork', {
       clearAgentProcessTimers();
       this.workspaceMode = 'conversation';
       this.currentConversationId = conversation.id;
+      this.conversationAgentId = conversation.agentId ?? 'general-chat-agent';
       this.agentMessages = cloneChatMessages(conversation.messages);
       this.agentInput = '';
       this.rightPanel = 'overview';
@@ -1966,12 +1997,14 @@ export const agentWorkData = defineStore('agentWork', {
       this.openConversation(conversationId);
     },
     ensureConversationStarted() {
+      if (useWorkspace().data.migrated) return;
       if (this.workspaceMode !== 'conversation' || this.currentConversationId) return;
       const conversationId = `C${Date.now()}`;
       this.recentConversations = [
         {
           id: conversationId,
           title: '对第一项对话的总结',
+          agentId: this.conversationAgentId,
           updatedAt: '刚刚',
           messages: [],
         },
@@ -2031,7 +2064,11 @@ export const agentWorkData = defineStore('agentWork', {
       }, 1200);
     },
     switchProject(p: Project) {
-      clearAgentProcessTimers();
+      if(!useWorkspace().data.migrated) clearAgentProcessTimers();
+      if(this.currentProjectId!==p.id){
+        this.ordersKeyword='';this.ordersRiskFilter='全部';this.ordersStatusFilter='全部';
+        this.riskOrdersKeyword='';this.riskOrdersRisk='全部异常';this.riskOrdersSource='全部来源';
+      }
       this.persistActiveConversationMessages();
       const wasScenario = [...shipperScenarioProjects, monitoringProject].some(project => project.id === this.currentProjectId);
       const isScenario = [...shipperScenarioProjects, monitoringProject].some(project => project.id === p.id);
@@ -2050,7 +2087,8 @@ export const agentWorkData = defineStore('agentWork', {
       }
       const tracked = usePhase1().orders.filter(order => order.projectId === p.id);
       const welcome: ChatMessage[] = p.id === monitoringProject.id ? [{ role: 'agent', text: `本项目已接入 ${tracked.length} 条运单，${tracked.filter(order => order.session === 'active').length} 条正在监听；${new Set(usePhase1().anomalies.filter(item => item.status === 'active' && tracked.some(order => order.id === item.orderId)).map(item => item.orderId)).size} 条运单存在高风险异常。` }] : shipperScenarioProjects.some(project => project.id === p.id) ? [] : projectWelcomeMessages;
-      this.agentMessages = cloneChatMessages(this.projectChats[p.id] ?? welcome);
+      if (useWorkspace().data.migrated) useWorkspace().select(p.id);
+      else this.agentMessages = cloneChatMessages(this.projectChats[p.id] ?? welcome);
       if (p.id === 'PSC2') {
         this.ordersStartDate = '2026-08-01';
         this.ordersEndDate = '2026-08-01';
@@ -2204,24 +2242,80 @@ export const agentWorkData = defineStore('agentWork', {
       this.ordersEndDate = defaultOrdersDateRange.end;
     },
     /** 智能体对话：由调用方传入 `navigate`，避免 store 依赖 router */
-    async appendAgentExchange(text: string | undefined, navigate: (page: PageId) => void, attachments: TaskAttachment[] = [], sourceFiles: File[] = []) {
-      if (this.agentMessages.at(-1)?.streaming) return;
-      clearAgentProcessTimers();
+    executionRoom(): Pick<Thread, 'messages'> {
+      const work=this;
+      return useWorkspace().active ?? { get messages(){return work.agentMessages;}, set messages(v){work.agentMessages=v;} };
+    },
+    async appendAgentExchange(text: string | undefined, navigate: (page: PageId) => void, attachments: TaskAttachment[] = [], sourceFiles: File[] = [], submission?: ComposerSubmission) {
+      const room = this.executionRoom();
+      if (conversationBusy(room.messages) || room.messages.at(-1)?.status === '调用中') return;
+
       const raw = text ?? this.agentInput;
       if (!raw.trim()) return;
       this.ensureConversationStarted();
+      if (useWorkspace().active) {
+        const t=useWorkspace().active!;
+        t.title ||= raw.split('\n')[0].trim().slice(0,40) || '附件处理';
+        t.updated=Date.now();
+      }
       const shownInput=/^(?:确认更新|取消更新) UPDATE-/.test(raw)?(raw.startsWith('确认')?'确认更新运单状态':'取消本次状态更新'):raw;
-      const next: ChatMessage[] = [...this.agentMessages, { role: 'user', text: shownInput }];
+      const previousContext = this.activeChatContext;
+      const next: ChatMessage[] = [...room.messages, { role: 'user', text: shownInput, references: useWorkspace().active?.refs.map(r => ({ ...r })),
+        ...(submission?.summonedSkill ? { summonedSkill: { ...submission.summonedSkill } } : {}),
+        ...(submission?.files.length ? { inputFiles: submission.files } : {}),
+      }];
+      if (submission) {
+        room.messages = next;
+        submission.accepted();
+      }
+      const ws=useWorkspace(), thread=ws.active;
+      const refs=next.at(-1)?.references ?? [];
+      const arranging=!!thread && (thread.arranging || /(?:每天|每日)\s*(?:上午|下午|晚上|中午)?\s*\d{1,2}[:：点].*(汇总|处理|生成|分析|检查)/.test(raw) || /(?:安排|创建|新建|建立).{0,6}任务/.test(raw));
+      if (thread && (refs.length || arranging)) {
+        const records=refs.map(r=>{
+          const order=this.currentProjectOrders.find(o=>o.id===(r.orderId ?? r.id));
+          return order ? {运单号:order.id,车牌号:order.plate,状态:order.status,风险:order.risk,依据:r.detail || order.issue}
+            : {引用:r.label,依据:r.detail || '暂无结果'};
+        }) as Record<string,string>[];
+        const tasks=useAgentDailyTasks();
+        let reply:ChatMessage;
+        try {
+          if(arranging){
+            const schedule=dailySchedule(raw);
+            const id=tasks.saveTask(thread.projectId,{name:'',trigger:'once',prompt:raw,attachments,scopeRecords:records,
+              ...(schedule?{schedule}:{})},undefined,{origin:'workbench',conversationId:thread.id});
+            thread.arranging=false;
+            reply={role:'agent',text:schedule?'已安排每日任务，可在任务页查看执行记录。':'已创建普通任务，可查看进度和结果。',dailyTaskId:id};
+          } else if(refs[0]?.kind==='任务结果' && /^调整任务[：:]/.test(raw)){
+            const task=tasks.tasks.find(t=>t.projectId===thread.projectId && t.id===refs[0].id);
+            const prompt=raw.replace(/^调整任务[：:]\s*/,'').trim();
+            if(!task || !prompt || prompt.length>2000 || task.trigger!=='once' || task.runs.some(r=>['running','stopping','ready'].includes(r.status))) throw new Error('请在执行结束后填写新的执行要求（不超过 2000 字）。');
+            task.prompt=prompt; tasks.rerunTask(task.id);
+            reply={role:'agent',text:'已按新要求创建一条执行记录，原执行结果保留。',dailyTaskId:task.id};
+          } else reply={role:'agent',text:records.map(r=>r.运单号 ? [r.运单号,r.车牌号,r.状态,r.风险,r.依据].join(' · ') : r.引用+'：'+r.依据).join('\n'),references:refs};
+        } catch(error){reply={role:'agent',text:'未完成处理：'+(error as Error).message};}
+        room.messages=[...next,reply];return;
+      }
+      if(thread && !attachments.length && /(?:本|当前)项目.{0,8}(规则|范围|概况|资料)/.test(raw)){
+        const config=usePhase1().config(thread.projectId);
+        const rules=phaseSkills.filter(s=>config.selectedSkills.includes(s.id) && monitoringSkillEnabled(config,s.id))
+          .map(s=>s.name+'：'+monitoringRule(config,s.id));
+        room.messages=[...next,{role:'agent',title:this.currentProject.name,text:[
+          '项目运单 '+this.currentProjectOrders.length+' 条，其中异常 '+getRiskOrders(this.currentProjectOrders).length+' 条。',
+          ...(rules.length?rules:['当前没有启用的在途监听规则。'])
+        ].join('\n')}];
+        return;
+      }
       if(!attachments.length){
-        const response=projectOrderConversation(raw,this.workspaceMode==='project'?this.currentProjectId:'',this.workspaceMode==='project'?this.currentProjectOrders:[],this.activeChatContext);
-        if(response){this.agentMessages=[...next,response];this.agentInput='';this.persistActiveConversationMessages();return;}
+        const response=projectOrderConversation(raw,this.workspaceMode==='project'?this.currentProjectId:'',this.workspaceMode==='project'?this.currentProjectOrders:[],previousContext);
+        if(response){room.messages=[...next,response];this.agentInput='';this.persistActiveConversationMessages();return;}
       }
       if (/监听|运输节点|未恢复异常|监控状态/.test(raw)) {
         const monitoring = usePhase1();
         const order = monitoring.orders.find(item => raw.toUpperCase().includes(item.id.toUpperCase()));
         if (order) {
           if (this.workspaceMode !== 'project' || order.projectId !== this.currentProjectId) {
-            this.agentMessages = [...next, { role: 'agent', text: '请先选择该运单所属项目，再查询监听结果。' }];
+            room.messages = [...next, { role: 'agent', text: '请先选择该运单所属项目，再查询监听结果。' }];
           } else {
             const alerts = monitoring.anomalies.filter(item => item.orderId === order.id && item.status === 'active');
             this.startDelayedAgentProcess(next, { role: 'agent', title: '运单监听结果', text: '', steps: [{ title: '读取项目运单', text: `核对 ${order.id} 与 ${order.plate} 的监听状态。` }, { title: '汇总运输事实', text: '汇总围栏节点、异常和人工纠正记录。' }], result: `${order.id} · ${order.plate}\n${order.origin.name} → ${order.destination.name}\n运输状态：${stateNames[order.state]}；监听：${sessionNames[order.session]}。\n监听截止：${dateText(order.expiresAt)}。\n未恢复异常 ${alerts.length} 项：${alerts.map(item => item.kind).join('、') || '无'}。\n${alerts.length ? '建议核对相关运输事实，必要时进行人工复核。' : '当前未发现需要处理的异常。'}` }, () => {});
@@ -2230,15 +2324,15 @@ export const agentWorkData = defineStore('agentWork', {
           return;
         }
       }
-      const previousPrediction = this.activeChatContext.at(-1)?.pendingPredictionPrompt;
+      const previousPrediction = previousContext.at(-1)?.pendingPredictionPrompt;
       const projectId = this.workspaceMode === 'project' ? this.currentProjectId : '';
       const stopRisk = (projectId === 'PSC3' && /停靠|停车|风险|附件：/.test(raw)) || (sourceFiles.length > 0 && /异常停靠.*(?:风险|分析)|停靠点风险/.test(raw));
       const authenticity = /核验出厂.*完成.*车辆.*对应地点/.test(raw) || projectId === 'PSC1' && /运单真实性|核验|甄别|附件：/.test(raw);
       const prediction = hasVehiclePredictionIntent(raw) || Boolean(previousPrediction && /[:：=]|附件：/.test(raw)) || projectId === predictionProjectId && sourceFiles.length > 0;
       if (stopRisk || authenticity || prediction) {
         const placeholder: ChatMessage = { role: 'agent', text: stopRisk ? '正在读取运单、整理停靠记录并分析地点风险…' : authenticity ? '正在读取源运单并匹配出厂与完成地点…' : '正在解析输入与装卸货地点预测条件…', status: '处理中' };
-        this.agentMessages = [...next, placeholder];
-        const currentPlaceholder = this.agentMessages.at(-1);
+        room.messages = [...next, placeholder];
+        const currentPlaceholder = room.messages.at(-1);
         this.agentInput = '';
         try {
           if (attachments.length !== sourceFiles.length) throw new Error('附件内容不可用，请重新上传 Excel 文件');
@@ -2247,20 +2341,20 @@ export const agentWorkData = defineStore('agentWork', {
           const response = stopRisk ? await runStopRiskAnalysisDemo(sourceFiles[0]!)
             : authenticity ? await (projectId === 'PSC1' ? runWaybillTraceVerifierDemo(sourceFiles[0]!) : runWaybillAuthenticityDemo(sourceFiles[0]!))
               : await runPredictionDemo(prompt, sourceFiles);
-          if (this.agentMessages.at(-1) !== currentPlaceholder) return;
+          if (room.messages.at(-1) !== currentPlaceholder) return;
           if (prediction) {
-            if (sourceFiles.length) this.syncPredictionOrders(response);
+            if (sourceFiles.length) this.syncPredictionOrders(response, projectId);
             response.pendingPredictionPrompt = !sourceFiles.length && response.predictionRows?.some(row => ['待补充', '参数错误', '地点歧义'].includes(row.status)) ? prompt : undefined;
           }
-          this.startPredictionStream(next, response);
+          this.startPredictionStream(next, response, room);
         } catch (error) {
-          if (this.agentMessages.at(-1) !== currentPlaceholder) return;
-          this.agentMessages = [...next, { role: 'agent', text: `处理未完成：${(error as Error).message}。请检查输入后重试。` }];
+          if (room.messages.at(-1) !== currentPlaceholder) return;
+          room.messages = [...next, { role: 'agent', text: `处理未完成：${(error as Error).message}。请检查输入后重试。` }];
           this.persistActiveConversationMessages();
         }
         return;
       }
-      const pendingMessage = this.activeChatContext.at(-1);
+      const pendingMessage = previousContext.at(-1);
       const pendingPrompt = pendingMessage?.pendingAsyncPrompt;
       const pendingRoutePrompt = pendingMessage?.pendingExperienceRoutePrompt;
       const pendingCompliancePrompt = pendingMessage?.pendingCompliancePrompt;
@@ -2270,7 +2364,7 @@ export const agentWorkData = defineStore('agentWork', {
       const asyncTool = resolveAsyncTool(asyncPrompt);
       const invalidExcel = attachments.find(file => file.parseError);
       if (invalidExcel) {
-        this.agentMessages = [...next, { role: 'agent', text: `“${invalidExcel.name}”无法处理：${invalidExcel.parseError}。请检查文件后重新上传。` }];
+        room.messages = [...next, { role: 'agent', text: `“${invalidExcel.name}”无法处理：${invalidExcel.parseError}。请检查文件后重新上传。` }];
         this.agentInput = '';
         return;
       }
@@ -2280,7 +2374,7 @@ export const agentWorkData = defineStore('agentWork', {
         const historicalCount = agentDecision.historicalIndexes.length;
         const count = agentDecision.waybillRows;
         const projectId = this.workspaceMode === 'project' ? this.currentProjectId : '';
-        const conversationId = this.workspaceMode === 'conversation' ? this.currentConversationId : undefined;
+        const conversationId = useWorkspace().active?.id ?? (this.currentConversationId || undefined);
         this.startDelayedAgentProcess(next, {
           role: 'agent', title: historicalCount ? '识别历史运单处理任务' : '识别批量运单处理任务', progressMode: true, text: '正在调用 Excel 解析 Skill，检查运单时间与处理数量。',
           steps: [
@@ -2292,23 +2386,23 @@ export const agentWorkData = defineStore('agentWork', {
         }, () => {
           try {
             const id = useAgentDailyTasks().saveTask(projectId, { name: '', trigger: 'once', prompt, attachments }, undefined, { origin: 'workbench', conversationId, agentDecision });
-            this.agentMessages = [...this.agentMessages, { role: 'agent', text: '已自动创建普通任务，开始批量处理。任务结果与文件包会保存在“做任务”和“下载”，你可以继续当前对话。', dailyTaskId: id }];
-          } catch (error) { this.agentMessages = [...this.agentMessages, { role: 'agent', text: `普通任务未创建：${(error as Error).message}` }]; }
-        });
+            room.messages = [...room.messages, { role: 'agent', text: '已自动创建普通任务，开始批量处理。任务结果与文件包会保存在“任务”和“下载”，你可以继续当前对话。', dailyTaskId: id }];
+          } catch (error) { room.messages = [...room.messages, { role: 'agent', text: `普通任务未创建：${(error as Error).message}` }]; }
+        }, room, true);
         this.agentInput = '';
         return;
       }
       if (asyncTool) {
         if (!extractTaskPlates(asyncPrompt).length && !attachments.length) {
-          this.agentMessages = [...next, { role: 'agent', text: `查询 ${asyncTool.date} 的历史轨迹需要调用异步归档工具。请补充车牌号，或上传包含车牌号的文件，我会创建普通任务执行一次。`, pendingAsyncPrompt: asyncPrompt }];
+          room.messages = [...next, { role: 'agent', text: `查询 ${asyncTool.date} 的历史轨迹需要调用异步归档工具。请补充车牌号，或上传包含车牌号的文件，我会创建普通任务执行一次。`, pendingAsyncPrompt: asyncPrompt }];
         } else {
           try {
             const taskId = useAgentDailyTasks().saveTask(this.workspaceMode === 'project' ? this.currentProjectId : '', {
               name: '', trigger: 'once', prompt: asyncPrompt, attachments,
-            }, undefined, { origin: 'workbench', conversationId: this.workspaceMode === 'conversation' ? this.currentConversationId : undefined });
-            this.agentMessages = [...next, { role: 'agent', text: `已识别需要调用“${asyncTool.name}”异步工具，已创建普通任务。\n文字结果和文件包将保存在“做任务”与“下载”，你可以继续当前对话。`, dailyTaskId: taskId }];
+            }, undefined, { origin: 'workbench', conversationId: useWorkspace().active?.id ?? (this.currentConversationId || undefined) });
+            room.messages = [...next, { role: 'agent', text: `已识别需要调用“${asyncTool.name}”异步工具，已创建普通任务。\n文字结果和文件包将保存在“任务”与“下载”，你可以继续当前对话。`, dailyTaskId: taskId }];
           } catch (error) {
-            this.agentMessages = [...next, { role: 'agent', text: `普通任务未创建：${(error as Error).message}。` }];
+            room.messages = [...next, { role: 'agent', text: `普通任务未创建：${(error as Error).message}。` }];
           }
         }
         this.agentInput = '';
@@ -2323,7 +2417,7 @@ export const agentWorkData = defineStore('agentWork', {
       const regionVisitRequest = extractRegionVisitRequest(raw);
       const spreadsheetRequest = regionVisitRequest || hasWaybillComplianceIntent(compliancePrompt) ? null : extractSpreadsheetRequest(raw);
       const mcpPrompt = extractMcpPrompt(raw);
-      const emailDeliveryRequest = extractEmailDeliveryRequest(raw, this.activeChatContext);
+      const emailDeliveryRequest = extractEmailDeliveryRequest(raw, previousContext);
       const analysisReportRequest = extractAnalysisReportRequest(raw);
       const transportStatusRequest = extractTransportStatusRequest(raw);
       const vehiclePositionRequest = transportStatusRequest ? null : extractVehiclePositionRequest(raw);
@@ -2334,7 +2428,7 @@ export const agentWorkData = defineStore('agentWork', {
         if (!experienceRouteRequest.highwayPolicy) missing.push('走高速或不走高速');
         if (!experienceRouteRequest.preference) missing.push('最多人选或最短路线');
         if (missing.length) {
-          this.agentMessages = [
+          room.messages = [
             ...next,
             {
               role: 'agent',
@@ -2351,7 +2445,7 @@ export const agentWorkData = defineStore('agentWork', {
         return;
       }
       if (hasWaybillComplianceIntent(compliancePrompt) && !waybillComplianceRequest) {
-        this.agentMessages = [
+        room.messages = [
           ...next,
           {
             role: 'agent',
@@ -2380,7 +2474,7 @@ export const agentWorkData = defineStore('agentWork', {
         return;
       }
       if (regionVisitRegion) {
-        this.agentMessages = [
+        room.messages = [
           ...next,
           {
             role: 'agent',
@@ -2402,7 +2496,7 @@ export const agentWorkData = defineStore('agentWork', {
       }
       if (hasEmailDeliveryIntent(raw)) {
         if (!emailDeliveryRequest) {
-          this.agentMessages = [
+          room.messages = [
             ...next,
             { role: 'agent', text: '请补充有效的收件邮箱地址，例如 logistics.ops@example.com，我会将上一次处理结果整理后发送。' },
           ];
@@ -2499,16 +2593,17 @@ export const agentWorkData = defineStore('agentWork', {
         navigate('downloads');
         ElMessage.success('已创建下载任务');
       }
-      this.agentMessages = [...next, replyMessage];
+      room.messages = [...next, replyMessage];
       this.agentInput = '';
     },
     startRegionVisitProcess(next: ChatMessage[], request: RegionVisitRequest) {
+      const room = this.executionRoom();
       const steps = createRegionVisitSteps(request);
       const resultFile = createRegionVisitResultFile(request.sourceFileName, request.region);
       const messageIndex = next.length;
       let cumulativeDelay = 0;
 
-      this.agentMessages = [
+      room.messages = [
         ...next,
         {
           role: 'agent',
@@ -2524,10 +2619,10 @@ export const agentWorkData = defineStore('agentWork', {
 
       steps.forEach((_, stepIndex) => {
         cumulativeDelay += Math.round(randomBetween(...regionVisitStepDelayRange));
-        const timer = setTimeout(() => {
+        scheduleChatStep(() => {
           const completedStepCount = stepIndex + 1;
           const isComplete = completedStepCount === steps.length;
-          this.agentMessages = this.agentMessages.map((message, index) => {
+          room.messages = room.messages.map((message, index) => {
             if (index !== messageIndex) return message;
             return {
               ...message,
@@ -2540,17 +2635,17 @@ export const agentWorkData = defineStore('agentWork', {
 
           if (isComplete) {
             ElMessage.success('车辆历史到访核验完成');
-            clearAgentProcessTimers();
+
           }
         }, cumulativeDelay);
-        agentProcessTimers.push(timer);
       });
     },
     startSpreadsheetFillProcess(next: ChatMessage[], sourceFileName: string) {
+      const room = this.executionRoom();
       const steps = createSpreadsheetFillSteps(sourceFileName);
       const resultFile = createSpreadsheetResultFile(sourceFileName);
       const messageIndex = next.length;
-      this.agentMessages = [
+      room.messages = [
         ...next,
         {
           role: 'agent',
@@ -2565,10 +2660,10 @@ export const agentWorkData = defineStore('agentWork', {
       ];
 
       steps.forEach((_, stepIndex) => {
-        const timer = setTimeout(() => {
+        scheduleChatStep(() => {
           const completedStepCount = stepIndex + 1;
           const isComplete = completedStepCount === steps.length;
-          this.agentMessages = this.agentMessages.map((message, index) => {
+          room.messages = room.messages.map((message, index) => {
             if (index !== messageIndex) return message;
             return {
               ...message,
@@ -2579,9 +2674,8 @@ export const agentWorkData = defineStore('agentWork', {
             };
           });
 
-          if (isComplete) clearAgentProcessTimers();
+
         }, (stepIndex + 1) * spreadsheetProcessStepInterval);
-        agentProcessTimers.push(timer);
       });
     },
     splitProjectConversation(now = Date.now()) {
@@ -2592,8 +2686,8 @@ export const agentWorkData = defineStore('agentWork', {
       this.persistActiveConversationMessages();
       return true;
     },
-    syncPredictionOrders(message: ChatMessage) {
-      if (this.workspaceMode !== 'project' || this.currentProjectId !== predictionProjectId || !message.predictionRows?.length) return;
+    syncPredictionOrders(message: ChatMessage, projectId = this.currentProjectId) {
+      if (this.workspaceMode !== 'project' || projectId !== predictionProjectId || !message.predictionRows?.length) return;
       const orders: Order[] = message.predictionRows.map(row => ({
         id: row.order || `UPLOAD-${row.row}`, plate: row.plate, driver: '未提供', carrier: '未提供',
         route: `${row.startLocation || '待补充装货地'} → ${row.endLocation || '待补充卸货地'}`, factory: row.startLocation || '待补充装货地',
@@ -2606,19 +2700,19 @@ export const agentWorkData = defineStore('agentWork', {
       const project = this.projects.find(item => item.id === predictionProjectId);
       if (project) { project.total = byId.size; project.sync = '刚刚'; }
       const dates = orders.map(order => order.startTime.slice(0, 10)).filter(Boolean).sort();
-      if (dates.length) { this.ordersStartDate = dates[0]!; this.ordersEndDate = dates.at(-1)!; }
+      if (dates.length && this.currentProjectId === projectId) { this.ordersStartDate = dates[0]!; this.ordersEndDate = dates.at(-1)!; }
     },
-    startPredictionStream(next: ChatMessage[], finalMessage: ChatMessage) {
+    startPredictionStream(next: ChatMessage[], finalMessage: ChatMessage, room = this.executionRoom()) {
       finalMessage = cleanOutputValue(finalMessage);
       const report = finalMessage.predictionReport;
       if (!report) {
-        if (finalMessage.steps?.length) this.startDelayedAgentProcess(next, finalMessage, () => {});
-        else { this.agentMessages = [...next, finalMessage]; this.persistActiveConversationMessages(); }
+        if (finalMessage.steps?.length) this.startDelayedAgentProcess(next, finalMessage, () => {}, room);
+        else { room.messages = [...next, finalMessage]; this.persistActiveConversationMessages(); }
         return;
       }
-      clearAgentProcessTimers();
-      this.agentMessages = [...next, { ...finalMessage, status: '处理中', streaming: true, steps: [], result: '', file: undefined, predictionRows: [], verificationRows: [], predictionReport: { kind: report.kind, taskProgress: [], introduction: '', overview: [], riskDistribution: [], summary: [], fields: [], judgments: [], statistics: [], analyses: [], boundaries: [], exportSummary: '' } }];
-      const current = this.agentMessages.at(-1)!;
+
+      room.messages = [...next, { ...finalMessage, status: '处理中', streaming: true, steps: [], result: '', file: undefined, predictionRows: [], verificationRows: [], predictionReport: { kind: report.kind, taskProgress: [], introduction: '', overview: [], riskDistribution: [], summary: [], fields: [], judgments: [], statistics: [], analyses: [], boundaries: [], exportSummary: '' } }];
+      const current = room.messages.at(-1)!;
       const live = current.predictionReport!;
       const chunks: (() => void)[] = [];
       report.taskProgress?.forEach((item) => chunks.push(() => live.taskProgress!.push(item)));
@@ -2651,10 +2745,10 @@ export const agentWorkData = defineStore('agentWork', {
       });
       let index = 0;
       const emitNext = () => {
-        if (this.agentMessages.at(-1) !== current) return;
+        if (room.messages.at(-1) !== current) return;
         chunks[index++]?.();
         if (index < chunks.length) {
-          agentProcessTimers = [setTimeout(emitNext, 55)];
+          scheduleChatStep(emitNext, 55);
         } else {
           current.streaming = false;
           current.status = '已完成';
@@ -2662,16 +2756,16 @@ export const agentWorkData = defineStore('agentWork', {
           current.file = finalMessage.file;
           current.result = finalMessage.result;
           this.persistActiveConversationMessages();
-          clearAgentProcessTimers();
+
         }
       };
       emitNext();
     },
-    startDelayedAgentProcess(next: ChatMessage[], finalMessage: ChatMessage, onComplete: () => void) {
+    startDelayedAgentProcess(next: ChatMessage[], finalMessage: ChatMessage, onComplete: () => void, room = this.executionRoom(), background = false) {
       const steps = finalMessage.steps ?? [];
       const messageIndex = next.length;
 
-      this.agentMessages = [
+      room.messages = [
         ...next,
         {
           ...finalMessage,
@@ -2685,9 +2779,9 @@ export const agentWorkData = defineStore('agentWork', {
       ];
 
       steps.forEach((_, stepIndex) => {
-        const timer = setTimeout(() => {
+        scheduleChatStep(() => {
           const isComplete = stepIndex === steps.length - 1;
-          this.agentMessages = this.agentMessages.map((message, index) => {
+          room.messages = room.messages.map((message, index) => {
             if (index !== messageIndex) return message;
             return {
               ...message,
@@ -2701,17 +2795,17 @@ export const agentWorkData = defineStore('agentWork', {
           });
 
           if (isComplete) {
-            onComplete();
+            if (background || !useWorkspace().data.migrated || room === this.executionRoom()) onComplete();
             this.persistActiveConversationMessages();
-            clearAgentProcessTimers();
+
           }
         }, processStepInitialDelay + stepIndex * processStepInterval);
-        agentProcessTimers.push(timer);
       });
     },
     async startMcpPromptTest(next: ChatMessage[], prompt: string) {
+      const room = this.executionRoom();
       const messageIndex = next.length;
-      this.agentMessages = [
+      room.messages = [
         ...next,
         {
           role: 'agent',
@@ -2725,12 +2819,12 @@ export const agentWorkData = defineStore('agentWork', {
           result: '',
         },
       ];
-      const processMessage = this.agentMessages[messageIndex];
+      const processMessage = room.messages[messageIndex];
 
       try {
         const result = await runMcpPrompt(prompt);
-        if (this.agentMessages[messageIndex] !== processMessage) return;
-        this.agentMessages = this.agentMessages.map((message, index) => {
+        if (room.messages[messageIndex] !== processMessage) return;
+        room.messages = room.messages.map((message, index) => {
           if (index !== messageIndex) return message;
           return {
             ...message,
@@ -2740,8 +2834,8 @@ export const agentWorkData = defineStore('agentWork', {
           };
         });
       } catch (error) {
-        if (this.agentMessages[messageIndex] !== processMessage) return;
-        this.agentMessages = this.agentMessages.map((message, index) => {
+        if (room.messages[messageIndex] !== processMessage) return;
+        room.messages = room.messages.map((message, index) => {
           if (index !== messageIndex) return message;
           return {
             ...message,
